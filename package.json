@@ -1,0 +1,26 @@
+{
+  "name": "traces",
+  "private": true,
+  "version": "1.0.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces",
+    "build:api": "npm run build --workspace @traces/api",
+    "build:mobile": "npm run build --workspace @traces/mobile",
+    "dev:api": "npm run dev --workspace @traces/api",
+    "dev:mobile": "npm run dev --workspace @traces/mobile",
+    "db:migrate": "npm run db:migrate --workspace @traces/api",
+    "db:seed": "npm run db:seed --workspace @traces/api",
+    "lint": "npm run lint --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "test:e2e": "npm run test:e2e --workspace @traces/api --if-present"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "tsx": "^4.7.1",
+    "typescript": "^5.4.5"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "name": "@traces/shared-types",
+  "version": "1.0.0",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "echo \"No tests for shared-types\""
+  }
+}
