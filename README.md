@@ -1,6 +1,8 @@
 # Traces
 
-Traces is a hiking platform for Palestine with an Expo mobile client, Express API, shared types, and a reusable UI package.
+Preserve the memory of places. Discover the world through those who've been there.
+
+Traces is a travel platform that connects organized trip experiences with a living archive of place memories — photos, stories, and routes left behind by every traveler.
 
 ## Apps
 
@@ -12,12 +14,3 @@ Traces is a hiking platform for Palestine with an Expo mobile client, Express AP
 - `packages/shared-types`: API/domain contracts
 - `packages/ui`: shared React components
 
-## Quick Start
-
-```bash
-npm install
-npm run db:migrate
-npm run db:seed
-npm run dev:api
-npm run dev:mobile
-```
