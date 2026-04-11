@@ -1,5 +1,8 @@
 import type { Request, Response } from "express";
+import type { AddActivityPointsRequest, CompleteActivityRequest, StartActivityRequest } from "@traces/shared-types";
 import { pool } from "../../db/pool";
+import { HttpError } from "../../lib/httpError";
+import { requireAuth } from "../../middleware/auth";
 import { generateGpx } from "../../services/gpxService";
 
 export async function getUserActivities(req: Request, res: Response): Promise<void> {
@@ -9,20 +12,24 @@ export async function getUserActivities(req: Request, res: Response): Promise<vo
 
 export async function getActivityById(req: Request, res: Response): Promise<void> {
   const result = await pool.query("SELECT * FROM activities WHERE id = $1", [req.params.id]);
+  if (!result.rows[0]) {
+    throw new HttpError(404, "Activity not found");
+  }
   res.json({ data: result.rows[0] });
 }
 
 export async function createActivity(req: Request, res: Response): Promise<void> {
-  const { title, startedAt, trailId } = req.body;
+  const auth = requireAuth(req);
+  const { title, startedAt, trailId } = req.body as StartActivityRequest;
   const result = await pool.query(
     "INSERT INTO activities (user_id, trail_id, title, started_at, status) VALUES ($1, $2, $3, $4, 'recording') RETURNING *",
-    [req.auth?.sub, trailId ?? null, title, startedAt]
+    [auth.sub, trailId ?? null, title, startedAt]
   );
   res.status(201).json({ data: result.rows[0] });
 }
 
 export async function addActivityPoints(req: Request, res: Response): Promise<void> {
-  const { points } = req.body as { points: Array<Record<string, unknown>> };
+  const { points } = req.body as AddActivityPointsRequest;
 
   for (const point of points) {
     await pool.query(
@@ -51,7 +58,7 @@ export async function addActivityPoints(req: Request, res: Response): Promise<vo
 }
 
 export async function completeActivity(req: Request, res: Response): Promise<void> {
-  const { endedAt, distanceKm, elevationGainM, avgSpeedKph, maxSpeedKph } = req.body;
+  const { endedAt, distanceKm, elevationGainM, avgSpeedKph, maxSpeedKph } = req.body as CompleteActivityRequest;
   const result = await pool.query(
     `
     UPDATE activities
@@ -68,11 +75,15 @@ export async function completeActivity(req: Request, res: Response): Promise<voi
     `,
     [req.params.id, endedAt, distanceKm, elevationGainM, avgSpeedKph, maxSpeedKph]
   );
+  if (!result.rows[0]) {
+    throw new HttpError(404, "Activity not found");
+  }
   res.json({ data: result.rows[0] });
 }
 
 export async function deleteActivity(req: Request, res: Response): Promise<void> {
-  await pool.query("DELETE FROM activities WHERE id = $1 AND user_id = $2", [req.params.id, req.auth?.sub]);
+  const auth = requireAuth(req);
+  await pool.query("DELETE FROM activities WHERE id = $1 AND user_id = $2", [req.params.id, auth.sub]);
   res.status(204).send();
 }
 
