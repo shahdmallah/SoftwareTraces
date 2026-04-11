@@ -2,7 +2,24 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 import { pool } from "../../db/pool";
 import * as trailStatsService from "./trails.service";
+import { requireAuth } from "../../middleware/auth";
 import { formatTrailForApp } from "../../utils/formatTrail";
+
+const calculateTrailStatsBodySchema = z.object({
+  coordinates: z.array(z.tuple([z.number(), z.number()])).min(2),
+});
+
+const createTrailBodySchema = z.object({
+  name: z.string().min(1),
+  description: z.string().optional(),
+  coordinates: z.array(z.tuple([z.number(), z.number()])).min(2),
+  stats: z.object({
+    length_meters: z.number().nonnegative(),
+    elevation_gain_meters: z.number().nonnegative(),
+    estimated_duration_minutes: z.number().nonnegative(),
+    difficulty: z.enum(["easy", "moderate", "hard", "expert"]),
+  }),
+});
 
 export async function getNearbyTrails(req: Request, res: Response): Promise<void> {
   const { lat, lng, radius = 10000 } = req.query;
@@ -28,14 +45,17 @@ export async function getNearbyTrails(req: Request, res: Response): Promise<void
     [Number(lng), Number(lat), Number(radius)]
   );
 
-  res.json({ data: result.rows });
+  res.json({ data: result.rows.map(formatTrailForApp) });
 }
 
 export async function searchTrails(req: Request, res: Response): Promise<void> {
   const { q = "", difficulty, minLength = 0, maxLength = 1000 } = req.query;
   const result = await pool.query(
     `
-    SELECT *
+    SELECT *,
+      ST_X(ST_StartPoint(geometry)) AS start_lng,
+      ST_Y(ST_StartPoint(geometry)) AS start_lat,
+      ST_AsText(geometry) AS geometry_text
     FROM trails
     WHERE (name ILIKE $1 OR description ILIKE $1 OR region ILIKE $1)
       AND ($2::TEXT IS NULL OR difficulty = $2)
@@ -51,8 +71,8 @@ export async function searchTrails(req: Request, res: Response): Promise<void> {
 export async function getAllTrails(req: Request, res: Response): Promise<void> {
   const result = await pool.query(`
     SELECT *,
-      ST_Y(start_point::geometry) AS start_lat,
-      ST_X(start_point::geometry) AS start_lng,
+      ST_X(ST_StartPoint(geometry)) AS start_lng,
+      ST_Y(ST_StartPoint(geometry)) AS start_lat,
       ST_AsText(geometry) AS geometry_text
     FROM trails
     ORDER BY created_at DESC
@@ -65,8 +85,8 @@ export async function getTrailById(req: Request, res: Response): Promise<void> {
   const trailResult = await pool.query(
     `
     SELECT *,
-      ST_Y(start_point::geometry) AS start_lat,
-      ST_X(start_point::geometry) AS start_lng,
+      ST_X(ST_StartPoint(geometry)) AS start_lng,
+      ST_Y(ST_StartPoint(geometry)) AS start_lat,
       ST_AsText(geometry) AS geometry_text
     FROM trails
     WHERE id = $1
@@ -83,40 +103,14 @@ export async function getTrailById(req: Request, res: Response): Promise<void> {
 }
 
 export async function calculateTrailStats(req: Request, res: Response): Promise<void> {
-  const bodySchema = z.object({
-    coordinates: z.array(z.tuple([z.number(), z.number()])).min(2),
-  });
-
-  const { coordinates } = bodySchema.parse(req.body);
+  const { coordinates } = calculateTrailStatsBodySchema.parse(req.body);
   const stats = trailStatsService.calculateTrailStats(coordinates);
 
   res.json({ data: stats });
 }
 
 export async function createTrail(req: Request, res: Response): Promise<void> {
-  const bodySchema = z.object({
-    name: z.string().min(1),
-    description: z.string().optional(),
-    coordinates: z.array(z.tuple([z.number(), z.number()])).min(2),
-    stats: z.object({
-      length_meters: z.number().nonnegative(),
-      elevation_gain_meters: z.number().nonnegative(),
-      estimated_duration_minutes: z.number().nonnegative(),
-      difficulty: z.enum(["Easy", "Moderate", "Hard", "Expert"]),
-    }),
-  });
-
-  const { name, description, coordinates, stats }: {
-    name: string;
-    description?: string;
-    coordinates: [number, number][];
-    stats: {
-      length_meters: number;
-      elevation_gain_meters: number;
-      estimated_duration_minutes: number;
-      difficulty: "Easy" | "Moderate" | "Hard" | "Expert";
-    };
-  } = bodySchema.parse(req.body);
+  const { name, description, coordinates, stats } = createTrailBodySchema.parse(req.body);
   const slug = name
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
@@ -177,10 +171,11 @@ export async function getTrailReviews(req: Request, res: Response): Promise<void
 }
 
 export async function createTrailReview(req: Request, res: Response): Promise<void> {
+  const auth = requireAuth(req);
   const { rating, comment } = req.body;
   const result = await pool.query(
     "INSERT INTO trail_reviews (trail_id, user_id, rating, comment) VALUES ($1, $2, $3, $4) RETURNING *",
-    [req.params.id, req.auth?.sub, rating, comment]
+    [req.params.id, auth.sub, rating, comment]
   );
   res.status(201).json({ data: result.rows[0] });
 }
@@ -191,10 +186,11 @@ export async function getTrailConditions(req: Request, res: Response): Promise<v
 }
 
 export async function createTrailCondition(req: Request, res: Response): Promise<void> {
+  const auth = requireAuth(req);
   const { status, note } = req.body;
   const result = await pool.query(
     "INSERT INTO trail_conditions (trail_id, user_id, status, note) VALUES ($1, $2, $3, $4) RETURNING *",
-    [req.params.id, req.auth?.sub, status, note]
+    [req.params.id, auth.sub, status, note]
   );
   res.status(201).json({ data: result.rows[0] });
 }
