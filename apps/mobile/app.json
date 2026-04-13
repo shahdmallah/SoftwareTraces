@@ -2,31 +2,50 @@
   "expo": {
     "name": "Traces",
     "slug": "traces",
-    "scheme": "traces",
     "version": "1.0.0",
     "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#EAE2CC"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.shahdmallah.traces"
+    },
+    "android": {
+      "package": "com.shahdmallah.traces",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#EAE2CC"
+      },
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "FOREGROUND_SERVICE"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
     "plugins": [
+      [
+        "@rnmapbox/maps",
+        {
+          "RNMapboxMapsVersion": "11.18.2"
+        }
+      ],
       [
         "expo-location",
         {
-          "locationAlwaysAndWhenInUsePermission": "Allow Traces to record your hikes in the background.",
-          "locationWhenInUsePermission": "Allow Traces to access your location while using the app."
+          "locationAlwaysAndWhenInUsePermission": "Allow Palestine Trails to use your location to show trails near you."
         }
       ]
-    ],
-    "ios": {
-      "supportsTablet": true,
-      "infoPlist": {
-        "UIBackgroundModes": ["location"]
-      }
-    },
-    "android": {
-      "package": "com.traces.app",
-      "permissions": [
-        "ACCESS_FINE_LOCATION",
-        "ACCESS_COARSE_LOCATION",
-        "ACCESS_BACKGROUND_LOCATION"
-      ]
-    }
+    ]
   }
 }

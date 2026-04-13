@@ -1,14 +1,6 @@
 {
-  "extends": "../../tsconfig.base.json",
+  "extends": "expo/tsconfig.base",
   "compilerOptions": {
-    "jsx": "react-jsx",
-    "types": ["react", "react-native"],
-    "baseUrl": "./src",
-    "paths": {
-      "@/*": ["./*"],
-      "@traces/shared-types": ["../../packages/shared-types/src"],
-      "@traces/ui": ["../../packages/ui/src"]
-    }
-  },
-  "include": ["App.tsx", "src/**/*"]
+    "strict": true
+  }
 }
