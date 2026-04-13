@@ -7,9 +7,9 @@ const envSchema = z.object({
   PORT: z.coerce.number().default(3000),
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   DATABASE_URL: z.string().min(1),
-  JWT_SECRET: z.string().min(8),
-  JWT_EXPIRES_IN: z.string().default("7d"),
-  SUPABASE_SERVICE_ROLE_KEY: z.string().optional(),
+  SUPABASE_URL: z.string().url(),
+  SUPABASE_ANON_KEY: z.string().min(1),
+  SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),
   MAPBOX_TOKEN: z.string().optional(),
   OPENWEATHER_API_KEY: z.string().optional(),
   REDIS_URL: z.string().optional()

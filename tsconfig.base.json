@@ -1,8 +1,6 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "CommonJS",
-    "moduleResolution": "Node",
     "lib": ["ES2022"],
     "strict": true,
     "esModuleInterop": true,
@@ -11,12 +9,11 @@
     "resolveJsonModule": true,
     "declaration": true,
     "sourceMap": true,
-    "baseUrl": ".",
     "paths": {
-      "@traces/shared-types": ["packages/shared-types/src"],
-      "@traces/shared-types/*": ["packages/shared-types/src/*"],
-      "@traces/ui": ["packages/ui/src"],
-      "@traces/ui/*": ["packages/ui/src/*"]
+      "@traces/shared-types": ["./packages/shared-types/src"],
+      "@traces/shared-types/*": ["./packages/shared-types/src/*"],
+      "@traces/ui": ["./packages/ui/src"],
+      "@traces/ui/*": ["./packages/ui/src/*"]
     }
   }
 }
