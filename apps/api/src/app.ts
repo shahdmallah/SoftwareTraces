@@ -5,6 +5,7 @@ import cron from "node-cron";
 import achievementsRoutes from "./features/achievements/achievements.routes";
 import activitiesRoutes from "./features/activities/activities.routes";
 import authRoutes from "./features/auth/auth.routes";
+import debugRoutes from "./features/debug/debug.routes";
 import healthRoutes from "./features/health/health.routes";
 import offlineRoutes from "./features/offline/offline.routes";
 import socialRoutes from "./features/social/social.routes";
@@ -25,6 +26,7 @@ export function createApp() {
   });
 
   app.use("/api/auth", authRoutes);
+  app.use("/api/debug", debugRoutes);
   app.use("/api/trails", trailsRoutes);
   app.use("/api/activities", activitiesRoutes);
   app.use("/api/health", healthRoutes);
