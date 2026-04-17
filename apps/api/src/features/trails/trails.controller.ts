@@ -104,7 +104,7 @@ export async function getTrailById(req: Request, res: Response): Promise<void> {
 
 export async function calculateTrailStats(req: Request, res: Response): Promise<void> {
   const { coordinates } = calculateTrailStatsBodySchema.parse(req.body);
-  const stats = trailStatsService.calculateTrailStats(coordinates);
+  const stats = await trailStatsService.calculateTrailStats(coordinates);
 
   res.json({ data: stats });
 }
