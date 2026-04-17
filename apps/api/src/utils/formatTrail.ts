@@ -9,16 +9,15 @@ interface TrailRecord {
   region_ar?: string | null;
   description?: string | null;
   description_ar?: string | null;
-  length_km?: number | string | null;
   length_meters?: number | string | null;
-  estimated_duration_min?: number | string | null;
-  elevation_gain_m?: number | string | null;
-  elevation_min_m?: number | string | null;
-  elevation_max_m?: number | string | null;
+  estimated_duration_minutes?: number | string | null;
+  elevation_gain_meters?: number | string | null;
+  elevation_min?: number | string | null;
+  elevation_max?: number | string | null;
   difficulty?: string | null;
   rating?: number | string | null;
   reviews?: number | string | null;
-  hero_image_url?: string | null;
+  image?: string | null;
   images?: unknown;
   features?: unknown;
   features_ar?: unknown;
@@ -67,9 +66,7 @@ function parseFirstPointFromGeometry(geometry: string | null | undefined): [numb
 }
 
 export function formatTrailForApp(dbTrail: TrailRecord) {
-  const distance = dbTrail.length_km != null
-    ? Number(dbTrail.length_km)
-    : dbTrail.length_meters != null
+  const distance = dbTrail.length_meters != null
     ? Number(dbTrail.length_meters) / 1000
     : 0;
 
@@ -84,14 +81,14 @@ export function formatTrailForApp(dbTrail: TrailRecord) {
     description: dbTrail.description ?? "",
     descriptionAr: dbTrail.description_ar ?? "",
     distance,
-    duration: formatDuration(Number(dbTrail.estimated_duration_min ?? 0)),
-    elevationGain: Number(dbTrail.elevation_gain_m ?? 0),
-    elevationMin: Number(dbTrail.elevation_min_m ?? 0),
-    elevationMax: Number(dbTrail.elevation_max_m ?? 0),
+    duration: formatDuration(Number(dbTrail.estimated_duration_minutes ?? 0)),
+    elevationGain: Number(dbTrail.elevation_gain_meters ?? 0),
+    elevationMin: Number(dbTrail.elevation_min ?? 0),
+    elevationMax: Number(dbTrail.elevation_max ?? 0),
     difficulty: normalizeDifficulty(dbTrail.difficulty),
     rating: Number(dbTrail.rating ?? 0),
     reviews: Number(dbTrail.reviews ?? 0),
-    image: dbTrail.hero_image_url ?? "",
+    image: dbTrail.image ?? "",
     images: Array.isArray(dbTrail.images) ? dbTrail.images.filter((item): item is string => typeof item === "string") : [],
     features: Array.isArray(dbTrail.features) ? dbTrail.features.filter((item): item is string => typeof item === "string") : [],
     featuresAr: Array.isArray(dbTrail.features_ar) ? dbTrail.features_ar.filter((item): item is string => typeof item === "string") : [],

@@ -18,6 +18,11 @@ import { validate } from "../../middleware/validate";
 
 const router = Router();
 
+router.get("/ping", (_req, res) => {
+  console.log("[trails] PING route hit!");
+  res.json({ pong: true, timestamp: new Date().toISOString() });
+});
+
 router.post("/calculate", asyncHandler(calculateTrailStats));
 router.post("/", authenticate, asyncHandler(createTrail));
 router.get("/", asyncHandler(getAllTrails));
