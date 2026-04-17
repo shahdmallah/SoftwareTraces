@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS trails (
   description TEXT NOT NULL,
   region TEXT NOT NULL,
   difficulty TEXT NOT NULL,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   length_km NUMERIC NOT NULL,
   estimated_duration_min INTEGER NOT NULL,
   elevation_gain_m NUMERIC NOT NULL DEFAULT 0,

@@ -1,17 +1,21 @@
 import type { Request, Response } from "express";
+import type { OfflineSyncPayload } from "@traces/shared-types";
 import { pool } from "../../db/pool";
+import { requireAuth } from "../../middleware/auth";
 
 export async function getPendingSync(req: Request, res: Response): Promise<void> {
+  const auth = requireAuth(req);
   const since = req.query.since ?? "1970-01-01T00:00:00.000Z";
   const result = await pool.query("SELECT * FROM activities WHERE user_id = $1 AND updated_at > $2 ORDER BY updated_at ASC", [
-    req.auth?.sub,
+    auth.sub,
     since
   ]);
   res.json({ data: result.rows });
 }
 
 export async function syncOfflineActivities(req: Request, res: Response): Promise<void> {
-  const payload = req.body as { activities: Array<Record<string, unknown>> };
+  const auth = requireAuth(req);
+  const payload = req.body as OfflineSyncPayload;
   const uploaded: string[] = [];
   const conflicts: string[] = [];
 
@@ -19,7 +23,7 @@ export async function syncOfflineActivities(req: Request, res: Response): Promis
     const existing = await pool.query("SELECT updated_at FROM activities WHERE id = $1", [activity.id]);
 
     if (
-      existing.rowCount > 0 &&
+      (existing.rowCount ?? 0) > 0 &&
       new Date(existing.rows[0].updated_at).getTime() > new Date(String(activity.updatedAt)).getTime()
     ) {
       conflicts.push(String(activity.id));
@@ -46,7 +50,7 @@ export async function syncOfflineActivities(req: Request, res: Response): Promis
       `,
       [
         activity.id,
-        req.auth?.sub,
+        auth.sub,
         activity.trailId ?? null,
         activity.title,
         activity.startedAt,

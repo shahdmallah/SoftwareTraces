@@ -1,14 +1,21 @@
 import { createApp } from "./app";
 import { env } from "./config/env";
-import { pool } from "./db/pool";
+import { testDatabaseConnection } from "./lib/db";
 
 async function bootstrap(): Promise<void> {
-  await pool.query("SELECT 1");
   const app = createApp();
 
   app.listen(env.PORT, () => {
     console.log(`Traces API running on port ${env.PORT}`);
   });
+
+  const dbStatus = await testDatabaseConnection();
+  if (dbStatus.success) {
+    console.log(`[database] ${dbStatus.message}`);
+  } else {
+    console.error(`[database] ${dbStatus.message}`);
+    console.log("Starting server without database connection. Health check will return 503.");
+  }
 }
 
 bootstrap().catch((error) => {

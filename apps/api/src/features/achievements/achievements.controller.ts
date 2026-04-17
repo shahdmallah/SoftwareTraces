@@ -1,5 +1,6 @@
 import type { Request, Response } from "express";
 import { pool } from "../../db/pool";
+import { requireAuth } from "../../middleware/auth";
 import { evaluateAchievements } from "../../services/achievementService";
 
 export async function getAchievements(_req: Request, res: Response): Promise<void> {
@@ -22,10 +23,11 @@ export async function getUserAchievements(req: Request, res: Response): Promise<
 }
 
 export async function checkAchievements(req: Request, res: Response): Promise<void> {
+  const auth = requireAuth(req);
   const [available, existing, profile] = await Promise.all([
     pool.query("SELECT * FROM achievements ORDER BY points ASC"),
-    pool.query("SELECT * FROM user_achievements WHERE user_id = $1", [req.auth?.sub]),
-    pool.query("SELECT total_activities, total_elevation_gain_m FROM profiles WHERE user_id = $1", [req.auth?.sub])
+    pool.query("SELECT * FROM user_achievements WHERE user_id = $1", [auth.sub]),
+    pool.query("SELECT total_activities, total_elevation_gain_m FROM profiles WHERE user_id = $1", [auth.sub])
   ]);
 
   const unlocks = evaluateAchievements(available.rows, existing.rows, {
@@ -36,7 +38,7 @@ export async function checkAchievements(req: Request, res: Response): Promise<vo
   for (const achievement of unlocks) {
     await pool.query(
       "INSERT INTO user_achievements (achievement_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-      [achievement.id, req.auth?.sub]
+      [achievement.id, auth.sub]
     );
   }
 
