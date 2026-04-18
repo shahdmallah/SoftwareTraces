@@ -5,9 +5,15 @@ import * as trailStatsService from "./trails.service";
 import { requireAuth } from "../../middleware/auth";
 import { HttpError } from "../../lib/httpError";
 import { formatTrailForApp } from "../../utils/formatTrail";
+import { getTrailWeather } from "../../services/weatherService";
 
 const calculateTrailStatsBodySchema = z.object({
   coordinates: z.array(z.tuple([z.number(), z.number()])).min(2),
+});
+
+const trailWeatherQuerySchema = z.object({
+  lat: z.coerce.number(),
+  lng: z.coerce.number(),
 });
 
 const createTrailBodySchema = z.object({
@@ -245,13 +251,42 @@ export async function getTrailById(req: Request, res: Response): Promise<void> {
     console.log("[getTrailById] Step 4: Formatting result...");
     const formattedTrail = formatTrailForApp(trailResult.rows[0]);
 
+    let weather = null;
+    const [lat, lng] = formattedTrail.coordinates ?? [];
+
+    if (Number.isFinite(lat) && Number.isFinite(lng)) {
+      try {
+        weather = await getTrailWeather(lat, lng);
+      } catch (weatherError) {
+        console.warn(
+          "[getTrailById] Weather lookup failed:",
+          weatherError instanceof Error ? weatherError.message : String(weatherError)
+        );
+      }
+    }
+
     console.log("[getTrailById] Step 5: Sending response...");
-    res.json({ data: formattedTrail });
+    res.json({ data: { ...formattedTrail, weather } });
   } catch (error) {
     console.error("[getTrailById] CATCH BLOCK ERROR:", error);
     console.error("[getTrailById] Error message:", error instanceof Error ? error.message : String(error));
     console.error("[getTrailById] Error stack:", error instanceof Error ? error.stack : "No stack");
     res.status(500).json({ error: "Internal server error", details: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+export async function getTrailWeatherByCoordinates(req: Request, res: Response): Promise<void> {
+  const { lat, lng } = trailWeatherQuerySchema.parse(req.query);
+
+  try {
+    const weather = await getTrailWeather(lat, lng);
+    res.json({ data: { weather } });
+  } catch (error) {
+    console.error("[getTrailWeatherByCoordinates] Weather lookup failed:", error);
+    res.status(500).json({
+      error: "Unable to load weather",
+      details: error instanceof Error ? error.message : String(error),
+    });
   }
 }
 

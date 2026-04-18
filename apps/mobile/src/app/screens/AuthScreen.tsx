@@ -8,36 +8,75 @@ import {
   ScrollView,
   KeyboardAvoidingView,
   Platform,
-  Alert,
 } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { Ionicons } from '@expo/vector-icons';
 import { RootStackParamList } from '../navigation/types';
 import { useLanguage } from '../contexts/LanguageContext';
+import { useAuth } from '../contexts/AuthContext';
 import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
 import { ltrText, rtlText } from '../utils/direction';
+import { login, signup } from '../lib/auth';
 
 type AuthNavigationProp = StackNavigationProp<RootStackParamList, 'Auth'>;
+type AuthRouteProp = RouteProp<RootStackParamList, 'Auth'>;
 
 export function AuthScreen() {
   const navigation = useNavigation<AuthNavigationProp>();
+  const route = useRoute<AuthRouteProp>();
   const { t, language } = useLanguage();
+  const { setSession } = useAuth();
   const isArabic = language === 'ar';
-  const [mode, setMode] = useState<'signin' | 'signup'>('signin');
+  const [mode, setMode] = useState<'signin' | 'signup'>(route.params?.mode ?? 'signin');
   const [showPassword, setShowPassword] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
 
-  const handleSubmit = () => {
+  React.useEffect(() => {
+    if (route.params?.mode) {
+      setMode(route.params.mode);
+      setErrorMessage('');
+    }
+  }, [route.params?.mode]);
+
+  const handleSubmit = async () => {
     const requiresName = mode === 'signup';
     if (!email.trim() || !password.trim() || (requiresName && !name.trim())) {
-      Alert.alert(t('authErrorTitle'), t('authErrorFillAll'));
+      setErrorMessage(t('authErrorFillAll'));
       return;
     }
 
-    navigation.navigate('AppTabs');
+    setErrorMessage('');
+    setIsSubmitting(true);
+
+    try {
+      const trimmedEmail = email.trim();
+
+      if (mode === 'signup') {
+        await signup({
+          email: trimmedEmail,
+          password,
+          full_name: name.trim(),
+        });
+      }
+
+      const session = await login({
+        email: trimmedEmail,
+        password,
+      });
+
+      setSession(session);
+      navigation.navigate('AppTabs');
+    } catch (error) {
+      setSession(null);
+      setErrorMessage(error instanceof Error ? error.message : 'Unable to authenticate right now.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleGuest = () => {
@@ -65,7 +104,7 @@ export function AuthScreen() {
             </Pressable>
 
             <View style={styles.logoBadge}>
-              <Ionicons name="map" size={22} color="#F5D16F" />
+              <Ionicons name="map" size={24} color="#F5D16F" />
             </View>
             <Text style={[styles.appTitle, isArabic ? rtlText : ltrText]}>Traces</Text>
             <Text style={[styles.appSubtitle, isArabic ? rtlText : ltrText]}>
@@ -76,7 +115,10 @@ export function AuthScreen() {
           <AnimatedBlock delay={140} style={styles.card}>
             <View style={styles.tabContainer}>
               <Pressable
-                onPress={() => setMode('signin')}
+                onPress={() => {
+                  setMode('signin');
+                  setErrorMessage('');
+                }}
                 style={[styles.tabButton, mode === 'signin' && styles.tabButtonActive]}
               >
                 <Text style={[styles.tabText, mode === 'signin' && styles.tabTextActive]}>
@@ -84,7 +126,10 @@ export function AuthScreen() {
                 </Text>
               </Pressable>
               <Pressable
-                onPress={() => setMode('signup')}
+                onPress={() => {
+                  setMode('signup');
+                  setErrorMessage('');
+                }}
                 style={[styles.tabButton, mode === 'signup' && styles.tabButtonActive]}
               >
                 <Text style={[styles.tabText, mode === 'signup' && styles.tabTextActive]}>
@@ -98,9 +143,10 @@ export function AuthScreen() {
                 <Text style={[styles.label, isArabic ? rtlText : ltrText]}>{t('authFullName')}</Text>
                 <TextInput
                   value={name}
-                  onChangeText={setName}
-                  placeholder={t('authFullName')}
-                  placeholderTextColor="#9E8E80"
+                  onChangeText={(value) => {
+                    setName(value);
+                    if (errorMessage) setErrorMessage('');
+                  }}
                   style={[styles.input, isArabic ? rtlText : ltrText]}
                 />
               </View>
@@ -110,9 +156,10 @@ export function AuthScreen() {
               <Text style={[styles.label, isArabic ? rtlText : ltrText]}>{t('authEmail')}</Text>
               <TextInput
                 value={email}
-                onChangeText={setEmail}
-                placeholder="you@example.com"
-                placeholderTextColor="#9E8E80"
+                onChangeText={(value) => {
+                  setEmail(value);
+                  if (errorMessage) setErrorMessage('');
+                }}
                 keyboardType="email-address"
                 autoCapitalize="none"
                 style={[styles.input, isArabic ? rtlText : ltrText]}
@@ -124,9 +171,10 @@ export function AuthScreen() {
               <View style={styles.passwordContainer}>
                 <TextInput
                   value={password}
-                  onChangeText={setPassword}
-                  placeholder="••••••••"
-                  placeholderTextColor="#9E8E80"
+                  onChangeText={(value) => {
+                    setPassword(value);
+                    if (errorMessage) setErrorMessage('');
+                  }}
                   secureTextEntry={!showPassword}
                   style={[styles.passwordInput, isArabic ? rtlText : ltrText]}
                 />
@@ -143,9 +191,20 @@ export function AuthScreen() {
               </View>
             </View>
 
-            <Pressable onPress={handleSubmit} style={styles.submitButton}>
+            {errorMessage ? (
+              <View style={styles.errorBanner}>
+                <Ionicons name="alert-circle-outline" size={18} color="#8B1E1E" />
+                <Text style={[styles.errorBannerText, isArabic ? rtlText : ltrText]}>{errorMessage}</Text>
+              </View>
+            ) : null}
+
+            <Pressable
+              onPress={handleSubmit}
+              disabled={isSubmitting}
+              style={[styles.submitButton, isSubmitting && styles.submitButtonDisabled]}
+            >
               <Text style={styles.submitButtonText}>
-                {mode === 'signin' ? t('authSignIn') : t('authSignUp')}
+                {isSubmitting ? 'Please wait...' : mode === 'signin' ? t('authSignIn') : t('authSignUp')}
               </Text>
             </Pressable>
 
@@ -156,11 +215,11 @@ export function AuthScreen() {
             </View>
 
             <View style={styles.socialRow}>
-              <Pressable onPress={handleSubmit} style={styles.socialButton}>
+              <Pressable style={styles.socialButton}>
                 <Ionicons name="logo-google" size={16} color="#2C2418" />
                 <Text style={styles.socialButtonText}>Google</Text>
               </Pressable>
-              <Pressable onPress={handleSubmit} style={styles.socialButton}>
+              <Pressable style={styles.socialButton}>
                 <Ionicons name="logo-apple" size={16} color="#2C2418" />
                 <Text style={styles.socialButtonText}>Apple</Text>
               </Pressable>
@@ -171,7 +230,10 @@ export function AuthScreen() {
             </Pressable>
 
             <Pressable
-              onPress={() => setMode((value) => (value === 'signin' ? 'signup' : 'signin'))}
+              onPress={() => {
+                setMode((value) => (value === 'signin' ? 'signup' : 'signin'));
+                setErrorMessage('');
+              }}
               style={styles.toggleModeButton}
             >
               <Text style={styles.toggleModeText}>
@@ -188,7 +250,7 @@ export function AuthScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#EAE2CC',
+    backgroundColor: '#EFE5CD',
   },
   flex: {
     flex: 1,
@@ -200,10 +262,10 @@ const styles = StyleSheet.create({
   hero: {
     backgroundColor: '#630E13',
     paddingTop: 64,
-    paddingBottom: 36,
+    paddingBottom: 42,
     paddingHorizontal: 20,
-    borderBottomLeftRadius: 28,
-    borderBottomRightRadius: 28,
+    borderBottomLeftRadius: 34,
+    borderBottomRightRadius: 34,
     alignItems: 'center',
   },
   backButton: {
@@ -218,18 +280,18 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.15)',
   },
   logoBadge: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: 'rgba(255,255,255,0.14)',
+    width: 62,
+    height: 62,
+    borderRadius: 31,
+    backgroundColor: 'rgba(255,255,255,0.16)',
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.18)',
+    borderColor: 'rgba(255,255,255,0.2)',
   },
   appTitle: {
     marginTop: 14,
-    fontSize: 28,
+    fontSize: 30,
     fontWeight: '800',
     color: 'white',
   },
@@ -240,27 +302,27 @@ const styles = StyleSheet.create({
   },
   card: {
     marginHorizontal: 16,
-    marginTop: -16,
-    borderRadius: 24,
-    backgroundColor: '#F7F1E2',
-    padding: 18,
+    marginTop: -20,
+    borderRadius: 28,
+    backgroundColor: '#FBF7EE',
+    padding: 20,
     shadowColor: '#000',
-    shadowOpacity: 0.08,
-    shadowOffset: { width: 0, height: 6 },
-    shadowRadius: 18,
-    elevation: 5,
+    shadowOpacity: 0.1,
+    shadowOffset: { width: 0, height: 10 },
+    shadowRadius: 22,
+    elevation: 7,
   },
   tabContainer: {
     flexDirection: 'row',
-    backgroundColor: '#E1D5B8',
-    borderRadius: 14,
+    backgroundColor: '#E7DCC2',
+    borderRadius: 16,
     padding: 4,
-    marginBottom: 18,
+    marginBottom: 20,
   },
   tabButton: {
     flex: 1,
-    paddingVertical: 10,
-    borderRadius: 10,
+    paddingVertical: 11,
+    borderRadius: 12,
     alignItems: 'center',
   },
   tabButtonActive: {
@@ -274,10 +336,10 @@ const styles = StyleSheet.create({
     color: 'white',
   },
   inputGroup: {
-    marginBottom: 14,
+    marginBottom: 16,
   },
   label: {
-    marginBottom: 6,
+    marginBottom: 7,
     fontSize: 12,
     color: '#6B5D4E',
     fontWeight: '700',
@@ -286,12 +348,12 @@ const styles = StyleSheet.create({
     textAlign: 'right',
   },
   input: {
-    borderWidth: 1.5,
-    borderColor: '#CBBE9E',
-    backgroundColor: 'white',
-    borderRadius: 14,
-    paddingHorizontal: 14,
-    paddingVertical: 13,
+    borderWidth: 1,
+    borderColor: 'rgba(99,14,19,0.12)',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
     fontSize: 14,
     color: '#2C2418',
   },
@@ -299,27 +361,50 @@ const styles = StyleSheet.create({
     position: 'relative',
   },
   passwordInput: {
-    borderWidth: 1.5,
-    borderColor: '#CBBE9E',
-    backgroundColor: 'white',
-    borderRadius: 14,
-    paddingLeft: 14,
-    paddingRight: 44,
-    paddingVertical: 13,
+    borderWidth: 1,
+    borderColor: 'rgba(99,14,19,0.12)',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    paddingLeft: 16,
+    paddingRight: 48,
+    paddingVertical: 14,
     fontSize: 14,
     color: '#2C2418',
   },
   eyeButton: {
     position: 'absolute',
-    right: 14,
-    top: 12,
+    right: 16,
+    top: 14,
+  },
+  errorBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    marginTop: 4,
+    marginBottom: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 14,
+    backgroundColor: 'rgba(139,30,30,0.10)',
+    borderWidth: 1,
+    borderColor: 'rgba(139,30,30,0.18)',
+  },
+  errorBannerText: {
+    flex: 1,
+    color: '#8B1E1E',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '700',
   },
   submitButton: {
     marginTop: 6,
-    borderRadius: 16,
-    paddingVertical: 15,
+    borderRadius: 18,
+    paddingVertical: 16,
     backgroundColor: '#630E13',
     alignItems: 'center',
+  },
+  submitButtonDisabled: {
+    opacity: 0.75,
   },
   submitButtonText: {
     color: 'white',
@@ -351,10 +436,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    borderWidth: 1.5,
-    borderColor: '#CBBE9E',
-    backgroundColor: 'white',
-    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(99,14,19,0.12)',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
     paddingVertical: 13,
   },
   socialButtonText: {
