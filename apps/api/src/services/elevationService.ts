@@ -1,206 +1,171 @@
+import { PNG } from "pngjs";
 import { env } from "../config/env";
 
-const TILEQUERY_LIMIT = 50;
-const MISSING_ELEVATION_THRESHOLD = 0;
-
+// Types
 export interface ElevationPoint {
   lng: number;
   lat: number;
   elevation: number;
 }
 
-interface MapboxTilequeryFeature {
-  properties?: {
-    ele?: number | string;
-  };
+// Configuration
+const MAX_SAMPLES = 50;
+const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+const SMOOTHING_WINDOW = 5;
+
+// Cache storage
+interface CacheEntry {
+  elevations: Map<string, number>; // pixelKey -> elevation
+  expiresAt: number;
+}
+const tileCache = new Map<string, CacheEntry>();
+
+// Helper: Convert lon/lat to tile coordinates (z=12 is good balance)
+function lngLatToTile(lng: number, lat: number, zoom: number = 12): { z: number; x: number; y: number } {
+  const x = Math.floor((lng + 180) / 360 * Math.pow(2, zoom));
+  const y = Math.floor((1 - Math.log(Math.tan(lat * Math.PI / 180) + 1 / Math.cos(lat * Math.PI / 180)) / Math.PI) / 2 * Math.pow(2, zoom));
+  return { z: zoom, x, y };
 }
 
-export interface MapboxTilequeryResponse {
-  features?: MapboxTilequeryFeature[];
+// Helper: Get pixel position within tile
+function getPixelInTile(lng: number, lat: number, zoom: number, x: number, y: number): { px: number; py: number } {
+  const tileSize = 256;
+  const lngRad = lng * Math.PI / 180;
+  const latRad = lat * Math.PI / 180;
+  const worldX = (lngRad + Math.PI) / (2 * Math.PI);
+  const worldY = (1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2;
+  const px = Math.floor((worldX * Math.pow(2, zoom) - x) * tileSize);
+  const py = Math.floor((worldY * Math.pow(2, zoom) - y) * tileSize);
+  return { px, py };
 }
 
-interface ElevationLookupResult {
-  lng: number;
-  lat: number;
-  elevation: number | null;
-  raw: MapboxTilequeryResponse;
+// Decode RGB to elevation
+function decodeElevation(r: number, g: number, b: number): number {
+  return -10000 + ((r * 256 * 256 + g * 256 + b) * 0.1);
 }
 
-function getElevationQueryUrl(lng: number, lat: number): string {
-  const searchParams = new URLSearchParams({
-    layers: "contour",
-    limit: String(TILEQUERY_LIMIT),
-    access_token: env.MAPBOX_TOKEN ?? ""
-  });
-
-  return `https://api.mapbox.com/v4/mapbox.mapbox-terrain-v2/tilequery/${lng},${lat}.json?${searchParams.toString()}`;
-}
-
-function extractElevationCandidates(data: MapboxTilequeryResponse): number[] {
-  return (data.features ?? [])
-    .map((feature) => Number(feature.properties?.ele))
-    .filter((value) => Number.isFinite(value));
-}
-
-function chooseBestElevation(candidates: number[]): number | null {
-  const positiveCandidates = candidates.filter((value) => value > MISSING_ELEVATION_THRESHOLD);
-
-  if (positiveCandidates.length > 0) {
-    return Math.max(...positiveCandidates);
-  }
-
-  if (candidates.length > 0) {
-    return Math.max(...candidates);
-  }
-
-  return null;
-}
-
-function fillMissingElevations(results: ElevationLookupResult[]): ElevationPoint[] {
-  const repaired = results.map((result) => ({ ...result }));
-
-  for (let index = 0; index < repaired.length; index += 1) {
-    if (repaired[index].elevation != null) {
-      continue;
-    }
-
-    const previous = repaired
-      .slice(0, index)
-      .reverse()
-      .find((item) => item.elevation != null);
-    const next = repaired.slice(index + 1).find((item) => item.elevation != null);
-
-    if (previous && next) {
-      repaired[index].elevation = Number((((previous.elevation ?? 0) + (next.elevation ?? 0)) / 2).toFixed(2));
-      console.log("[elevation] Filled missing point by interpolation:", {
-        index,
-        lng: repaired[index].lng,
-        lat: repaired[index].lat,
-        elevation: repaired[index].elevation
-      });
-      continue;
-    }
-
-    if (previous) {
-      repaired[index].elevation = previous.elevation;
-      console.log("[elevation] Filled missing point from previous elevation:", {
-        index,
-        lng: repaired[index].lng,
-        lat: repaired[index].lat,
-        elevation: repaired[index].elevation
-      });
-      continue;
-    }
-
-    if (next) {
-      repaired[index].elevation = next.elevation;
-      console.log("[elevation] Filled missing point from next elevation:", {
-        index,
-        lng: repaired[index].lng,
-        lat: repaired[index].lat,
-        elevation: repaired[index].elevation
-      });
-      continue;
-    }
-
-    repaired[index].elevation = 0;
-    console.log("[elevation] No nearby valid elevation found, falling back to 0:", {
-      index,
-      lng: repaired[index].lng,
-      lat: repaired[index].lat
-    });
-  }
-
-  return repaired.map((result) => ({
-    lng: result.lng,
-    lat: result.lat,
-    elevation: Number((result.elevation ?? 0).toFixed(2))
-  }));
-}
-
-async function fetchElevationRaw(lng: number, lat: number): Promise<MapboxTilequeryResponse> {
-  if (!env.MAPBOX_TOKEN) {
-    throw new Error("MAPBOX_TOKEN is not configured.");
-  }
-
-  console.log("[elevation] Fetching elevation for point:", { lng, lat });
-  const response = await fetch(getElevationQueryUrl(lng, lat));
-
-  if (!response.ok) {
-    throw new Error(`Mapbox elevation request failed with status ${response.status}.`);
-  }
-
-  const data = (await response.json()) as MapboxTilequeryResponse;
-  console.log("[elevation] Raw Mapbox response:", JSON.stringify(data));
-  return data;
-}
-
-async function getElevationForPoint(lng: number, lat: number): Promise<ElevationLookupResult> {
+// Fetch and decode a tile
+async function fetchTile(z: number, x: number, y: number): Promise<Map<string, number>> {
+  const url = `https://api.mapbox.com/v4/mapbox.terrain-rgb/${z}/${x}/${y}.png?access_token=${env.MAPBOX_TOKEN}`;
   try {
-    const data = await fetchElevationRaw(lng, lat);
-    const candidates = extractElevationCandidates(data);
-    console.log("[elevation] Extracted elevation candidates:", { lng, lat, candidates });
+    const response = await fetch(url);
+    if (!response.ok) {
+      console.error(`[elevation] Failed to fetch tile ${z}/${x}/${y}: ${response.status}`);
+      return new Map();
+    }
+    const buffer = await response.arrayBuffer();
+    const png = PNG.sync.read(Buffer.from(buffer));
+    const elevations = new Map<string, number>();
 
-    const elevation = chooseBestElevation(candidates);
-    console.log("[elevation] Selected elevation:", { lng, lat, elevation });
-
-    return {
-      lng,
-      lat,
-      elevation,
-      raw: data
-    };
+    for (let py = 0; py < png.height; py++) {
+      for (let px = 0; px < png.width; px++) {
+        const idx = (png.width * py + px) << 2;
+        const r = png.data[idx];
+        const g = png.data[idx + 1];
+        const b = png.data[idx + 2];
+        const elevation = decodeElevation(r, g, b);
+        elevations.set(`${px},${py}`, elevation);
+      }
+    }
+    return elevations;
   } catch (error) {
-    console.error("[elevation] Failed to fetch elevation for point:", {
-      lng,
-      lat,
-      error: error instanceof Error ? error.message : String(error)
-    });
-
-    return {
-      lng,
-      lat,
-      elevation: null,
-      raw: { features: [] }
-    };
+    console.error(`[elevation] Error fetching tile ${z}/${x}/${y}:`, error);
+    return new Map();
   }
 }
 
-export async function getRawElevationResponse(lng: number, lat: number): Promise<MapboxTilequeryResponse> {
-  return fetchElevationRaw(lng, lat);
+// Get elevation with caching
+export async function getElevationCached(lng: number, lat: number): Promise<number> {
+  const { z, x, y } = lngLatToTile(lng, lat);
+  const cacheKey = `${z}/${x}/${y}`;
+
+  let cacheEntry = tileCache.get(cacheKey);
+  let isCacheHit = false;
+  if (cacheEntry && cacheEntry.expiresAt > Date.now()) {
+    isCacheHit = true;
+  } else {
+    const elevations = await fetchTile(z, x, y);
+    cacheEntry = { elevations, expiresAt: Date.now() + CACHE_TTL_MS };
+    tileCache.set(cacheKey, cacheEntry);
+  }
+
+  console.log(`[elevation] Cache ${isCacheHit ? 'hit' : 'miss'} for tile ${cacheKey}`);
+
+  const { px, py } = getPixelInTile(lng, lat, z, x, y);
+  return cacheEntry.elevations.get(`${px},${py}`) || 0;
 }
 
+// Sample coordinates (max 50 points, keep first and last)
+export function sampleCoordinates(coordinates: [number, number][], maxPoints: number = MAX_SAMPLES): [number, number][] {
+  if (coordinates.length <= maxPoints) return [...coordinates];
+
+  const result: [number, number][] = [coordinates[0]];
+  const step = (coordinates.length - 1) / (maxPoints - 1);
+
+  for (let i = 1; i < maxPoints - 1; i++) {
+    const idx = Math.floor(i * step);
+    result.push(coordinates[idx]);
+  }
+
+  result.push(coordinates[coordinates.length - 1]);
+  return result;
+}
+
+// Smooth elevations with sliding window average
+export function smoothElevations(elevations: number[], windowSize: number = SMOOTHING_WINDOW): number[] {
+  const halfWindow = Math.floor(windowSize / 2);
+  return elevations.map((_, i) => {
+    let sum = 0;
+    let count = 0;
+    for (let j = -halfWindow; j <= halfWindow; j++) {
+      const idx = i + j;
+      if (idx >= 0 && idx < elevations.length) {
+        sum += elevations[idx];
+        count++;
+      }
+    }
+    return sum / count;
+  });
+}
+
+// Calculate elevation gain from smoothed elevations
+export function calculateElevationGain(points: ElevationPoint[]): number {
+  let total = 0;
+  for (let i = 1; i < points.length; i++) {
+    const delta = points[i].elevation - points[i - 1].elevation;
+    if (delta > 0) total += delta;
+  }
+  return Math.round(total);
+}
+
+// Main function: get elevations for coordinates (with sampling + caching + smoothing)
 export async function getElevationForPoints(coordinates: [number, number][]): Promise<ElevationPoint[]> {
-  const lookupResults = await Promise.all(
-    coordinates.map(([lng, lat]) => getElevationForPoint(lng, lat))
+  // Step 1: Sample coordinates (max 50)
+  const sampled = sampleCoordinates(coordinates);
+  console.log(`[elevation] Sampled ${coordinates.length} points down to ${sampled.length}`);
+
+  // Step 2: Get elevation for each sampled point (with caching)
+  const rawPoints = await Promise.all(
+    sampled.map(async ([lng, lat]) => ({
+      lng,
+      lat,
+      elevation: await getElevationCached(lng, lat)
+    }))
   );
 
-  const points = fillMissingElevations(lookupResults);
-  console.log("[elevation] Final elevation points:", points);
-  return points;
-}
+  // Step 3: Extract raw elevations array
+  const rawElevations = rawPoints.map(p => p.elevation);
 
-export function calculateElevationGain(points: Array<{ elevation?: number | null }>): number {
-  let total = 0;
+  // Step 4: Smooth elevations
+  const smoothedElevations = smoothElevations(rawElevations);
 
-  for (let index = 1; index < points.length; index += 1) {
-    const currentElevation = points[index].elevation ?? 0;
-    const previousElevation = points[index - 1].elevation ?? 0;
-    const delta = currentElevation - previousElevation;
+  // Step 5: Apply smoothed elevations back to points
+  const smoothedPoints = rawPoints.map((point, i) => ({
+    ...point,
+    elevation: smoothedElevations[i]
+  }));
 
-    console.log("[elevation] Elevation delta:", {
-      index,
-      previousElevation,
-      currentElevation,
-      delta
-    });
+  console.log(`[elevation] Raw gain: ${calculateElevationGain(rawPoints)}m, Smoothed gain: ${calculateElevationGain(smoothedPoints)}m`);
 
-    if (delta > 0) {
-      total += delta;
-    }
-  }
-
-  const roundedTotal = Number(total.toFixed(2));
-  console.log("[elevation] Total elevation gain:", roundedTotal);
-  return roundedTotal;
+  return smoothedPoints;
 }
