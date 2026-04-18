@@ -137,6 +137,19 @@ CREATE TABLE IF NOT EXISTS user_achievements (
   PRIMARY KEY (achievement_id, user_id)
 );
 
+CREATE TABLE IF NOT EXISTS saved_trails (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  trail_id UUID NOT NULL REFERENCES trails(id) ON DELETE CASCADE,
+  list_type TEXT NOT NULL DEFAULT 'favorites',
+  notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(user_id, trail_id, list_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_saved_trails_user ON saved_trails(user_id);
+CREATE INDEX IF NOT EXISTS idx_saved_trails_trail ON saved_trails(trail_id);
+
 CREATE OR REPLACE FUNCTION set_updated_at()
 RETURNS TRIGGER AS $$
 BEGIN
