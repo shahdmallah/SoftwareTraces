@@ -684,3 +684,243 @@ export async function publishTrail(req: Request, res: Response): Promise<void> {
     res.status(500).json({ error: "Internal server error", details: error instanceof Error ? error.message : String(error) });
   }
 }
+
+export async function saveTrail(req: Request, res: Response): Promise<void> {
+  console.log("[saveTrail] ========== START ==========");
+  console.log("[saveTrail] Trail ID:", req.params.id);
+  console.log("[saveTrail] Request body:", JSON.stringify(req.body, null, 2));
+
+  try {
+    const auth = requireAuth(req);
+    const trailId = req.params.id;
+    const { list_type = "favorites", notes } = req.body;
+
+    console.log("[saveTrail] 1. Auth passed, userId:", auth.sub);
+    console.log("[saveTrail] 2. List type:", list_type);
+
+    // Validate list_type
+    const validListTypes = ["favorites", "want_to_do", "completed"];
+    if (!validListTypes.includes(list_type)) {
+      console.warn("[saveTrail] Invalid list_type:", list_type);
+      res.status(400).json({
+        error: "Invalid list_type",
+        details: `list_type must be one of: ${validListTypes.join(", ")}`
+      });
+      return;
+    }
+
+    // Check trail exists and is not soft-deleted
+    console.log("[saveTrail] 3. Checking trail exists...");
+    const trailCheck = await pool.query(
+      "SELECT id FROM trails WHERE id = $1 AND deleted_at IS NULL",
+      [trailId]
+    );
+
+    if (trailCheck.rows.length === 0) {
+      console.warn("[saveTrail] Trail not found or deleted:", trailId);
+      res.status(404).json({ error: "Trail not found" });
+      return;
+    }
+
+    // Upsert into saved_trails
+    console.log("[saveTrail] 4. Upserting saved trail...");
+    const result = await pool.query(
+      `INSERT INTO saved_trails (user_id, trail_id, list_type, notes)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (user_id, trail_id, list_type) DO UPDATE
+       SET notes = EXCLUDED.notes, created_at = NOW()
+       RETURNING id`,
+      [auth.sub, trailId, list_type, notes || null]
+    );
+
+    console.log("[saveTrail] 5. Upsert successful, saved_trail ID:", result.rows[0].id);
+    res.status(201).json({ data: { id: result.rows[0].id }, message: "Trail saved successfully" });
+  } catch (error) {
+    console.error("[saveTrail] ❌ ERROR CAUGHT:");
+    console.error("[saveTrail] Error message:", error instanceof Error ? error.message : String(error));
+    console.error("[saveTrail] Error stack:", error instanceof Error ? error.stack : "No stack");
+    res.status(500).json({ error: "Internal server error", details: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+export async function unsaveTrail(req: Request, res: Response): Promise<void> {
+  console.log("[unsaveTrail] ========== START ==========");
+  console.log("[unsaveTrail] Trail ID:", req.params.id);
+  console.log("[unsaveTrail] Query params:", JSON.stringify(req.query, null, 2));
+  console.log("[unsaveTrail] Body:", JSON.stringify(req.body, null, 2));
+
+  try {
+    const auth = requireAuth(req);
+    const trailId = req.params.id;
+    // Accept list_type from body or query
+    const list_type = req.body?.list_type || req.query?.list_type || "favorites";
+
+    console.log("[unsaveTrail] 1. Auth passed, userId:", auth.sub);
+    console.log("[unsaveTrail] 2. List type:", list_type);
+
+    // Validate list_type
+    const validListTypes = ["favorites", "want_to_do", "completed"];
+    if (!validListTypes.includes(list_type as string)) {
+      console.warn("[unsaveTrail] Invalid list_type:", list_type);
+      res.status(400).json({
+        error: "Invalid list_type",
+        details: `list_type must be one of: ${validListTypes.join(", ")}`
+      });
+      return;
+    }
+
+    // Check if saved record exists
+    console.log("[unsaveTrail] 3. Checking saved record exists...");
+    const checkResult = await pool.query(
+      "SELECT id FROM saved_trails WHERE user_id = $1 AND trail_id = $2 AND list_type = $3",
+      [auth.sub, trailId, list_type]
+    );
+
+    if (checkResult.rows.length === 0) {
+      console.log("[unsaveTrail] Saved record not found");
+      res.status(404).json({ error: "Trail is not in this list" });
+      return;
+    }
+
+    // Delete the saved record
+    console.log("[unsaveTrail] 4. Deleting saved record...");
+    await pool.query(
+      "DELETE FROM saved_trails WHERE user_id = $1 AND trail_id = $2 AND list_type = $3",
+      [auth.sub, trailId, list_type]
+    );
+
+    console.log("[unsaveTrail] 5. Delete successful");
+    res.json({ message: "Trail removed from list successfully" });
+  } catch (error) {
+    console.error("[unsaveTrail] ❌ ERROR CAUGHT:");
+    console.error("[unsaveTrail] Error message:", error instanceof Error ? error.message : String(error));
+    console.error("[unsaveTrail] Error stack:", error instanceof Error ? error.stack : "No stack");
+    res.status(500).json({ error: "Internal server error", details: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+export async function getSavedTrails(req: Request, res: Response): Promise<void> {
+  console.log("[getSavedTrails] ========== START ==========");
+  console.log("[getSavedTrails] Query params:", JSON.stringify(req.query, null, 2));
+
+  try {
+    const auth = requireAuth(req);
+    const list_type = (req.query.list_type as string) || "favorites";
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 20));
+    const offset = (page - 1) * limit;
+
+    console.log("[getSavedTrails] 1. Auth passed, userId:", auth.sub);
+    console.log("[getSavedTrails] 2. Params - list_type:", list_type, "page:", page, "limit:", limit);
+
+    // Validate list_type
+    const validListTypes = ["favorites", "want_to_do", "completed"];
+    if (!validListTypes.includes(list_type)) {
+      console.warn("[getSavedTrails] Invalid list_type:", list_type);
+      res.status(400).json({
+        error: "Invalid list_type",
+        details: `list_type must be one of: ${validListTypes.join(", ")}`
+      });
+      return;
+    }
+
+    // Get total count
+    console.log("[getSavedTrails] 3. Querying total count...");
+    const countResult = await pool.query(
+      "SELECT COUNT(*) as count FROM saved_trails WHERE user_id = $1 AND list_type = $2",
+      [auth.sub, list_type]
+    );
+    const total = parseInt(countResult.rows[0].count, 10);
+
+    // Get paginated saved trails with trail details
+    console.log("[getSavedTrails] 4. Querying saved trails with pagination...");
+    const result = await pool.query(
+      `SELECT 
+        st.id as saved_id,
+        st.notes,
+        st.created_at as saved_at,
+        t.id,
+        t.name,
+        t.description,
+        t.region,
+        t.difficulty,
+        t.elevation_gain_meters,
+        t.estimated_duration_minutes,
+        t.rating,
+        t.reviews,
+        t.user_id as creator_id
+       FROM saved_trails st
+       JOIN trails t ON st.trail_id = t.id
+       WHERE st.user_id = $1 AND st.list_type = $2 AND t.deleted_at IS NULL
+       ORDER BY st.created_at DESC
+       LIMIT $3 OFFSET $4`,
+      [auth.sub, list_type, limit, offset]
+    );
+
+    const pages = Math.ceil(total / limit);
+    console.log("[getSavedTrails] 5. Query successful, returned", result.rows.length, "trails");
+
+    res.json({
+      data: result.rows,
+      pagination: {
+        page,
+        limit,
+        total,
+        pages
+      }
+    });
+  } catch (error) {
+    console.error("[getSavedTrails] ❌ ERROR CAUGHT:");
+    console.error("[getSavedTrails] Error message:", error instanceof Error ? error.message : String(error));
+    console.error("[getSavedTrails] Error stack:", error instanceof Error ? error.stack : "No stack");
+    res.status(500).json({ error: "Internal server error", details: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+export async function checkSavedStatus(req: Request, res: Response): Promise<void> {
+  console.log("[checkSavedStatus] ========== START ==========");
+  console.log("[checkSavedStatus] Trail ID:", req.params.id);
+  console.log("[checkSavedStatus] Query params:", JSON.stringify(req.query, null, 2));
+
+  try {
+    const auth = requireAuth(req);
+    const trailId = req.params.id;
+    const list_type = (req.query.list_type as string) || "favorites";
+
+    console.log("[checkSavedStatus] 1. Auth passed, userId:", auth.sub);
+    console.log("[checkSavedStatus] 2. List type:", list_type);
+
+    // Validate list_type
+    const validListTypes = ["favorites", "want_to_do", "completed"];
+    if (!validListTypes.includes(list_type)) {
+      console.warn("[checkSavedStatus] Invalid list_type:", list_type);
+      res.status(400).json({
+        error: "Invalid list_type",
+        details: `list_type must be one of: ${validListTypes.join(", ")}`
+      });
+      return;
+    }
+
+    // Query for saved status
+    console.log("[checkSavedStatus] 3. Querying saved status...");
+    const result = await pool.query(
+      "SELECT id, notes FROM saved_trails WHERE user_id = $1 AND trail_id = $2 AND list_type = $3",
+      [auth.sub, trailId, list_type]
+    );
+
+    const is_saved = result.rows.length > 0;
+    console.log("[checkSavedStatus] 4. Query successful, is_saved:", is_saved);
+
+    res.json({
+      is_saved,
+      saved_id: is_saved ? result.rows[0].id : null,
+      list_type,
+      notes: is_saved ? result.rows[0].notes : null
+    });
+  } catch (error) {
+    console.error("[checkSavedStatus] ❌ ERROR CAUGHT:");
+    console.error("[checkSavedStatus] Error message:", error instanceof Error ? error.message : String(error));
+    console.error("[checkSavedStatus] Error stack:", error instanceof Error ? error.stack : "No stack");
+    res.status(500).json({ error: "Internal server error", details: error instanceof Error ? error.message : String(error) });
+  }
+}

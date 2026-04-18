@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import {
   calculateTrailStats,
+  checkSavedStatus,
   createTrail,
   createTrailCondition,
   createTrailReview,
@@ -11,8 +12,11 @@ import {
   getTrailById,
   getTrailConditions,
   getTrailReviews,
+  getSavedTrails,
   publishTrail,
+  saveTrail,
   searchTrails,
+  unsaveTrail,
   updateTrail,
 } from "./trails.controller";
 import { asyncHandler } from "../../lib/asyncHandler";
@@ -31,7 +35,11 @@ router.post("/", authenticate, asyncHandler(createTrail));
 router.get("/", asyncHandler(getAllTrails));
 router.get("/nearby", validate(z.object({ lat: z.coerce.number(), lng: z.coerce.number(), radius: z.coerce.number().optional() }), "query"), asyncHandler(getNearbyTrails));
 router.get("/search", validate(z.object({ q: z.string().optional(), difficulty: z.string().optional(), minLength: z.coerce.number().optional(), maxLength: z.coerce.number().optional() }), "query"), asyncHandler(searchTrails));
+router.get("/saved", authenticate, asyncHandler(getSavedTrails));
 router.get("/:id", asyncHandler(getTrailById));
+router.post("/:id/save", authenticate, asyncHandler(saveTrail));
+router.delete("/:id/save", authenticate, asyncHandler(unsaveTrail));
+router.get("/:id/saved-status", authenticate, asyncHandler(checkSavedStatus));
 router.patch("/:id", authenticate, asyncHandler(updateTrail));
 router.delete("/:id", authenticate, asyncHandler(deleteTrail));
 router.patch("/:id/publish", authenticate, asyncHandler(publishTrail));
