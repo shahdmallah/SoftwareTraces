@@ -363,26 +363,133 @@ export async function getTrailReviews(req: Request, res: Response): Promise<void
 }
 
 export async function createTrailReview(req: Request, res: Response): Promise<void> {
-  const auth = requireAuth(req);
-  const { rating, comment } = req.body;
-  const result = await pool.query(
-    "INSERT INTO trail_reviews (trail_id, user_id, rating, comment) VALUES ($1, $2, $3, $4) RETURNING *",
-    [req.params.id, auth.sub, rating, comment]
-  );
-  res.status(201).json({ data: result.rows[0] });
+  console.log("[createTrailReview] ========== START ==========");
+  console.log("[createTrailReview] 1. Trail ID:", req.params.id);
+  console.log("[createTrailReview] 2. Request body:", JSON.stringify(req.body, null, 2));
+  console.log("[createTrailReview] 3. Auth user:", (req as any).auth?.sub);
+
+  try {
+    const auth = requireAuth(req);
+    console.log("[createTrailReview] 4. Auth passed, userId:", auth.sub);
+
+    const trailId = req.params.id;
+    const { rating, title, content } = req.body;
+    console.log("[createTrailReview] 5. Destructured values:", { rating, title, content });
+
+    console.log("[createTrailReview] 6. About to execute INSERT...");
+
+    const result = await pool.query(
+      `INSERT INTO trail_reviews (trail_id, user_id, rating, title, content, created_at)
+       VALUES ($1, $2, $3, $4, $5, NOW())
+       RETURNING id`,
+      [trailId, auth.sub, rating, title, content]
+    );
+
+    console.log("[createTrailReview] 7. INSERT successful, review ID:", result.rows[0].id);
+
+    res.status(201).json({ data: { id: result.rows[0].id } });
+  } catch (error) {
+    console.error("[createTrailReview] ❌ ERROR CAUGHT:");
+    console.error("[createTrailReview] Error object:", error);
+    console.error("[createTrailReview] Error message:", error instanceof Error ? error.message : String(error));
+    console.error("[createTrailReview] Error stack:", error instanceof Error ? error.stack : "No stack");
+
+    res.status(500).json({ 
+      error: "Internal server error", 
+      details: error instanceof Error ? error.message : String(error)
+    });
+  }
 }
 
 export async function getTrailConditions(req: Request, res: Response): Promise<void> {
-  const result = await pool.query("SELECT * FROM trail_conditions WHERE trail_id = $1 ORDER BY reported_at DESC LIMIT 20", [req.params.id]);
-  res.json({ data: result.rows });
+  console.log("[getTrailConditions] ========== START ==========");
+  console.log("[getTrailConditions] Trail ID:", req.params.id);
+
+  try {
+    console.log("[getTrailConditions] Executing SELECT query...");
+    const result = await pool.query(
+      `SELECT id, trail_id, user_id, condition_type, severity, description, reported_at, is_resolved, resolved_at, created_at
+       FROM trail_conditions
+       WHERE trail_id = $1
+       ORDER BY reported_at DESC
+       LIMIT 20`,
+      [req.params.id]
+    );
+
+    console.log("[getTrailConditions] Query succeeded, rows:", result.rows.length);
+    res.json({ data: result.rows });
+  } catch (error) {
+    console.error("[getTrailConditions] ❌ ERROR CAUGHT:");
+    console.error("[getTrailConditions] Error message:", error instanceof Error ? error.message : String(error));
+    console.error("[getTrailConditions] Error stack:", error instanceof Error ? error.stack : "No stack");
+
+    res.status(500).json({
+      error: "Internal server error",
+      details: error instanceof Error ? error.message : String(error)
+    });
+  }
 }
 
 export async function createTrailCondition(req: Request, res: Response): Promise<void> {
-  const auth = requireAuth(req);
-  const { status, note } = req.body;
-  const result = await pool.query(
-    "INSERT INTO trail_conditions (trail_id, user_id, status, note) VALUES ($1, $2, $3, $4) RETURNING *",
-    [req.params.id, auth.sub, status, note]
-  );
-  res.status(201).json({ data: result.rows[0] });
+  console.log("[createTrailCondition] ========== START ==========");
+  console.log("[createTrailCondition] 1. Trail ID:", req.params.id);
+  console.log("[createTrailCondition] 2. Request body:", JSON.stringify(req.body, null, 2));
+  console.log("[createTrailCondition] 3. Auth user:", (req as any).auth?.sub);
+
+  try {
+    const auth = requireAuth(req);
+    console.log("[createTrailCondition] 4. Auth passed, userId:", auth.sub);
+
+    const trailId = req.params.id;
+    const { condition_type, severity, description } = req.body;
+    console.log("[createTrailCondition] 5. Destructured values:", { condition_type, severity, description });
+
+    // Validate condition_type
+    const validConditionTypes = ['snow', 'ice', 'mud', 'flood', 'fallen_trees', 'wildfire', 'closure', 'good', 'fair'];
+    if (!validConditionTypes.includes(condition_type)) {
+      console.warn("[createTrailCondition] Invalid condition_type:", condition_type);
+      res.status(400).json({
+        error: "Invalid condition_type",
+        details: `condition_type must be one of: ${validConditionTypes.join(', ')}`
+      });
+      return;
+    }
+
+    // Validate severity if provided
+    if (severity) {
+      const validSeverities = ['low', 'medium', 'high', 'extreme'];
+      if (!validSeverities.includes(severity)) {
+        console.warn("[createTrailCondition] Invalid severity:", severity);
+        res.status(400).json({
+          error: "Invalid severity",
+          details: `severity must be one of: ${validSeverities.join(', ')}`
+        });
+        return;
+      }
+    }
+
+    console.log("[createTrailCondition] 6. Validation passed");
+    console.log("[createTrailCondition] 7. About to execute INSERT...");
+
+    const result = await pool.query(
+      `INSERT INTO trail_conditions (trail_id, user_id, condition_type, severity, description, reported_at)
+       VALUES ($1, $2, $3, $4, $5, NOW())
+       RETURNING id, trail_id, user_id, condition_type, severity, description, reported_at, is_resolved, resolved_at, created_at`,
+      [trailId, auth.sub, condition_type, severity || null, description || null]
+    );
+
+    console.log("[createTrailCondition] 8. INSERT successful, condition ID:", result.rows[0].id);
+
+    res.status(201).json({ data: result.rows[0] });
+  } catch (error) {
+    console.error("[createTrailCondition] ❌ ERROR CAUGHT:");
+    console.error("[createTrailCondition] Error object:", error);
+    console.error("[createTrailCondition] Error message:", error instanceof Error ? error.message : String(error));
+    console.error("[createTrailCondition] Error stack:", error instanceof Error ? error.stack : "No stack");
+
+    res.status(500).json({
+      error: "Internal server error",
+      details: error instanceof Error ? error.message : String(error)
+    });
+  }
 }
