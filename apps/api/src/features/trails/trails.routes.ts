@@ -30,8 +30,8 @@ router.get("/nearby", validate(z.object({ lat: z.coerce.number(), lng: z.coerce.
 router.get("/search", validate(z.object({ q: z.string().optional(), difficulty: z.string().optional(), minLength: z.coerce.number().optional(), maxLength: z.coerce.number().optional() }), "query"), asyncHandler(searchTrails));
 router.get("/:id", asyncHandler(getTrailById));
 router.get("/:id/reviews", asyncHandler(getTrailReviews));
-router.post("/:id/reviews", authenticate, validate(z.object({ rating: z.number().min(1).max(5), comment: z.string().min(2) })), asyncHandler(createTrailReview));
+router.post("/:id/reviews", authenticate, validate(z.object({ rating: z.number().min(1).max(5), content: z.string().min(2) })), asyncHandler(createTrailReview));
 router.get("/:id/conditions", asyncHandler(getTrailConditions));
-router.post("/:id/conditions", authenticate, validate(z.object({ status: z.string().min(2), note: z.string().min(2) })), asyncHandler(createTrailCondition));
+router.post("/:id/conditions", authenticate, validate(z.object({ condition_type: z.enum(['snow', 'ice', 'mud', 'flood', 'fallen_trees', 'wildfire', 'closure', 'good', 'fair']), severity: z.enum(['low', 'medium', 'high', 'extreme']).optional(), description: z.string().optional() })), asyncHandler(createTrailCondition));
 
 export default router;
