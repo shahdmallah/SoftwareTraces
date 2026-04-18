@@ -12,6 +12,7 @@ import { useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { RootStackParamList } from '../navigation/types';
 import { useLanguage, TranslationKey } from '../contexts/LanguageContext';
+import { useAuth } from '../contexts/AuthContext';
 import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -47,8 +48,38 @@ type ProfileNavigationProp = StackNavigationProp<RootStackParamList, 'Onboarding
 export function ProfileScreen() {
   const navigation = useNavigation<ProfileNavigationProp>();
   const { language, setLanguage, t } = useLanguage();
+  const { isAuthenticated, signOut, user } = useAuth();
   const isArabic = language === 'ar';
   const insets = useSafeAreaInsets();
+  const displayName = user?.full_name?.trim() || user?.email || '';
+  const avatarText = displayName
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? '')
+    .join('') || 'TR';
+
+  if (!isAuthenticated || !user) {
+    return (
+      <AnimatedScreen style={styles.container}>
+        <View style={styles.emptyState}>
+          <View style={styles.emptyStateBadge}>
+            <Ionicons name="person-outline" size={34} color="white" />
+          </View>
+          <Text style={[styles.emptyStateTitle, isArabic && styles.textRtl]}>No user logged in</Text>
+          <Text style={[styles.emptyStateText, isArabic && styles.textRtl]}>
+            Create an account to save trails, track achievements, and personalize your profile.
+          </Text>
+          <Pressable
+            style={styles.emptyStateButton}
+            onPress={() => navigation.navigate('Auth', { mode: 'signup' })}
+          >
+            <Text style={styles.emptyStateButtonText}>Go to Sign Up</Text>
+          </Pressable>
+        </View>
+      </AnimatedScreen>
+    );
+  }
 
   const earnedCount = achievements.filter(a => a.earned).length;
   const progress = (earnedCount / achievements.length) * 100;
@@ -85,7 +116,7 @@ export function ProfileScreen() {
             <View style={styles.avatarWrapper}>
               <View style={styles.avatarGradient}>
                 <View style={styles.avatarCircle}>
-                  <Text style={styles.avatarText}>AK</Text>
+                  <Text style={styles.avatarText}>{avatarText}</Text>
                 </View>
               </View>
               <View style={styles.statusDot} />
@@ -96,10 +127,10 @@ export function ProfileScreen() {
             <View style={[styles.profileInfo, isArabic && styles.profileInfoRtl]}>
               <Text style={[styles.profileEyebrow, isArabic && styles.textRight]}>{t('tabProfile')}</Text>
               <Text style={[styles.profileName, isArabic && styles.textRight, isArabic && styles.textRtl]}>
-                {t('profileName')}
+                {displayName}
               </Text>
               <Text style={[styles.profileSub, isArabic && styles.textRight, isArabic && styles.textRtl]}>
-                {t('profileSub')}
+                {user.email}
               </Text>
               <View style={[styles.locationRow, isArabic && styles.rowReverse]}>
                 <Ionicons name="location-outline" size={13} color="rgba(255,244,226,0.7)" />
@@ -321,7 +352,8 @@ export function ProfileScreen() {
             style={[styles.logoutButton, isArabic && styles.rowReverse]}
             onPress={() => {
               triggerFeedback([0, 20]);
-              navigation.navigate('Onboarding');
+              signOut();
+              navigation.navigate('Auth');
             }}
           >
             <Ionicons name="log-out-outline" size={18} color="#BB2823" />
@@ -820,5 +852,48 @@ const styles = StyleSheet.create({
     color: '#8A7A6A',
     marginTop: 20,
     marginBottom: 10,
+  },
+  emptyState: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 24,
+  },
+  emptyStateBadge: {
+    width: 92,
+    height: 92,
+    borderRadius: 46,
+    backgroundColor: '#630E13',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 20,
+  },
+  emptyStateTitle: {
+    fontSize: 26,
+    fontWeight: '800',
+    color: '#2C2418',
+    marginBottom: 10,
+    textAlign: 'center',
+  },
+  emptyStateText: {
+    fontSize: 14,
+    lineHeight: 22,
+    color: '#6B5D4E',
+    textAlign: 'center',
+    marginBottom: 24,
+    maxWidth: 320,
+  },
+  emptyStateButton: {
+    width: '100%',
+    maxWidth: 280,
+    paddingVertical: 14,
+    borderRadius: 14,
+    backgroundColor: '#630E13',
+    alignItems: 'center',
+  },
+  emptyStateButtonText: {
+    color: 'white',
+    fontSize: 15,
+    fontWeight: '800',
   },
 });

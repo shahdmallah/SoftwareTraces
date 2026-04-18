@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { Settings, Globe, Moon, Bell, Shield, ChevronRight, LogOut, Award } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
 
 const achievements = [
   { id: 'a1', emoji: '🦅', nameAr: 'صقر الجبال', name: 'Mountain Hawk', desc: 'Completed 5 hard trails', earned: true },
@@ -23,8 +24,64 @@ const settings = [
 
 export function ProfileScreen() {
   const navigate = useNavigate();
+  const { isAuthenticated, signOut, user } = useAuth();
   const [ramadanMode, setRamadanMode] = useState(false);
   const [lang, setLang] = useState<'ar' | 'en'>('ar');
+  const displayName = user?.full_name?.trim() || user?.email || '';
+  const initials = useMemo(() => {
+    const parts = displayName.split(/\s+/).filter(Boolean).slice(0, 2);
+    return parts.map((part) => part[0]?.toUpperCase() ?? '').join('') || 'TR';
+  }, [displayName]);
+
+  if (!isAuthenticated || !user) {
+    return (
+      <div
+        className="relative w-full h-full flex flex-col items-center justify-center px-6 text-center"
+        style={{ background: '#EAE2CC', fontFamily: 'Cairo, Inter, sans-serif' }}
+      >
+        <div
+          style={{
+            width: 92,
+            height: 92,
+            borderRadius: 46,
+            background: 'linear-gradient(135deg, #630E13, #BB2823)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            marginBottom: 20,
+            boxShadow: '0 10px 28px rgba(99,14,19,0.18)',
+          }}
+        >
+          <span style={{ fontSize: 34, color: 'white' }}>?</span>
+        </div>
+        <h1 style={{ color: '#2C2418', fontSize: 26, fontWeight: 800, marginBottom: 8 }}>
+          No user logged in
+        </h1>
+        <p style={{ color: '#6B5D4E', fontSize: 14, lineHeight: 1.6, maxWidth: 320, marginBottom: 24 }}>
+          Create an account to save your trails, unlock achievements, and personalize your profile.
+        </p>
+        <button
+          onClick={() => navigate('/auth?mode=signup')}
+          style={{
+            width: '100%',
+            maxWidth: 280,
+            padding: '14px 18px',
+            borderRadius: 14,
+            border: 'none',
+            background: '#630E13',
+            color: 'white',
+            fontFamily: 'Cairo, sans-serif',
+            fontSize: 15,
+            fontWeight: 700,
+            cursor: 'pointer',
+            boxShadow: '0 6px 18px rgba(99,14,19,0.24)',
+          }}
+        >
+          Go to Sign Up
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -59,15 +116,15 @@ export function ProfileScreen() {
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 border: '3px solid rgba(255,255,255,0.4)',
               }}>
-                <span style={{ fontSize: 28, fontFamily: 'Cairo', fontWeight: 800, color: 'white' }}>أح</span>
+                <span style={{ fontSize: 28, fontFamily: 'Cairo', fontWeight: 800, color: 'white' }}>{initials}</span>
               </div>
               <div style={{ position: 'absolute', bottom: 0, right: 0, width: 22, height: 22, borderRadius: 11, background: '#7A9A3A', border: '2px solid white', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <span style={{ fontSize: 10 }}>✓</span>
               </div>
             </div>
             <div style={{ flex: 1, paddingBottom: 8 }}>
-              <h1 style={{ fontFamily: 'Cairo', fontSize: 20, fontWeight: 800, color: 'white', marginBottom: 2 }}>أحمد خليل</h1>
-              <p style={{ fontFamily: 'Inter', fontSize: 12, color: 'rgba(255,255,255,0.7)' }}>Ahmad Khalil</p>
+              <h1 style={{ fontFamily: 'Cairo', fontSize: 20, fontWeight: 800, color: 'white', marginBottom: 2 }}>{displayName}</h1>
+              <p style={{ fontFamily: 'Inter', fontSize: 12, color: 'rgba(255,255,255,0.7)' }}>{user.email}</p>
               <p style={{ fontFamily: 'Cairo', fontSize: 11, color: 'rgba(255,255,255,0.6)' }}>رام الله، فلسطين 🇵🇸</p>
             </div>
             <button
@@ -217,7 +274,10 @@ export function ProfileScreen() {
         {/* Logout */}
         <div style={{ padding: '12px 16px 24px' }}>
           <button
-            onClick={() => navigate('/onboarding')}
+            onClick={() => {
+              signOut();
+              navigate('/auth', { replace: true });
+            }}
             style={{
               width: '100%', padding: '14px', borderRadius: 14,
               border: '1px solid rgba(187,40,35,0.25)',

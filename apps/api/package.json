@@ -8,6 +8,7 @@
     "build": "tsc -p tsconfig.json",
     "db:migrate": "tsx src/db/runSchema.ts",
     "db:seed": "tsx src/db/seed.ts",
+    "weather:trail": "node scripts/fetch-trail-weather.js",
     "test": "tsx --test src/features/**/*.test.ts",
     "test:e2e": "tsx --test src/features/**/*.test.ts"
   },

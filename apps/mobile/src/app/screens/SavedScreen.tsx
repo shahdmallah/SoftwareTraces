@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
 import { trails } from '../data/trails';
 import { RootStackParamList } from '../navigation/types';
+import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useSavedTrailIds } from '../state/savedTrails';
 import { ltrRow, ltrText, rtlRow, rtlText } from '../utils/direction';
@@ -16,10 +17,33 @@ type SavedNavigationProp = StackNavigationProp<RootStackParamList, 'TrailDetail'
 export function SavedScreen() {
   const navigation = useNavigation<SavedNavigationProp>();
   const insets = useSafeAreaInsets();
+  const { isAuthenticated } = useAuth();
   const { t, language } = useLanguage();
   const isArabic = language === 'ar';
   const savedTrailIds = useSavedTrailIds();
   const savedTrails = trails.filter((trail) => savedTrailIds.includes(trail.id));
+
+  if (!isAuthenticated) {
+    return (
+      <AnimatedScreen style={styles.container}>
+        <View style={styles.emptyState}>
+          <View style={styles.emptyStateBadge}>
+            <Ionicons name="bookmark-outline" size={34} color="white" />
+          </View>
+          <Text style={[styles.emptyStateTitle, isArabic && rtlText]}>No user logged in</Text>
+          <Text style={[styles.emptyStateText, isArabic && rtlText]}>
+            Sign up to save your favorite trails and keep them ready for your next adventure.
+          </Text>
+          <Pressable
+            style={styles.emptyStateButton}
+            onPress={() => navigation.navigate('Auth', { mode: 'signup' })}
+          >
+            <Text style={styles.emptyStateButtonText}>Go to Sign Up</Text>
+          </Pressable>
+        </View>
+      </AnimatedScreen>
+    );
+  }
 
   return (
     <AnimatedScreen style={styles.container}>
@@ -186,5 +210,48 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 12,
     fontWeight: '700',
+  },
+  emptyState: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 24,
+  },
+  emptyStateBadge: {
+    width: 92,
+    height: 92,
+    borderRadius: 46,
+    backgroundColor: '#630E13',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 20,
+  },
+  emptyStateTitle: {
+    fontSize: 26,
+    fontWeight: '800',
+    color: '#2C2418',
+    marginBottom: 10,
+    textAlign: 'center',
+  },
+  emptyStateText: {
+    fontSize: 14,
+    lineHeight: 22,
+    color: '#6B5D4E',
+    textAlign: 'center',
+    marginBottom: 24,
+    maxWidth: 320,
+  },
+  emptyStateButton: {
+    width: '100%',
+    maxWidth: 280,
+    paddingVertical: 14,
+    borderRadius: 14,
+    backgroundColor: '#630E13',
+    alignItems: 'center',
+  },
+  emptyStateButtonText: {
+    color: 'white',
+    fontSize: 15,
+    fontWeight: '800',
   },
 });

@@ -2,7 +2,7 @@ import type { NavigatorScreenParams } from '@react-navigation/native';
 
 export type RootStackParamList = {
   Onboarding: undefined;
-  Auth: undefined;
+  Auth: { mode?: 'signin' | 'signup' } | undefined;
   AppTabs: NavigatorScreenParams<AppTabParamList> | undefined;
   TrailDetail: { trailId: string };
   Recording: undefined;
