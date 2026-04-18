@@ -5,12 +5,15 @@ import {
   createTrail,
   createTrailCondition,
   createTrailReview,
+  deleteTrail,
   getAllTrails,
   getNearbyTrails,
   getTrailById,
   getTrailConditions,
   getTrailReviews,
+  publishTrail,
   searchTrails,
+  updateTrail,
 } from "./trails.controller";
 import { asyncHandler } from "../../lib/asyncHandler";
 import { authenticate } from "../../middleware/auth";
@@ -29,6 +32,9 @@ router.get("/", asyncHandler(getAllTrails));
 router.get("/nearby", validate(z.object({ lat: z.coerce.number(), lng: z.coerce.number(), radius: z.coerce.number().optional() }), "query"), asyncHandler(getNearbyTrails));
 router.get("/search", validate(z.object({ q: z.string().optional(), difficulty: z.string().optional(), minLength: z.coerce.number().optional(), maxLength: z.coerce.number().optional() }), "query"), asyncHandler(searchTrails));
 router.get("/:id", asyncHandler(getTrailById));
+router.patch("/:id", authenticate, asyncHandler(updateTrail));
+router.delete("/:id", authenticate, asyncHandler(deleteTrail));
+router.patch("/:id/publish", authenticate, asyncHandler(publishTrail));
 router.get("/:id/reviews", asyncHandler(getTrailReviews));
 router.post("/:id/reviews", authenticate, validate(z.object({ rating: z.number().min(1).max(5), content: z.string().min(2) })), asyncHandler(createTrailReview));
 router.get("/:id/conditions", asyncHandler(getTrailConditions));

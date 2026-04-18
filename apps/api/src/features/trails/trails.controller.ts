@@ -493,3 +493,194 @@ export async function createTrailCondition(req: Request, res: Response): Promise
     });
   }
 }
+
+export async function updateTrail(req: Request, res: Response): Promise<void> {
+  console.log("[updateTrail] ========== START ==========");
+  console.log("[updateTrail] Trail ID:", req.params.id);
+  console.log("[updateTrail] Update data:", JSON.stringify(req.body, null, 2));
+
+  try {
+    const auth = requireAuth(req);
+    const trailId = req.params.id;
+    const updates = req.body;
+
+    console.log("[updateTrail] 1. Auth passed, userId:", auth.sub);
+
+    // Check if trail exists and is not deleted
+    console.log("[updateTrail] 2. Checking trail ownership and status...");
+    const trailCheck = await pool.query(
+      "SELECT user_id, status FROM trails WHERE id = $1 AND deleted_at IS NULL",
+      [trailId]
+    );
+
+    if (trailCheck.rows.length === 0) {
+      console.log("[updateTrail] Trail not found or deleted:", trailId);
+      res.status(404).json({ error: "Trail not found" });
+      return;
+    }
+
+    // Check ownership
+    if (trailCheck.rows[0].user_id !== auth.sub) {
+      console.warn("[updateTrail] Unauthorized: user", auth.sub, "tried to update trail of user", trailCheck.rows[0].user_id);
+      res.status(403).json({ error: "Not authorized to update this trail" });
+      return;
+    }
+
+    // Don't allow editing published trails
+    if (trailCheck.rows[0].status === 'published') {
+      console.warn("[updateTrail] Cannot edit published trail:", trailId);
+      res.status(400).json({ error: "Cannot edit published trail. Unpublish first." });
+      return;
+    }
+
+    const allowedFields = ["name", "description", "region", "difficulty", "features", "tags"];
+    const setClauses: string[] = [];
+    const values: any[] = [];
+    let paramIndex = 1;
+
+    console.log("[updateTrail] 3. Building update clauses for fields:", Object.keys(updates));
+
+    for (const field of allowedFields) {
+      if (updates[field] !== undefined) {
+        setClauses.push(`${field} = $${paramIndex}`);
+        values.push(updates[field]);
+        paramIndex++;
+      }
+    }
+
+    if (setClauses.length === 0) {
+      console.warn("[updateTrail] No valid fields to update");
+      res.status(400).json({ error: "No valid fields to update" });
+      return;
+    }
+
+    values.push(trailId);
+    const query = `
+      UPDATE trails 
+      SET ${setClauses.join(", ")}, updated_at = NOW()
+      WHERE id = $${paramIndex}
+      RETURNING id, name, description, region, difficulty, status, updated_at
+    `;
+
+    console.log("[updateTrail] 4. Executing update query...");
+    const result = await pool.query(query, values);
+
+    console.log("[updateTrail] 5. Update successful");
+    res.json({ data: result.rows[0] });
+  } catch (error) {
+    console.error("[updateTrail] ❌ ERROR CAUGHT:");
+    console.error("[updateTrail] Error message:", error instanceof Error ? error.message : String(error));
+    console.error("[updateTrail] Error stack:", error instanceof Error ? error.stack : "No stack");
+    res.status(500).json({ error: "Internal server error", details: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+export async function deleteTrail(req: Request, res: Response): Promise<void> {
+  console.log("[deleteTrail] ========== START ==========");
+  console.log("[deleteTrail] Trail ID:", req.params.id);
+
+  try {
+    const auth = requireAuth(req);
+    const trailId = req.params.id;
+
+    console.log("[deleteTrail] 1. Auth passed, userId:", auth.sub);
+    console.log("[deleteTrail] 2. Checking trail ownership...");
+
+    const trailCheck = await pool.query(
+      "SELECT user_id FROM trails WHERE id = $1 AND deleted_at IS NULL",
+      [trailId]
+    );
+
+    if (trailCheck.rows.length === 0) {
+      console.log("[deleteTrail] Trail not found or already deleted:", trailId);
+      res.status(404).json({ error: "Trail not found" });
+      return;
+    }
+
+    if (trailCheck.rows[0].user_id !== auth.sub) {
+      console.warn("[deleteTrail] Unauthorized: user", auth.sub, "tried to delete trail of user", trailCheck.rows[0].user_id);
+      res.status(403).json({ error: "Not authorized to delete this trail" });
+      return;
+    }
+
+    console.log("[deleteTrail] 3. Ownership verified. Performing soft delete...");
+    await pool.query(
+      "UPDATE trails SET deleted_at = NOW(), is_active = false WHERE id = $1",
+      [trailId]
+    );
+
+    console.log("[deleteTrail] 4. Soft delete successful");
+    res.json({ message: "Trail deleted successfully" });
+  } catch (error) {
+    console.error("[deleteTrail] ❌ ERROR CAUGHT:");
+    console.error("[deleteTrail] Error message:", error instanceof Error ? error.message : String(error));
+    console.error("[deleteTrail] Error stack:", error instanceof Error ? error.stack : "No stack");
+    res.status(500).json({ error: "Internal server error", details: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+export async function publishTrail(req: Request, res: Response): Promise<void> {
+  console.log("[publishTrail] ========== START ==========");
+  console.log("[publishTrail] Trail ID:", req.params.id);
+
+  try {
+    const auth = requireAuth(req);
+    const trailId = req.params.id;
+
+    console.log("[publishTrail] 1. Auth passed, userId:", auth.sub);
+    console.log("[publishTrail] 2. Checking trail ownership and status...");
+
+    const trailCheck = await pool.query(
+      "SELECT user_id, status, name, description FROM trails WHERE id = $1 AND deleted_at IS NULL",
+      [trailId]
+    );
+
+    if (trailCheck.rows.length === 0) {
+      console.log("[publishTrail] Trail not found or deleted:", trailId);
+      res.status(404).json({ error: "Trail not found" });
+      return;
+    }
+
+    if (trailCheck.rows[0].user_id !== auth.sub) {
+      console.warn("[publishTrail] Unauthorized: user", auth.sub, "tried to publish trail of user", trailCheck.rows[0].user_id);
+      res.status(403).json({ error: "Only the trail owner can publish" });
+      return;
+    }
+
+    if (trailCheck.rows[0].status === 'published') {
+      console.warn("[publishTrail] Trail already published:", trailId);
+      res.status(400).json({ error: "Trail is already published" });
+      return;
+    }
+
+    const trail = trailCheck.rows[0];
+    const missingFields: string[] = [];
+
+    console.log("[publishTrail] 3. Validating required fields...");
+    if (!trail.name) missingFields.push("name");
+    if (!trail.description) missingFields.push("description");
+
+    if (missingFields.length > 0) {
+      console.warn("[publishTrail] Missing required fields:", missingFields);
+      res.status(400).json({
+        error: "Cannot publish trail. Missing required fields",
+        missing: missingFields
+      });
+      return;
+    }
+
+    console.log("[publishTrail] 4. All validations passed. Publishing trail...");
+    const result = await pool.query(
+      "UPDATE trails SET status = 'published', published_at = NOW() WHERE id = $1 RETURNING id, status, published_at",
+      [trailId]
+    );
+
+    console.log("[publishTrail] 5. Publish successful");
+    res.json({ data: result.rows[0], message: "Trail published successfully" });
+  } catch (error) {
+    console.error("[publishTrail] ❌ ERROR CAUGHT:");
+    console.error("[publishTrail] Error message:", error instanceof Error ? error.message : String(error));
+    console.error("[publishTrail] Error stack:", error instanceof Error ? error.stack : "No stack");
+    res.status(500).json({ error: "Internal server error", details: error instanceof Error ? error.message : String(error) });
+  }
+}
