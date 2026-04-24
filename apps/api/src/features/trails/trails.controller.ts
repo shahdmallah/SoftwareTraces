@@ -1,6 +1,5 @@
 import type { Request, Response } from "express";
 import { ZodError, z } from "zod";
-import multer from "multer";
 import { createClient } from "@supabase/supabase-js";
 import { pool } from "../../db/pool";
 import { env } from "../../config/env";
@@ -24,6 +23,21 @@ const createTrailBodySchema = z.object({
     difficulty: z.enum(["easy", "moderate", "hard", "expert"]),
   }),
 });
+
+const createTrailReviewBodySchema = z.object({
+  rating: z.coerce.number().int().min(1).max(5),
+  title: z.string().trim().optional(),
+  content: z.string().trim().min(2),
+});
+
+const validReviewPhotoMimeTypes = ["image/jpeg", "image/png", "image/gif", "image/webp"] as const;
+const reviewPhotoExtensionByMimeType: Record<(typeof validReviewPhotoMimeTypes)[number], string> = {
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/gif": "gif",
+  "image/webp": "webp",
+};
+const maxReviewPhotoSizeBytes = 5 * 1024 * 1024;
 
 // Helper: Get Supabase storage client
 function getSupabaseStorageClient() {
@@ -371,44 +385,124 @@ export async function createTrail(req: Request, res: Response): Promise<void> {
 }
 
 export async function getTrailReviews(req: Request, res: Response): Promise<void> {
-  const result = await pool.query("SELECT * FROM trail_reviews WHERE trail_id = $1 ORDER BY created_at DESC", [req.params.id]);
+  const result = await pool.query(
+    `SELECT id, trail_id, user_id, rating, title, content, photo_url, created_at
+     FROM trail_reviews
+     WHERE trail_id = $1
+     ORDER BY created_at DESC`,
+    [req.params.id]
+  );
   res.json({ data: result.rows });
 }
 
-export async function createTrailReview(req: Request, res: Response): Promise<void> {
+export async function createTrailReview(req: Request & { file?: Express.Multer.File }, res: Response): Promise<void> {
   console.log("[createTrailReview] ========== START ==========");
   console.log("[createTrailReview] 1. Trail ID:", req.params.id);
   console.log("[createTrailReview] 2. Request body:", JSON.stringify(req.body, null, 2));
   console.log("[createTrailReview] 3. Auth user:", (req as any).auth?.sub);
+  console.log("[createTrailReview] 4. Content-Type:", req.get("content-type"));
+  console.log("[createTrailReview] 5. Multipart request:", req.is("multipart/form-data"));
+  console.log("[createTrailReview] 6. Photo file:", req.file?.originalname ?? "none");
 
   try {
     const auth = requireAuth(req);
-    console.log("[createTrailReview] 4. Auth passed, userId:", auth.sub);
+    console.log("[createTrailReview] 7. Auth passed, userId:", auth.sub);
 
     const trailId = req.params.id;
-    const { rating, title, content } = req.body;
-    console.log("[createTrailReview] 5. Destructured values:", { rating, title, content });
+    const isMultipart = Boolean(req.is("multipart/form-data"));
+    const parsedBody = createTrailReviewBodySchema.parse(req.body);
+    const rating = parsedBody.rating;
+    const title = parsedBody.title && parsedBody.title.length > 0 ? parsedBody.title : null;
+    const content = parsedBody.content;
+    console.log("[createTrailReview] 8. Parsed values:", { rating, title, content, isMultipart });
 
-    console.log("[createTrailReview] 6. About to execute INSERT...");
+    let photoUrl: string | null = null;
+    let photoStoragePath: string | null = null;
+
+    if (req.file) {
+      if (!validReviewPhotoMimeTypes.includes(req.file.mimetype as (typeof validReviewPhotoMimeTypes)[number])) {
+        console.warn("[createTrailReview] Invalid review photo MIME type:", req.file.mimetype);
+        res.status(400).json({
+          error: "Invalid file type",
+          details: "Only JPEG, PNG, GIF, and WebP images are allowed",
+        });
+        return;
+      }
+
+      if (req.file.size > maxReviewPhotoSizeBytes) {
+        console.warn("[createTrailReview] Review photo too large:", req.file.size);
+        res.status(400).json({
+          error: "File too large",
+          details: `Maximum file size is 5MB, got ${(req.file.size / 1024 / 1024).toFixed(2)}MB`,
+        });
+        return;
+      }
+
+      const fileExtension = reviewPhotoExtensionByMimeType[req.file.mimetype as keyof typeof reviewPhotoExtensionByMimeType];
+      const storagePath = `${trailId}/${auth.sub}/${Date.now()}.${fileExtension}`;
+
+      try {
+        console.log("[createTrailReview] 9. Uploading review photo to Supabase Storage:", storagePath);
+        const supabase = getSupabaseStorageClient();
+        const { error: uploadError } = await supabase.storage
+          .from("review-photos")
+          .upload(storagePath, req.file.buffer, {
+            contentType: req.file.mimetype,
+            upsert: false,
+          });
+
+        if (uploadError) {
+          console.error("[createTrailReview] Review photo upload failed, continuing without photo:", uploadError);
+        } else {
+          const { data: urlData } = supabase.storage.from("review-photos").getPublicUrl(storagePath);
+          photoStoragePath = storagePath;
+          photoUrl = urlData?.publicUrl || null;
+          console.log("[createTrailReview] 10. Review photo uploaded successfully:", photoUrl);
+        }
+      } catch (uploadError) {
+        console.error("[createTrailReview] Review photo upload threw, continuing without photo:", uploadError);
+      }
+    }
+
+    console.log("[createTrailReview] 11. About to execute INSERT...");
 
     const result = await pool.query(
-      `INSERT INTO trail_reviews (trail_id, user_id, rating, title, content, created_at)
-       VALUES ($1, $2, $3, $4, $5, NOW())
-       RETURNING id`,
-      [trailId, auth.sub, rating, title, content]
+      `INSERT INTO trail_reviews (
+         trail_id,
+         user_id,
+         rating,
+         title,
+         content,
+         photo_url,
+         photo_storage_path,
+         created_at
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+       RETURNING id, photo_url`,
+      [trailId, auth.sub, rating, title, content, photoUrl, photoStoragePath]
     );
 
-    console.log("[createTrailReview] 7. INSERT successful, review ID:", result.rows[0].id);
+    console.log("[createTrailReview] 12. INSERT successful, review ID:", result.rows[0].id);
 
-    res.status(201).json({ data: { id: result.rows[0].id } });
+    res.status(201).json({ data: { id: result.rows[0].id, photo_url: result.rows[0].photo_url } });
   } catch (error) {
     console.error("[createTrailReview] ❌ ERROR CAUGHT:");
     console.error("[createTrailReview] Error object:", error);
     console.error("[createTrailReview] Error message:", error instanceof Error ? error.message : String(error));
     console.error("[createTrailReview] Error stack:", error instanceof Error ? error.stack : "No stack");
 
-    res.status(500).json({ 
-      error: "Internal server error", 
+    if (error instanceof HttpError) {
+      res.status(error.statusCode).json({ error: error.message });
+      return;
+    }
+
+    if (error instanceof ZodError) {
+      res.status(400).json({ error: "Validation failed", details: error.flatten() });
+      return;
+    }
+
+    res.status(500).json({
+      error: "Internal server error",
       details: error instanceof Error ? error.message : String(error)
     });
   }
@@ -1060,7 +1154,7 @@ export async function getTrailPhotos(req: Request, res: Response): Promise<void>
   try {
     const trailId = req.params.id;
 
-    console.log("[getTrailPhotos] 1. Querying photos for trail...");
+    console.log("[getTrailPhotos] 1. Querying direct and review photos for trail...");
     const result = await pool.query(
       `SELECT 
         tp.id,
@@ -1068,11 +1162,27 @@ export async function getTrailPhotos(req: Request, res: Response): Promise<void>
         tp.caption,
         tp.is_primary,
         tp.created_at,
-        p.username as uploaded_by
+        p.full_name as uploaded_by,
+        'direct' as source
        FROM trail_photos tp
        LEFT JOIN profiles p ON tp.user_id = p.user_id
        WHERE tp.trail_id = $1
-       ORDER BY tp.is_primary DESC, tp.created_at DESC`,
+
+       UNION ALL
+
+       SELECT 
+        tr.id,
+        tr.photo_storage_path as storage_path,
+        tr.title as caption,
+        false as is_primary,
+        tr.created_at,
+        p.full_name as uploaded_by,
+        'review' as source
+       FROM trail_reviews tr
+       LEFT JOIN profiles p ON tr.user_id = p.user_id
+       WHERE tr.trail_id = $1 AND tr.photo_url IS NOT NULL
+
+       ORDER BY is_primary DESC, created_at DESC`,
       [trailId]
     );
 
@@ -1088,7 +1198,8 @@ export async function getTrailPhotos(req: Request, res: Response): Promise<void>
         caption: photo.caption,
         is_primary: photo.is_primary,
         created_at: photo.created_at,
-        uploaded_by: photo.uploaded_by
+        uploaded_by: photo.uploaded_by,
+        source: photo.source
       };
     });
 
