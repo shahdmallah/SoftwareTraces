@@ -1,4 +1,5 @@
 import type { Request, Response } from "express";
+import { randomUUID } from "crypto";
 import { ZodError, z } from "zod";
 import { createClient } from "@supabase/supabase-js";
 import { pool } from "../../db/pool";
@@ -49,6 +50,18 @@ function getSupabaseStorageClient() {
   });
 }
 
+function createTrailSlug(name: string): string {
+  const baseSlug = name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+
+  const slugPrefix = baseSlug.length > 0 ? baseSlug : "trail";
+  return `${slugPrefix}-${randomUUID().slice(0, 8)}`;
+}
+
 export async function getNearbyTrails(req: Request, res: Response): Promise<void> {
   console.log("[getNearbyTrails] ========== FUNCTION STARTED ==========");
 
@@ -58,6 +71,7 @@ export async function getNearbyTrails(req: Request, res: Response): Promise<void
     const query = `
       SELECT
         id,
+        slug,
         name,
         name_ar,
         description,
@@ -83,6 +97,8 @@ export async function getNearbyTrails(req: Request, res: Response): Promise<void
         is_active,
         created_at,
         updated_at,
+        ST_AsText(start_point::geometry) AS start_point_text,
+        ST_AsText(end_point::geometry) AS end_point_text,
         ST_X(ST_StartPoint(CAST(geometry AS geometry))) AS start_lng,
         ST_Y(ST_StartPoint(CAST(geometry AS geometry))) AS start_lat,
         ST_AsText(geometry) AS geometry_text,
@@ -126,6 +142,7 @@ export async function searchTrails(req: Request, res: Response): Promise<void> {
     const query = `
       SELECT
         id,
+        slug,
         name,
         name_ar,
         description,
@@ -151,6 +168,8 @@ export async function searchTrails(req: Request, res: Response): Promise<void> {
         is_active,
         created_at,
         updated_at,
+        ST_AsText(start_point::geometry) AS start_point_text,
+        ST_AsText(end_point::geometry) AS end_point_text,
         ST_X(ST_StartPoint(CAST(geometry AS geometry))) AS start_lng,
         ST_Y(ST_StartPoint(CAST(geometry AS geometry))) AS start_lat,
         ST_AsText(geometry) AS geometry_text
@@ -186,7 +205,7 @@ export async function getAllTrails(req: Request, res: Response): Promise<void> {
     console.log("[getAllTrails] Step 1: Building query...");
     const query = `
       SELECT 
-        id, name, name_ar, description, description_ar,
+        id, slug, name, name_ar, description, description_ar,
         region, region_ar,
         ST_Length(geometry) as length_meters,
         elevation_gain_meters, elevation_min, elevation_max,
@@ -195,8 +214,11 @@ export async function getAllTrails(req: Request, res: Response): Promise<void> {
         features, features_ar,
         has_checkpoint, checkpoint_note, tags,
         user_id, is_active, created_at, updated_at,
+        ST_AsText(start_point::geometry) AS start_point_text,
+        ST_AsText(end_point::geometry) AS end_point_text,
         ST_X(ST_StartPoint(CAST(geometry AS geometry))) as start_lng,
-        ST_Y(ST_StartPoint(CAST(geometry AS geometry))) as start_lat
+        ST_Y(ST_StartPoint(CAST(geometry AS geometry))) as start_lat,
+        ST_AsText(geometry) AS geometry_text
       FROM trails
       WHERE is_active = true
       ORDER BY created_at DESC
@@ -227,6 +249,7 @@ export async function getTrailById(req: Request, res: Response): Promise<void> {
     const query = `
       SELECT
         id,
+        slug,
         name,
         name_ar,
         description,
@@ -252,6 +275,8 @@ export async function getTrailById(req: Request, res: Response): Promise<void> {
         is_active,
         created_at,
         updated_at,
+        ST_AsText(start_point::geometry) AS start_point_text,
+        ST_AsText(end_point::geometry) AS end_point_text,
         ST_X(ST_StartPoint(CAST(geometry AS geometry))) AS start_lng,
         ST_Y(ST_StartPoint(CAST(geometry AS geometry))) AS start_lat,
         ST_AsText(geometry) AS geometry_text
@@ -333,39 +358,75 @@ export async function createTrail(req: Request, res: Response): Promise<void> {
       }
     });
 
+    const slug = createTrailSlug(name);
     const region = "Unknown";
     const linestring = `LINESTRING(${coordinates.map(([lng, lat]) => `${lng} ${lat}`).join(", ")})`;
+    const [startLng, startLat] = coordinates[0];
+    const [endLng, endLat] = coordinates[coordinates.length - 1];
 
     const insertQuery = `INSERT INTO trails (
+      slug,
       name,
       description,
       region,
       difficulty,
+      length_km,
+      length_meters,
+      estimated_duration_min,
       elevation_gain_meters,
+      elevation_gain_m,
       estimated_duration_minutes,
+      start_point,
+      end_point,
       geometry,
-      user_id
+      user_id,
+      is_active
     ) VALUES (
-      $1, $2, $3, $4, $5, $6, ST_GeogFromText($7), $8
+      $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+      ST_GeogFromText($12),
+      ST_GeogFromText($13),
+      ST_GeogFromText($14),
+      $15,
+      $16
     ) RETURNING id`;
 
     const queryValues = [
+      slug,
       name,
       description ?? "",
       region,
       stats.difficulty,
+      stats.length_meters / 1000,
+      Math.round(stats.length_meters),
+      Math.round(stats.estimated_duration_minutes),
+      stats.elevation_gain_meters,
       stats.elevation_gain_meters,
       Math.round(stats.estimated_duration_minutes),
+      `POINT(${startLng} ${startLat})`,
+      `POINT(${endLng} ${endLat})`,
       linestring,
       userId,
+      true,
     ];
 
     console.error("[createTrail] insert query:", insertQuery);
     console.error("[createTrail] query values:", JSON.stringify(queryValues, null, 2));
 
     const result = await pool.query(insertQuery, queryValues);
+    const createdTrail = await pool.query(
+      `SELECT
+         *,
+         ST_Length(geometry) AS length_meters,
+         ST_AsText(start_point::geometry) AS start_point_text,
+         ST_AsText(end_point::geometry) AS end_point_text,
+         ST_AsText(geometry::geometry) AS geometry_text
+       FROM trails
+       WHERE id = $1`,
+      [result.rows[0].id]
+    );
+    const formattedTrail = formatTrailForApp(createdTrail.rows[0]);
 
-    res.status(201).json({ data: { id: result.rows[0].id } });
+    res.status(201).json({ data: formattedTrail });
   } catch (error) {
     console.error("[createTrail] error message:", error instanceof Error ? error.message : error);
     console.error("[createTrail] error stack:", error instanceof Error ? error.stack : undefined);
@@ -946,16 +1007,12 @@ export async function getSavedTrails(req: Request, res: Response): Promise<void>
         st.id as saved_id,
         st.notes,
         st.created_at as saved_at,
-        t.id,
-        t.name,
-        t.description,
-        t.region,
-        t.difficulty,
-        t.elevation_gain_meters,
-        t.estimated_duration_minutes,
-        t.rating,
-        t.reviews,
-        t.user_id as creator_id
+        t.id as trail_id,
+        t.*,
+        ST_Length(t.geometry) AS length_meters,
+        ST_AsText(t.start_point::geometry) AS start_point_text,
+        ST_AsText(t.end_point::geometry) AS end_point_text,
+        ST_AsText(t.geometry::geometry) AS geometry_text
        FROM saved_trails st
        JOIN trails t ON st.trail_id = t.id
        WHERE st.user_id = $1 AND st.list_type = $2 AND t.deleted_at IS NULL
@@ -966,9 +1023,16 @@ export async function getSavedTrails(req: Request, res: Response): Promise<void>
 
     const pages = Math.ceil(total / limit);
     console.log("[getSavedTrails] 5. Query successful, returned", result.rows.length, "trails");
+    const formattedResults = result.rows.map((row) => ({
+      saved_id: row.saved_id,
+      id: row.trail_id,
+      notes: row.notes,
+      saved_at: row.saved_at,
+      ...formatTrailForApp({ ...row, id: row.trail_id }),
+    }));
 
     res.json({
-      data: result.rows,
+      data: formattedResults,
       pagination: {
         page,
         limit,
