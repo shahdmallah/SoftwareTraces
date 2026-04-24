@@ -1,6 +1,9 @@
 import type { Request, Response } from "express";
+import { randomUUID } from "crypto";
 import { ZodError, z } from "zod";
+import { createClient } from "@supabase/supabase-js";
 import { pool } from "../../db/pool";
+import { env } from "../../config/env";
 import * as trailStatsService from "./trails.service";
 import { requireAuth } from "../../middleware/auth";
 import { HttpError } from "../../lib/httpError";
@@ -22,6 +25,43 @@ const createTrailBodySchema = z.object({
   }),
 });
 
+const createTrailReviewBodySchema = z.object({
+  rating: z.coerce.number().int().min(1).max(5),
+  title: z.string().trim().optional(),
+  content: z.string().trim().min(2),
+});
+
+const validReviewPhotoMimeTypes = ["image/jpeg", "image/png", "image/gif", "image/webp"] as const;
+const reviewPhotoExtensionByMimeType: Record<(typeof validReviewPhotoMimeTypes)[number], string> = {
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/gif": "gif",
+  "image/webp": "webp",
+};
+const maxReviewPhotoSizeBytes = 5 * 1024 * 1024;
+
+// Helper: Get Supabase storage client
+function getSupabaseStorageClient() {
+  if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) {
+    throw new Error("Supabase configuration missing");
+  }
+  return createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
+    auth: { autoRefreshToken: false, persistSession: false }
+  });
+}
+
+function createTrailSlug(name: string): string {
+  const baseSlug = name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+
+  const slugPrefix = baseSlug.length > 0 ? baseSlug : "trail";
+  return `${slugPrefix}-${randomUUID().slice(0, 8)}`;
+}
+
 export async function getNearbyTrails(req: Request, res: Response): Promise<void> {
   console.log("[getNearbyTrails] ========== FUNCTION STARTED ==========");
 
@@ -31,6 +71,7 @@ export async function getNearbyTrails(req: Request, res: Response): Promise<void
     const query = `
       SELECT
         id,
+        slug,
         name,
         name_ar,
         description,
@@ -56,6 +97,8 @@ export async function getNearbyTrails(req: Request, res: Response): Promise<void
         is_active,
         created_at,
         updated_at,
+        ST_AsText(start_point::geometry) AS start_point_text,
+        ST_AsText(end_point::geometry) AS end_point_text,
         ST_X(ST_StartPoint(CAST(geometry AS geometry))) AS start_lng,
         ST_Y(ST_StartPoint(CAST(geometry AS geometry))) AS start_lat,
         ST_AsText(geometry) AS geometry_text,
@@ -99,6 +142,7 @@ export async function searchTrails(req: Request, res: Response): Promise<void> {
     const query = `
       SELECT
         id,
+        slug,
         name,
         name_ar,
         description,
@@ -124,6 +168,8 @@ export async function searchTrails(req: Request, res: Response): Promise<void> {
         is_active,
         created_at,
         updated_at,
+        ST_AsText(start_point::geometry) AS start_point_text,
+        ST_AsText(end_point::geometry) AS end_point_text,
         ST_X(ST_StartPoint(CAST(geometry AS geometry))) AS start_lng,
         ST_Y(ST_StartPoint(CAST(geometry AS geometry))) AS start_lat,
         ST_AsText(geometry) AS geometry_text
@@ -159,7 +205,7 @@ export async function getAllTrails(req: Request, res: Response): Promise<void> {
     console.log("[getAllTrails] Step 1: Building query...");
     const query = `
       SELECT 
-        id, name, name_ar, description, description_ar,
+        id, slug, name, name_ar, description, description_ar,
         region, region_ar,
         ST_Length(geometry) as length_meters,
         elevation_gain_meters, elevation_min, elevation_max,
@@ -168,8 +214,11 @@ export async function getAllTrails(req: Request, res: Response): Promise<void> {
         features, features_ar,
         has_checkpoint, checkpoint_note, tags,
         user_id, is_active, created_at, updated_at,
+        ST_AsText(start_point::geometry) AS start_point_text,
+        ST_AsText(end_point::geometry) AS end_point_text,
         ST_X(ST_StartPoint(CAST(geometry AS geometry))) as start_lng,
-        ST_Y(ST_StartPoint(CAST(geometry AS geometry))) as start_lat
+        ST_Y(ST_StartPoint(CAST(geometry AS geometry))) as start_lat,
+        ST_AsText(geometry) AS geometry_text
       FROM trails
       WHERE is_active = true
       ORDER BY created_at DESC
@@ -200,6 +249,7 @@ export async function getTrailById(req: Request, res: Response): Promise<void> {
     const query = `
       SELECT
         id,
+        slug,
         name,
         name_ar,
         description,
@@ -225,6 +275,8 @@ export async function getTrailById(req: Request, res: Response): Promise<void> {
         is_active,
         created_at,
         updated_at,
+        ST_AsText(start_point::geometry) AS start_point_text,
+        ST_AsText(end_point::geometry) AS end_point_text,
         ST_X(ST_StartPoint(CAST(geometry AS geometry))) AS start_lng,
         ST_Y(ST_StartPoint(CAST(geometry AS geometry))) AS start_lat,
         ST_AsText(geometry) AS geometry_text
@@ -306,39 +358,75 @@ export async function createTrail(req: Request, res: Response): Promise<void> {
       }
     });
 
+    const slug = createTrailSlug(name);
     const region = "Unknown";
     const linestring = `LINESTRING(${coordinates.map(([lng, lat]) => `${lng} ${lat}`).join(", ")})`;
+    const [startLng, startLat] = coordinates[0];
+    const [endLng, endLat] = coordinates[coordinates.length - 1];
 
     const insertQuery = `INSERT INTO trails (
+      slug,
       name,
       description,
       region,
       difficulty,
+      length_km,
+      length_meters,
+      estimated_duration_min,
       elevation_gain_meters,
+      elevation_gain_m,
       estimated_duration_minutes,
+      start_point,
+      end_point,
       geometry,
-      user_id
+      user_id,
+      is_active
     ) VALUES (
-      $1, $2, $3, $4, $5, $6, ST_GeogFromText($7), $8
+      $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+      ST_GeogFromText($12),
+      ST_GeogFromText($13),
+      ST_GeogFromText($14),
+      $15,
+      $16
     ) RETURNING id`;
 
     const queryValues = [
+      slug,
       name,
       description ?? "",
       region,
       stats.difficulty,
+      stats.length_meters / 1000,
+      Math.round(stats.length_meters),
+      Math.round(stats.estimated_duration_minutes),
+      stats.elevation_gain_meters,
       stats.elevation_gain_meters,
       Math.round(stats.estimated_duration_minutes),
+      `POINT(${startLng} ${startLat})`,
+      `POINT(${endLng} ${endLat})`,
       linestring,
       userId,
+      true,
     ];
 
     console.error("[createTrail] insert query:", insertQuery);
     console.error("[createTrail] query values:", JSON.stringify(queryValues, null, 2));
 
     const result = await pool.query(insertQuery, queryValues);
+    const createdTrail = await pool.query(
+      `SELECT
+         *,
+         ST_Length(geometry) AS length_meters,
+         ST_AsText(start_point::geometry) AS start_point_text,
+         ST_AsText(end_point::geometry) AS end_point_text,
+         ST_AsText(geometry::geometry) AS geometry_text
+       FROM trails
+       WHERE id = $1`,
+      [result.rows[0].id]
+    );
+    const formattedTrail = formatTrailForApp(createdTrail.rows[0]);
 
-    res.status(201).json({ data: { id: result.rows[0].id } });
+    res.status(201).json({ data: formattedTrail });
   } catch (error) {
     console.error("[createTrail] error message:", error instanceof Error ? error.message : error);
     console.error("[createTrail] error stack:", error instanceof Error ? error.stack : undefined);
@@ -358,44 +446,124 @@ export async function createTrail(req: Request, res: Response): Promise<void> {
 }
 
 export async function getTrailReviews(req: Request, res: Response): Promise<void> {
-  const result = await pool.query("SELECT * FROM trail_reviews WHERE trail_id = $1 ORDER BY created_at DESC", [req.params.id]);
+  const result = await pool.query(
+    `SELECT id, trail_id, user_id, rating, title, content, photo_url, created_at
+     FROM trail_reviews
+     WHERE trail_id = $1
+     ORDER BY created_at DESC`,
+    [req.params.id]
+  );
   res.json({ data: result.rows });
 }
 
-export async function createTrailReview(req: Request, res: Response): Promise<void> {
+export async function createTrailReview(req: Request & { file?: Express.Multer.File }, res: Response): Promise<void> {
   console.log("[createTrailReview] ========== START ==========");
   console.log("[createTrailReview] 1. Trail ID:", req.params.id);
   console.log("[createTrailReview] 2. Request body:", JSON.stringify(req.body, null, 2));
   console.log("[createTrailReview] 3. Auth user:", (req as any).auth?.sub);
+  console.log("[createTrailReview] 4. Content-Type:", req.get("content-type"));
+  console.log("[createTrailReview] 5. Multipart request:", req.is("multipart/form-data"));
+  console.log("[createTrailReview] 6. Photo file:", req.file?.originalname ?? "none");
 
   try {
     const auth = requireAuth(req);
-    console.log("[createTrailReview] 4. Auth passed, userId:", auth.sub);
+    console.log("[createTrailReview] 7. Auth passed, userId:", auth.sub);
 
     const trailId = req.params.id;
-    const { rating, title, content } = req.body;
-    console.log("[createTrailReview] 5. Destructured values:", { rating, title, content });
+    const isMultipart = Boolean(req.is("multipart/form-data"));
+    const parsedBody = createTrailReviewBodySchema.parse(req.body);
+    const rating = parsedBody.rating;
+    const title = parsedBody.title && parsedBody.title.length > 0 ? parsedBody.title : null;
+    const content = parsedBody.content;
+    console.log("[createTrailReview] 8. Parsed values:", { rating, title, content, isMultipart });
 
-    console.log("[createTrailReview] 6. About to execute INSERT...");
+    let photoUrl: string | null = null;
+    let photoStoragePath: string | null = null;
+
+    if (req.file) {
+      if (!validReviewPhotoMimeTypes.includes(req.file.mimetype as (typeof validReviewPhotoMimeTypes)[number])) {
+        console.warn("[createTrailReview] Invalid review photo MIME type:", req.file.mimetype);
+        res.status(400).json({
+          error: "Invalid file type",
+          details: "Only JPEG, PNG, GIF, and WebP images are allowed",
+        });
+        return;
+      }
+
+      if (req.file.size > maxReviewPhotoSizeBytes) {
+        console.warn("[createTrailReview] Review photo too large:", req.file.size);
+        res.status(400).json({
+          error: "File too large",
+          details: `Maximum file size is 5MB, got ${(req.file.size / 1024 / 1024).toFixed(2)}MB`,
+        });
+        return;
+      }
+
+      const fileExtension = reviewPhotoExtensionByMimeType[req.file.mimetype as keyof typeof reviewPhotoExtensionByMimeType];
+      const storagePath = `${trailId}/${auth.sub}/${Date.now()}.${fileExtension}`;
+
+      try {
+        console.log("[createTrailReview] 9. Uploading review photo to Supabase Storage:", storagePath);
+        const supabase = getSupabaseStorageClient();
+        const { error: uploadError } = await supabase.storage
+          .from("review-photos")
+          .upload(storagePath, req.file.buffer, {
+            contentType: req.file.mimetype,
+            upsert: false,
+          });
+
+        if (uploadError) {
+          console.error("[createTrailReview] Review photo upload failed, continuing without photo:", uploadError);
+        } else {
+          const { data: urlData } = supabase.storage.from("review-photos").getPublicUrl(storagePath);
+          photoStoragePath = storagePath;
+          photoUrl = urlData?.publicUrl || null;
+          console.log("[createTrailReview] 10. Review photo uploaded successfully:", photoUrl);
+        }
+      } catch (uploadError) {
+        console.error("[createTrailReview] Review photo upload threw, continuing without photo:", uploadError);
+      }
+    }
+
+    console.log("[createTrailReview] 11. About to execute INSERT...");
 
     const result = await pool.query(
-      `INSERT INTO trail_reviews (trail_id, user_id, rating, title, content, created_at)
-       VALUES ($1, $2, $3, $4, $5, NOW())
-       RETURNING id`,
-      [trailId, auth.sub, rating, title, content]
+      `INSERT INTO trail_reviews (
+         trail_id,
+         user_id,
+         rating,
+         title,
+         content,
+         photo_url,
+         photo_storage_path,
+         created_at
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+       RETURNING id, photo_url`,
+      [trailId, auth.sub, rating, title, content, photoUrl, photoStoragePath]
     );
 
-    console.log("[createTrailReview] 7. INSERT successful, review ID:", result.rows[0].id);
+    console.log("[createTrailReview] 12. INSERT successful, review ID:", result.rows[0].id);
 
-    res.status(201).json({ data: { id: result.rows[0].id } });
+    res.status(201).json({ data: { id: result.rows[0].id, photo_url: result.rows[0].photo_url } });
   } catch (error) {
     console.error("[createTrailReview] ❌ ERROR CAUGHT:");
     console.error("[createTrailReview] Error object:", error);
     console.error("[createTrailReview] Error message:", error instanceof Error ? error.message : String(error));
     console.error("[createTrailReview] Error stack:", error instanceof Error ? error.stack : "No stack");
 
-    res.status(500).json({ 
-      error: "Internal server error", 
+    if (error instanceof HttpError) {
+      res.status(error.statusCode).json({ error: error.message });
+      return;
+    }
+
+    if (error instanceof ZodError) {
+      res.status(400).json({ error: "Validation failed", details: error.flatten() });
+      return;
+    }
+
+    res.status(500).json({
+      error: "Internal server error",
       details: error instanceof Error ? error.message : String(error)
     });
   }
@@ -839,16 +1007,12 @@ export async function getSavedTrails(req: Request, res: Response): Promise<void>
         st.id as saved_id,
         st.notes,
         st.created_at as saved_at,
-        t.id,
-        t.name,
-        t.description,
-        t.region,
-        t.difficulty,
-        t.elevation_gain_meters,
-        t.estimated_duration_minutes,
-        t.rating,
-        t.reviews,
-        t.user_id as creator_id
+        t.id as trail_id,
+        t.*,
+        ST_Length(t.geometry) AS length_meters,
+        ST_AsText(t.start_point::geometry) AS start_point_text,
+        ST_AsText(t.end_point::geometry) AS end_point_text,
+        ST_AsText(t.geometry::geometry) AS geometry_text
        FROM saved_trails st
        JOIN trails t ON st.trail_id = t.id
        WHERE st.user_id = $1 AND st.list_type = $2 AND t.deleted_at IS NULL
@@ -859,9 +1023,16 @@ export async function getSavedTrails(req: Request, res: Response): Promise<void>
 
     const pages = Math.ceil(total / limit);
     console.log("[getSavedTrails] 5. Query successful, returned", result.rows.length, "trails");
+    const formattedResults = result.rows.map((row) => ({
+      saved_id: row.saved_id,
+      id: row.trail_id,
+      notes: row.notes,
+      saved_at: row.saved_at,
+      ...formatTrailForApp({ ...row, id: row.trail_id }),
+    }));
 
     res.json({
-      data: result.rows,
+      data: formattedResults,
       pagination: {
         page,
         limit,
@@ -921,6 +1092,370 @@ export async function checkSavedStatus(req: Request, res: Response): Promise<voi
     console.error("[checkSavedStatus] ❌ ERROR CAUGHT:");
     console.error("[checkSavedStatus] Error message:", error instanceof Error ? error.message : String(error));
     console.error("[checkSavedStatus] Error stack:", error instanceof Error ? error.stack : "No stack");
+    res.status(500).json({ error: "Internal server error", details: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+export async function uploadTrailPhoto(req: Request & { file?: Express.Multer.File }, res: Response): Promise<void> {
+  console.log("[uploadTrailPhoto] ========== START ==========");
+  console.log("[uploadTrailPhoto] Trail ID:", req.params.id);
+  console.log("[uploadTrailPhoto] File:", req.file?.originalname, "Size:", req.file?.size);
+
+  try {
+    const auth = requireAuth(req);
+    const trailId = req.params.id;
+    const { caption } = req.body;
+
+    console.log("[uploadTrailPhoto] 1. Auth passed, userId:", auth.sub);
+
+    if (!req.file) {
+      res.status(400).json({ error: "Photo file is required" });
+      return;
+    }
+
+    // Validate MIME type
+    const validMimeTypes = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+    if (!validMimeTypes.includes(req.file.mimetype)) {
+      console.warn("[uploadTrailPhoto] Invalid MIME type:", req.file.mimetype);
+      res.status(400).json({
+        error: "Invalid file type",
+        details: `Only JPEG, PNG, GIF, and WebP images are allowed`
+      });
+      return;
+    }
+
+    // Validate file size (5MB max)
+    const maxSizeBytes = 5 * 1024 * 1024;
+    if (req.file.size > maxSizeBytes) {
+      console.warn("[uploadTrailPhoto] File too large:", req.file.size);
+      res.status(400).json({
+        error: "File too large",
+        details: `Maximum file size is 5MB, got ${(req.file.size / 1024 / 1024).toFixed(2)}MB`
+      });
+      return;
+    }
+
+    // Check trail exists and is not soft-deleted
+    console.log("[uploadTrailPhoto] 2. Checking trail exists...");
+    const trailCheck = await pool.query(
+      "SELECT id FROM trails WHERE id = $1 AND deleted_at IS NULL",
+      [trailId]
+    );
+
+    if (trailCheck.rows.length === 0) {
+      console.warn("[uploadTrailPhoto] Trail not found or deleted:", trailId);
+      res.status(404).json({ error: "Trail not found" });
+      return;
+    }
+
+    // Get file extension
+    const ext = req.file.originalname.split(".").pop()?.toLowerCase() || "jpg";
+    const timestamp = Date.now();
+    const storagePath = `${trailId}/${timestamp}.${ext}`;
+
+    // Upload to Supabase Storage
+    console.log("[uploadTrailPhoto] 3. Uploading to Supabase Storage at:", storagePath);
+    const supabase = getSupabaseStorageClient();
+    const { error: uploadError } = await supabase.storage
+      .from("trail-photos")
+      .upload(storagePath, req.file.buffer, { contentType: req.file.mimetype });
+
+    if (uploadError) {
+      console.error("[uploadTrailPhoto] Storage upload failed:", uploadError);
+      res.status(500).json({ error: "Failed to upload photo", details: uploadError.message });
+      return;
+    }
+
+    // Get public URL
+    const { data: urlData } = supabase.storage.from("trail-photos").getPublicUrl(storagePath);
+    const publicUrl = urlData?.publicUrl || "";
+
+    console.log("[uploadTrailPhoto] 4. Upload successful, public URL:", publicUrl);
+
+    // Check if this is the first photo
+    console.log("[uploadTrailPhoto] 5. Checking if first photo...");
+    const photosCountResult = await pool.query(
+      "SELECT COUNT(*) as count FROM trail_photos WHERE trail_id = $1",
+      [trailId]
+    );
+    const isFirstPhoto = parseInt(photosCountResult.rows[0].count, 10) === 0;
+
+    // Insert into trail_photos
+    console.log("[uploadTrailPhoto] 6. Inserting photo record into DB...");
+    const insertResult = await pool.query(
+      `INSERT INTO trail_photos (trail_id, user_id, storage_path, caption, is_primary)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id`,
+      [trailId, auth.sub, storagePath, caption || null, isFirstPhoto]
+    );
+
+    const photoId = insertResult.rows[0].id;
+    console.log("[uploadTrailPhoto] 7. Photo record created, ID:", photoId);
+
+    // If first photo, update trails.image
+    if (isFirstPhoto) {
+      console.log("[uploadTrailPhoto] 8. Setting as primary, updating trails.image...");
+      await pool.query(
+        "UPDATE trails SET image = $1 WHERE id = $2",
+        [publicUrl, trailId]
+      );
+    }
+
+    console.log("[uploadTrailPhoto] 9. Upload complete");
+    res.status(201).json({ data: { id: photoId, url: publicUrl }, message: "Photo uploaded successfully" });
+  } catch (error) {
+    console.error("[uploadTrailPhoto] ❌ ERROR CAUGHT:");
+    console.error("[uploadTrailPhoto] Error message:", error instanceof Error ? error.message : String(error));
+    console.error("[uploadTrailPhoto] Error stack:", error instanceof Error ? error.stack : "No stack");
+    res.status(500).json({ error: "Internal server error", details: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+export async function getTrailPhotos(req: Request, res: Response): Promise<void> {
+  console.log("[getTrailPhotos] ========== START ==========");
+  console.log("[getTrailPhotos] Trail ID:", req.params.id);
+
+  try {
+    const trailId = req.params.id;
+
+    console.log("[getTrailPhotos] 1. Querying direct and review photos for trail...");
+    const result = await pool.query(
+      `SELECT 
+        tp.id,
+        tp.storage_path,
+        tp.caption,
+        tp.is_primary,
+        tp.created_at,
+        p.full_name as uploaded_by,
+        'direct' as source
+       FROM trail_photos tp
+       LEFT JOIN profiles p ON tp.user_id = p.user_id
+       WHERE tp.trail_id = $1
+
+       UNION ALL
+
+       SELECT 
+        tr.id,
+        tr.photo_storage_path as storage_path,
+        tr.title as caption,
+        false as is_primary,
+        tr.created_at,
+        p.full_name as uploaded_by,
+        'review' as source
+       FROM trail_reviews tr
+       LEFT JOIN profiles p ON tr.user_id = p.user_id
+       WHERE tr.trail_id = $1 AND tr.photo_url IS NOT NULL
+
+       ORDER BY is_primary DESC, created_at DESC`,
+      [trailId]
+    );
+
+    console.log("[getTrailPhotos] 2. Query successful, found", result.rows.length, "photos");
+
+    // Generate public URLs for each photo
+    const supabase = getSupabaseStorageClient();
+    const photosWithUrls = result.rows.map((photo) => {
+      const { data: urlData } = supabase.storage.from("trail-photos").getPublicUrl(photo.storage_path);
+      return {
+        id: photo.id,
+        url: urlData?.publicUrl || "",
+        caption: photo.caption,
+        is_primary: photo.is_primary,
+        created_at: photo.created_at,
+        uploaded_by: photo.uploaded_by,
+        source: photo.source
+      };
+    });
+
+    console.log("[getTrailPhotos] 3. Generated public URLs");
+    res.json({ data: photosWithUrls });
+  } catch (error) {
+    console.error("[getTrailPhotos] ❌ ERROR CAUGHT:");
+    console.error("[getTrailPhotos] Error message:", error instanceof Error ? error.message : String(error));
+    console.error("[getTrailPhotos] Error stack:", error instanceof Error ? error.stack : "No stack");
+    res.status(500).json({ error: "Internal server error", details: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+export async function deleteTrailPhoto(req: Request, res: Response): Promise<void> {
+  console.log("[deleteTrailPhoto] ========== START ==========");
+  console.log("[deleteTrailPhoto] Photo ID:", req.params.id);
+
+  try {
+    const auth = requireAuth(req);
+    const photoId = req.params.id;
+
+    console.log("[deleteTrailPhoto] 1. Auth passed, userId:", auth.sub);
+
+    // Get photo details
+    console.log("[deleteTrailPhoto] 2. Fetching photo details...");
+    const photoResult = await pool.query(
+      "SELECT id, trail_id, user_id, storage_path, is_primary FROM trail_photos WHERE id = $1",
+      [photoId]
+    );
+
+    if (photoResult.rows.length === 0) {
+      console.warn("[deleteTrailPhoto] Photo not found:", photoId);
+      res.status(404).json({ error: "Photo not found" });
+      return;
+    }
+
+    const photo = photoResult.rows[0];
+
+    // Check authorization (uploader or trail owner)
+    console.log("[deleteTrailPhoto] 3. Checking authorization...");
+    if (photo.user_id !== auth.sub) {
+      // Check if user is trail owner
+      const trailOwnerResult = await pool.query(
+        "SELECT user_id FROM trails WHERE id = $1",
+        [photo.trail_id]
+      );
+      if (trailOwnerResult.rows.length === 0 || trailOwnerResult.rows[0].user_id !== auth.sub) {
+        console.warn("[deleteTrailPhoto] Unauthorized delete attempt by user:", auth.sub);
+        res.status(403).json({ error: "Not authorized to delete this photo" });
+        return;
+      }
+    }
+
+    // Delete from Supabase Storage
+    console.log("[deleteTrailPhoto] 4. Deleting from Supabase Storage...");
+    const supabase = getSupabaseStorageClient();
+    const { error: deleteError } = await supabase.storage
+      .from("trail-photos")
+      .remove([photo.storage_path]);
+
+    if (deleteError) {
+      console.error("[deleteTrailPhoto] Storage deletion failed:", deleteError);
+      res.status(500).json({ error: "Failed to delete photo from storage", details: deleteError.message });
+      return;
+    }
+
+    // Delete from database
+    console.log("[deleteTrailPhoto] 5. Deleting from database...");
+    await pool.query("DELETE FROM trail_photos WHERE id = $1", [photoId]);
+
+    // If was primary, promote next photo or clear trails.image
+    if (photo.is_primary) {
+      console.log("[deleteTrailPhoto] 6. Photo was primary, finding next photo...");
+      const nextPhotoResult = await pool.query(
+        "SELECT id, storage_path FROM trail_photos WHERE trail_id = $1 ORDER BY created_at ASC LIMIT 1",
+        [photo.trail_id]
+      );
+
+      if (nextPhotoResult.rows.length > 0) {
+        const nextPhoto = nextPhotoResult.rows[0];
+        console.log("[deleteTrailPhoto] 7a. Setting new primary photo:", nextPhoto.id);
+        const { data: urlData } = supabase.storage.from("trail-photos").getPublicUrl(nextPhoto.storage_path);
+        await pool.query(
+          "UPDATE trail_photos SET is_primary = true WHERE id = $1",
+          [nextPhoto.id]
+        );
+        await pool.query(
+          "UPDATE trails SET image = $1 WHERE id = $2",
+          [urlData?.publicUrl || "", photo.trail_id]
+        );
+      } else {
+        console.log("[deleteTrailPhoto] 7b. No more photos, clearing trails.image");
+        await pool.query("UPDATE trails SET image = NULL WHERE id = $1", [photo.trail_id]);
+      }
+    }
+
+    console.log("[deleteTrailPhoto] 8. Delete complete");
+    res.json({ message: "Photo deleted successfully" });
+  } catch (error) {
+    console.error("[deleteTrailPhoto] ❌ ERROR CAUGHT:");
+    console.error("[deleteTrailPhoto] Error message:", error instanceof Error ? error.message : String(error));
+    console.error("[deleteTrailPhoto] Error stack:", error instanceof Error ? error.stack : "No stack");
+    res.status(500).json({ error: "Internal server error", details: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+export async function setPrimaryPhoto(req: Request, res: Response): Promise<void> {
+  console.log("[setPrimaryPhoto] ========== START ==========");
+  console.log("[setPrimaryPhoto] Photo ID:", req.params.id);
+
+  try {
+    const auth = requireAuth(req);
+    const photoId = req.params.id;
+
+    console.log("[setPrimaryPhoto] 1. Auth passed, userId:", auth.sub);
+
+    // Get photo details
+    console.log("[setPrimaryPhoto] 2. Fetching photo details...");
+    const photoResult = await pool.query(
+      "SELECT id, trail_id, user_id, storage_path FROM trail_photos WHERE id = $1",
+      [photoId]
+    );
+
+    if (photoResult.rows.length === 0) {
+      console.warn("[setPrimaryPhoto] Photo not found:", photoId);
+      res.status(404).json({ error: "Photo not found" });
+      return;
+    }
+
+    const photo = photoResult.rows[0];
+
+    // Check authorization (uploader or trail owner)
+    console.log("[setPrimaryPhoto] 3. Checking authorization...");
+    if (photo.user_id !== auth.sub) {
+      const trailOwnerResult = await pool.query(
+        "SELECT user_id FROM trails WHERE id = $1",
+        [photo.trail_id]
+      );
+      if (trailOwnerResult.rows.length === 0 || trailOwnerResult.rows[0].user_id !== auth.sub) {
+        console.warn("[setPrimaryPhoto] Unauthorized update attempt by user:", auth.sub);
+        res.status(403).json({ error: "Not authorized to update this photo" });
+        return;
+      }
+    }
+
+    // Get public URL for the photo
+    const supabase = getSupabaseStorageClient();
+    const { data: urlData } = supabase.storage.from("trail-photos").getPublicUrl(photo.storage_path);
+    const publicUrl = urlData?.publicUrl || "";
+
+    // Begin transaction
+    console.log("[setPrimaryPhoto] 4. Starting transaction...");
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      // Set all photos to is_primary = false
+      console.log("[setPrimaryPhoto] 5. Setting all photos to is_primary = false...");
+      await client.query(
+        "UPDATE trail_photos SET is_primary = false WHERE trail_id = $1",
+        [photo.trail_id]
+      );
+
+      // Set this photo to is_primary = true
+      console.log("[setPrimaryPhoto] 6. Setting this photo to is_primary = true...");
+      await client.query(
+        "UPDATE trail_photos SET is_primary = true WHERE id = $1",
+        [photoId]
+      );
+
+      // Update trails.image
+      console.log("[setPrimaryPhoto] 7. Updating trails.image...");
+      await client.query(
+        "UPDATE trails SET image = $1 WHERE id = $2",
+        [publicUrl, photo.trail_id]
+      );
+
+      await client.query("COMMIT");
+      console.log("[setPrimaryPhoto] 8. Transaction committed successfully");
+    } catch (transactionError) {
+      await client.query("ROLLBACK");
+      throw transactionError;
+    } finally {
+      client.release();
+    }
+
+    console.log("[setPrimaryPhoto] 9. Update complete");
+    res.json({ message: "Primary photo updated successfully" });
+  } catch (error) {
+    console.error("[setPrimaryPhoto] ❌ ERROR CAUGHT:");
+    console.error("[setPrimaryPhoto] Error message:", error instanceof Error ? error.message : String(error));
+    console.error("[setPrimaryPhoto] Error stack:", error instanceof Error ? error.stack : "No stack");
     res.status(500).json({ error: "Internal server error", details: error instanceof Error ? error.message : String(error) });
   }
 }
