@@ -5,6 +5,7 @@ import { pool } from "../../db/pool";
 
 interface ProfileRow {
   id: string;
+  user_id: string;
   full_name: string;
   avatar_url: string | null;
   bio: string | null;
@@ -43,6 +44,10 @@ interface ProfilePhotoRow {
   trail_name: string;
 }
 
+function getRequestId(value: string | string[] | undefined): string {
+  return Array.isArray(value) ? value[0] : (value ?? "");
+}
+
 function getPagination(query: Request["query"]) {
   const page = Math.max(1, Number(query.page) || 1);
   const limit = Math.min(100, Math.max(1, Number(query.limit) || 20));
@@ -75,16 +80,18 @@ function normalizePhotoUrl(source: "trail_photo" | "review", rawUrl: string): st
   }
 }
 
-async function getProfileById(userId: string): Promise<ProfileRow> {
+async function getProfileByUserId(userId: string): Promise<ProfileRow> {
   const profileResult = await pool.query<ProfileRow>(
     `SELECT
        id,
+       user_id,
        full_name,
        avatar_url,
        bio,
        location
      FROM profiles
-     WHERE id = $1`,
+     WHERE user_id = $1 OR id::text = $1
+     LIMIT 1`,
     [userId]
   );
 
@@ -96,12 +103,9 @@ async function getProfileById(userId: string): Promise<ProfileRow> {
 }
 
 export async function getProfile(req: Request, res: Response): Promise<void> {
-  console.log("[getProfile] ========== START ==========");
-  console.log("[getProfile] User ID:", req.params.id);
-
   try {
-    const userId = req.params.id;
-    const profile = await getProfileById(userId);
+    const requestedId = getRequestId(req.params.id);
+    const profile = await getProfileByUserId(requestedId);
 
     const [statsResult, recentReviewsResult, recentPhotosResult] = await Promise.all([
       pool.query<ProfileStatsRow>(
@@ -120,7 +124,7 @@ export async function getProfile(req: Request, res: Response): Promise<void> {
            ) AS total_likes_received,
            (SELECT COUNT(*) FROM user_follows uf WHERE uf.following_id = $1) AS total_followers,
            (SELECT COUNT(*) FROM user_follows uf WHERE uf.follower_id = $1) AS total_following`,
-        [userId]
+        [profile.user_id]
       ),
       pool.query<ProfileReviewRow>(
         `SELECT
@@ -138,7 +142,7 @@ export async function getProfile(req: Request, res: Response): Promise<void> {
          WHERE tr.user_id = $1
          ORDER BY tr.created_at DESC
          LIMIT 5`,
-        [userId]
+        [profile.user_id]
       ),
       pool.query<ProfilePhotoRow>(
         `SELECT
@@ -155,7 +159,7 @@ export async function getProfile(req: Request, res: Response): Promise<void> {
              tp.storage_path AS url,
              tp.caption,
              tp.created_at,
-             'trail_photo'::TEXT AS source,
+             'trail_photo'::text AS source,
              tp.trail_id,
              t.name AS trail_name
            FROM trail_photos tp
@@ -169,7 +173,7 @@ export async function getProfile(req: Request, res: Response): Promise<void> {
              tr.photo_url AS url,
              tr.title AS caption,
              tr.created_at,
-             'review'::TEXT AS source,
+             'review'::text AS source,
              tr.trail_id,
              t.name AS trail_name
            FROM trail_reviews tr
@@ -178,36 +182,16 @@ export async function getProfile(req: Request, res: Response): Promise<void> {
          ) AS p
          ORDER BY p.created_at DESC
          LIMIT 5`,
-        [userId]
+        [profile.user_id]
       ),
     ]);
 
     const stats = statsResult.rows[0];
-    const recentReviews = recentReviewsResult.rows.map((row) => ({
-      id: row.id,
-      rating: row.rating,
-      title: row.title,
-      content: row.content,
-      photo_url: row.photo_url,
-      created_at: row.created_at,
-      trail: {
-        id: row.trail_id,
-        name: row.trail_name,
-        image: row.trail_image,
-      },
-    }));
-
-    const recentPhotos = recentPhotosResult.rows.map((row) => ({
-      id: row.id,
-      url: normalizePhotoUrl(row.source, row.url),
-      caption: row.caption,
-      created_at: row.created_at,
-      source: row.source === "review" ? "review" : "trail_photo",
-    }));
 
     res.json({
       data: {
         id: profile.id,
+        user_id: profile.user_id,
         full_name: profile.full_name,
         avatar_url: profile.avatar_url,
         bio: profile.bio,
@@ -219,13 +203,31 @@ export async function getProfile(req: Request, res: Response): Promise<void> {
           total_followers: Number(stats.total_followers),
           total_following: Number(stats.total_following),
         },
-        recent_reviews: recentReviews,
-        recent_photos: recentPhotos,
+        recent_reviews: recentReviewsResult.rows.map((row) => ({
+          id: row.id,
+          rating: row.rating,
+          title: row.title,
+          content: row.content,
+          photo_url: row.photo_url,
+          created_at: row.created_at,
+          trail: {
+            id: row.trail_id,
+            name: row.trail_name,
+            image: row.trail_image,
+          },
+        })),
+        recent_photos: recentPhotosResult.rows.map((row) => ({
+          id: row.id,
+          url: normalizePhotoUrl(row.source, row.url),
+          caption: row.caption,
+          created_at: row.created_at,
+          source: row.source,
+          trail_id: row.trail_id,
+          trail_name: row.trail_name,
+        })),
       },
     });
   } catch (error) {
-    console.error("[getProfile] ERROR CAUGHT:", error);
-
     if (error instanceof Error && error.message === "PROFILE_NOT_FOUND") {
       res.status(404).json({ error: "Profile not found" });
       return;
@@ -239,17 +241,13 @@ export async function getProfile(req: Request, res: Response): Promise<void> {
 }
 
 export async function getProfileReviews(req: Request, res: Response): Promise<void> {
-  console.log("[getProfileReviews] ========== START ==========");
-  console.log("[getProfileReviews] User ID:", req.params.id);
-
   try {
-    const userId = req.params.id;
+    const requestedId = getRequestId(req.params.id);
     const { page, limit, offset } = getPagination(req.query);
-
-    await getProfileById(userId);
+    const profile = await getProfileByUserId(requestedId);
 
     const [countResult, reviewsResult] = await Promise.all([
-      pool.query<{ count: string }>("SELECT COUNT(*) AS count FROM trail_reviews WHERE user_id = $1", [userId]),
+      pool.query<{ count: string }>("SELECT COUNT(*) AS count FROM trail_reviews WHERE user_id = $1", [profile.user_id]),
       pool.query<ProfileReviewRow>(
         `SELECT
            tr.id,
@@ -271,7 +269,7 @@ export async function getProfileReviews(req: Request, res: Response): Promise<vo
          GROUP BY tr.id, t.id
          ORDER BY tr.created_at DESC
          LIMIT $2 OFFSET $3`,
-        [userId, limit, offset]
+        [profile.user_id, limit, offset]
       ),
     ]);
 
@@ -301,8 +299,6 @@ export async function getProfileReviews(req: Request, res: Response): Promise<vo
       },
     });
   } catch (error) {
-    console.error("[getProfileReviews] ERROR CAUGHT:", error);
-
     if (error instanceof Error && error.message === "PROFILE_NOT_FOUND") {
       res.status(404).json({ error: "Profile not found" });
       return;
@@ -316,14 +312,10 @@ export async function getProfileReviews(req: Request, res: Response): Promise<vo
 }
 
 export async function getProfilePhotos(req: Request, res: Response): Promise<void> {
-  console.log("[getProfilePhotos] ========== START ==========");
-  console.log("[getProfilePhotos] User ID:", req.params.id);
-
   try {
-    const userId = req.params.id;
+    const requestedId = getRequestId(req.params.id);
     const { page, limit, offset } = getPagination(req.query);
-
-    await getProfileById(userId);
+    const profile = await getProfileByUserId(requestedId);
 
     const [countResult, photosResult] = await Promise.all([
       pool.query<{ count: string }>(
@@ -339,7 +331,7 @@ export async function getProfilePhotos(req: Request, res: Response): Promise<voi
            FROM trail_reviews
            WHERE user_id = $1 AND photo_url IS NOT NULL
          ) AS photos`,
-        [userId]
+        [profile.user_id]
       ),
       pool.query<ProfilePhotoRow>(
         `SELECT
@@ -356,7 +348,7 @@ export async function getProfilePhotos(req: Request, res: Response): Promise<voi
              tp.storage_path AS url,
              tp.caption,
              tp.created_at,
-             'trail_photo'::TEXT AS source,
+             'trail_photo'::text AS source,
              tp.trail_id,
              t.name AS trail_name
            FROM trail_photos tp
@@ -370,7 +362,7 @@ export async function getProfilePhotos(req: Request, res: Response): Promise<voi
              tr.photo_url AS url,
              tr.title AS caption,
              tr.created_at,
-             'review'::TEXT AS source,
+             'review'::text AS source,
              tr.trail_id,
              t.name AS trail_name
            FROM trail_reviews tr
@@ -379,7 +371,7 @@ export async function getProfilePhotos(req: Request, res: Response): Promise<voi
          ) AS p
          ORDER BY p.created_at DESC
          LIMIT $2 OFFSET $3`,
-        [userId, limit, offset]
+        [profile.user_id, limit, offset]
       ),
     ]);
 
@@ -403,8 +395,6 @@ export async function getProfilePhotos(req: Request, res: Response): Promise<voi
       },
     });
   } catch (error) {
-    console.error("[getProfilePhotos] ERROR CAUGHT:", error);
-
     if (error instanceof Error && error.message === "PROFILE_NOT_FOUND") {
       res.status(404).json({ error: "Profile not found" });
       return;
