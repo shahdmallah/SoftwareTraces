@@ -46,36 +46,40 @@ function decodeElevation(r: number, g: number, b: number): number {
 
 // Fetch and decode a tile
 async function fetchTile(z: number, x: number, y: number): Promise<Map<string, number>> {
-  const url = `https://api.mapbox.com/v4/mapbox.terrain-rgb/${z}/${x}/${y}.png?access_token=${env.MAPBOX_TOKEN}`;
   try {
-    const response = await fetch(url);
-    if (!response.ok) {
-      console.error(`[elevation] Failed to fetch tile ${z}/${x}/${y}: ${response.status}`);
-      return new Map();
-    }
-    const buffer = await response.arrayBuffer();
-    const png = PNG.sync.read(Buffer.from(buffer));
-    const elevations = new Map<string, number>();
-
-    for (let py = 0; py < png.height; py++) {
-      for (let px = 0; px < png.width; px++) {
-        const idx = (png.width * py + px) << 2;
-        const r = png.data[idx];
-        const g = png.data[idx + 1];
-        const b = png.data[idx + 2];
-        const elevation = decodeElevation(r, g, b);
-        elevations.set(`${px},${py}`, elevation);
-      }
-    }
-    return elevations;
+    return await fetchTileOrThrow(z, x, y);
   } catch (error) {
     console.error(`[elevation] Error fetching tile ${z}/${x}/${y}:`, error);
     return new Map();
   }
 }
 
-// Get elevation with caching
-export async function getElevationCached(lng: number, lat: number): Promise<number> {
+async function fetchTileOrThrow(z: number, x: number, y: number): Promise<Map<string, number>> {
+  const url = `https://api.mapbox.com/v4/mapbox.terrain-rgb/${z}/${x}/${y}.png?access_token=${env.MAPBOX_TOKEN}`;
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch tile ${z}/${x}/${y}: ${response.status}`);
+  }
+
+  const buffer = await response.arrayBuffer();
+  const png = PNG.sync.read(Buffer.from(buffer));
+  const elevations = new Map<string, number>();
+
+  for (let py = 0; py < png.height; py++) {
+    for (let px = 0; px < png.width; px++) {
+      const idx = (png.width * py + px) << 2;
+      const r = png.data[idx];
+      const g = png.data[idx + 1];
+      const b = png.data[idx + 2];
+      const elevation = decodeElevation(r, g, b);
+      elevations.set(`${px},${py}`, elevation);
+    }
+  }
+
+  return elevations;
+}
+
+export async function getElevationForPoint(lng: number, lat: number): Promise<number> {
   const { z, x, y } = lngLatToTile(lng, lat);
   const cacheKey = `${z}/${x}/${y}`;
 
@@ -84,7 +88,7 @@ export async function getElevationCached(lng: number, lat: number): Promise<numb
   if (cacheEntry && cacheEntry.expiresAt > Date.now()) {
     isCacheHit = true;
   } else {
-    const elevations = await fetchTile(z, x, y);
+    const elevations = await fetchTileOrThrow(z, x, y);
     cacheEntry = { elevations, expiresAt: Date.now() + CACHE_TTL_MS };
     tileCache.set(cacheKey, cacheEntry);
   }
@@ -92,7 +96,23 @@ export async function getElevationCached(lng: number, lat: number): Promise<numb
   console.log(`[elevation] Cache ${isCacheHit ? 'hit' : 'miss'} for tile ${cacheKey}`);
 
   const { px, py } = getPixelInTile(lng, lat, z, x, y);
-  return cacheEntry.elevations.get(`${px},${py}`) || 0;
+  const elevation = cacheEntry.elevations.get(`${px},${py}`);
+
+  if (elevation === undefined) {
+    throw new Error(`Missing elevation pixel ${px},${py} for tile ${cacheKey}`);
+  }
+
+  return elevation;
+}
+
+// Get elevation with caching
+export async function getElevationCached(lng: number, lat: number): Promise<number> {
+  try {
+    return await getElevationForPoint(lng, lat);
+  } catch (error) {
+    console.error(`[elevation] Error resolving elevation for ${lng},${lat}:`, error);
+    return 0;
+  }
 }
 
 // Sample coordinates (max 50 points, keep first and last)
