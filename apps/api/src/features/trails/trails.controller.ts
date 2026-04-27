@@ -8,6 +8,7 @@ import * as trailStatsService from "./trails.service";
 import { requireAuth } from "../../middleware/auth";
 import { HttpError } from "../../lib/httpError";
 import { formatTrailForApp } from "../../utils/formatTrail";
+import { getElevationForPoint } from "../../services/elevationService";
 
 const calculateTrailStatsBodySchema = z.object({
   coordinates: z.array(z.tuple([z.number(), z.number()])).min(2),
@@ -30,6 +31,224 @@ const createTrailReviewBodySchema = z.object({
   title: z.string().trim().optional(),
   content: z.string().trim().min(2),
 });
+
+const elevationProfileQuerySchema = z.object({
+  points: z.coerce.number().int().min(10).max(200).optional().default(50),
+  simplify: z
+    .union([
+      z.boolean(),
+      z
+        .string()
+        .transform((value) => value.trim().toLowerCase())
+        .refine((value) => ["true", "false", "1", "0"].includes(value), {
+          message: "simplify must be a boolean",
+        })
+        .transform((value) => value === "true" || value === "1"),
+    ])
+    .optional()
+    .default(true),
+});
+
+interface TrailSamplePoint {
+  lng: number;
+  lat: number;
+  distance_meters: number;
+}
+
+export interface ElevationProfileData {
+  elevations: number[];
+  distances: number[];
+  total_gain: number;
+  total_loss: number;
+  min_elevation: number;
+  max_elevation: number;
+  start_elevation: number;
+  end_elevation: number;
+  warnings?: string[];
+}
+
+export interface ElevationProfileResponse {
+  data: ElevationProfileData;
+}
+
+interface ElevationProfileCacheEntry {
+  profile: ElevationProfileData;
+  timestamp: number;
+}
+
+const elevationProfileCache = new Map<string, ElevationProfileCacheEntry>();
+const ELEVATION_PROFILE_CACHE_TTL = 60 * 60 * 1000;
+const DEFAULT_SMOOTHING_WINDOW = 3;
+function getTrailSelectFields(alias?: string): string {
+  const prefix = alias ? `${alias}.` : "";
+  return `
+    ${prefix}id,
+    ${prefix}slug,
+    ${prefix}name,
+    ${prefix}name_ar,
+    ${prefix}description,
+    ${prefix}description_ar,
+    ${prefix}region,
+    ${prefix}region_ar,
+    ${prefix}length_meters,
+    ${prefix}elevation_gain_meters,
+    ${prefix}elevation_min,
+    ${prefix}elevation_max,
+    ${prefix}estimated_duration_minutes,
+    ${prefix}difficulty,
+    ${prefix}rating,
+    ${prefix}reviews,
+    ${prefix}image,
+    ${prefix}images,
+    ${prefix}features,
+    ${prefix}features_ar,
+    ${prefix}has_checkpoint,
+    ${prefix}checkpoint_note,
+    ${prefix}tags,
+    ${prefix}user_id,
+    ${prefix}is_active,
+    ${prefix}status,
+    ${prefix}published_at,
+    ${prefix}deleted_at,
+    ${prefix}created_at,
+    ${prefix}updated_at,
+    ST_AsText(${prefix}start_point::geometry) AS start_point_text,
+    ST_X(ST_StartPoint(${prefix}geometry::geometry)) AS start_lng,
+    ST_Y(ST_StartPoint(${prefix}geometry::geometry)) AS start_lat,
+    ST_AsText(${prefix}geometry::geometry) AS geometry_text
+  `;
+}
+
+function getElevationProfileCacheKey(trailId: string, points: number, simplify: boolean): string {
+  return `${trailId}:${points}:${simplify ? "smooth" : "raw"}`;
+}
+
+function getCachedElevationProfile(key: string): ElevationProfileData | null {
+  const cached = elevationProfileCache.get(key);
+  if (!cached) {
+    return null;
+  }
+
+  if (Date.now() - cached.timestamp >= ELEVATION_PROFILE_CACHE_TTL) {
+    elevationProfileCache.delete(key);
+    return null;
+  }
+
+  return cached.profile;
+}
+
+function setCachedElevationProfile(key: string, profile: ElevationProfileData): void {
+  elevationProfileCache.set(key, {
+    profile,
+    timestamp: Date.now(),
+  });
+}
+
+function smoothElevationSeries(elevations: number[], windowSize: number = DEFAULT_SMOOTHING_WINDOW): number[] {
+  if (elevations.length <= 2 || windowSize <= 1) {
+    return [...elevations];
+  }
+
+  const halfWindow = Math.floor(windowSize / 2);
+  return elevations.map((_, index) => {
+    let sum = 0;
+    let count = 0;
+
+    for (let cursor = index - halfWindow; cursor <= index + halfWindow; cursor += 1) {
+      if (cursor < 0 || cursor >= elevations.length) {
+        continue;
+      }
+
+      sum += elevations[cursor];
+      count += 1;
+    }
+
+    return count > 0 ? Number((sum / count).toFixed(2)) : elevations[index];
+  });
+}
+
+function calculateElevationProfileStats(elevations: number[]) {
+  let totalGain = 0;
+  let totalLoss = 0;
+
+  for (let index = 1; index < elevations.length; index += 1) {
+    const delta = elevations[index] - elevations[index - 1];
+    if (delta > 0) {
+      totalGain += delta;
+      continue;
+    }
+
+    totalLoss += Math.abs(delta);
+  }
+
+  return {
+    total_gain: Math.round(totalGain),
+    total_loss: Math.round(totalLoss),
+    min_elevation: Math.min(...elevations),
+    max_elevation: Math.max(...elevations),
+    start_elevation: elevations[0] ?? 0,
+    end_elevation: elevations[elevations.length - 1] ?? 0,
+  };
+}
+
+async function getTrailSamplePoints(trailId: string, points: number): Promise<TrailSamplePoint[]> {
+  const query = `
+    WITH steps AS (
+      SELECT generate_series(0, $2 - 1) AS step_index
+    ),
+    fractions AS (
+      SELECT
+        step_index,
+        CASE
+          WHEN $2 = 1 THEN 0::float
+          ELSE step_index::float / ($2 - 1)::float
+        END AS fraction
+      FROM steps
+    )
+    SELECT
+      ST_X(ST_LineInterpolatePoint(t.geometry::geometry, fractions.fraction)) AS lng,
+      ST_Y(ST_LineInterpolatePoint(t.geometry::geometry, fractions.fraction)) AS lat,
+      ST_Length(ST_LineSubstring(t.geometry::geometry, 0, fractions.fraction)::geography) AS distance_meters
+    FROM trails t
+    CROSS JOIN fractions
+    WHERE t.id = $1
+      AND t.deleted_at IS NULL
+      AND t.is_active = true
+    ORDER BY fractions.step_index ASC
+  `;
+
+  const result = await pool.query<TrailSamplePoint>(query, [trailId, points]);
+  return result.rows;
+}
+
+async function resolveElevationsForSamples(
+  trailId: string,
+  samplePoints: TrailSamplePoint[],
+): Promise<{ elevations: number[]; warnings: string[]; completeFailure: boolean }> {
+  const warnings: string[] = [];
+  let successCount = 0;
+
+  const elevations = await Promise.all(
+    samplePoints.map(async ({ lng, lat }, index) => {
+      try {
+        const elevation = await getElevationForPoint(lng, lat);
+        successCount += 1;
+        return Math.round(elevation);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        warnings.push(`Failed to fetch elevation for point ${index + 1}/${samplePoints.length}: ${message}`);
+        console.warn(`[getElevationProfile] Elevation lookup failed for trail ${trailId} at sample ${index + 1}:`, error);
+        return 0;
+      }
+    }),
+  );
+
+  return {
+    elevations,
+    warnings,
+    completeFailure: successCount === 0,
+  };
+}
 
 const validReviewPhotoMimeTypes = ["image/jpeg", "image/png", "image/gif", "image/webp"] as const;
 const reviewPhotoExtensionByMimeType: Record<(typeof validReviewPhotoMimeTypes)[number], string> = {
@@ -62,6 +281,10 @@ function createTrailSlug(name: string): string {
   return `${slugPrefix}-${randomUUID().slice(0, 8)}`;
 }
 
+function getRequestId(value: string | string[] | undefined): string {
+  return Array.isArray(value) ? value[0] : (value ?? "");
+}
+
 export async function getNearbyTrails(req: Request, res: Response): Promise<void> {
   console.log("[getNearbyTrails] ========== FUNCTION STARTED ==========");
 
@@ -70,44 +293,14 @@ export async function getNearbyTrails(req: Request, res: Response): Promise<void
     const { lat, lng, radius = 10000 } = req.query;
     const query = `
       SELECT
-        id,
-        slug,
-        name,
-        name_ar,
-        description,
-        description_ar,
-        region,
-        region_ar,
-        ST_Length(geometry) AS length_meters,
-        elevation_gain_meters,
-        elevation_min,
-        elevation_max,
-        estimated_duration_minutes,
-        difficulty,
-        rating,
-        reviews,
-        image,
-        images,
-        features,
-        features_ar,
-        has_checkpoint,
-        checkpoint_note,
-        tags,
-        user_id,
-        is_active,
-        created_at,
-        updated_at,
-        ST_AsText(start_point::geometry) AS start_point_text,
-        ST_AsText(end_point::geometry) AS end_point_text,
-        ST_X(ST_StartPoint(CAST(geometry AS geometry))) AS start_lng,
-        ST_Y(ST_StartPoint(CAST(geometry AS geometry))) AS start_lat,
-        ST_AsText(geometry) AS geometry_text,
+        ${getTrailSelectFields()},
         ST_Distance(
           geometry,
           ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography
         ) AS distance_meters
       FROM trails
       WHERE is_active = true
+        AND deleted_at IS NULL
         AND ST_DWithin(
           geometry,
           ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography,
@@ -141,43 +334,13 @@ export async function searchTrails(req: Request, res: Response): Promise<void> {
     const { q = "", difficulty, minLength = 0, maxLength = 1000 } = req.query;
     const query = `
       SELECT
-        id,
-        slug,
-        name,
-        name_ar,
-        description,
-        description_ar,
-        region,
-        region_ar,
-        ST_Length(geometry) AS length_meters,
-        elevation_gain_meters,
-        elevation_min,
-        elevation_max,
-        estimated_duration_minutes,
-        difficulty,
-        rating,
-        reviews,
-        image,
-        images,
-        features,
-        features_ar,
-        has_checkpoint,
-        checkpoint_note,
-        tags,
-        user_id,
-        is_active,
-        created_at,
-        updated_at,
-        ST_AsText(start_point::geometry) AS start_point_text,
-        ST_AsText(end_point::geometry) AS end_point_text,
-        ST_X(ST_StartPoint(CAST(geometry AS geometry))) AS start_lng,
-        ST_Y(ST_StartPoint(CAST(geometry AS geometry))) AS start_lat,
-        ST_AsText(geometry) AS geometry_text
+        ${getTrailSelectFields()}
       FROM trails
       WHERE is_active = true
+        AND deleted_at IS NULL
         AND (name ILIKE $1 OR description ILIKE $1 OR region ILIKE $1)
         AND ($2::TEXT IS NULL OR difficulty = $2)
-        AND ST_Length(geometry) / 1000 BETWEEN $3 AND $4
+        AND length_meters / 1000.0 BETWEEN $3 AND $4
       ORDER BY created_at DESC
     `;
 
@@ -205,22 +368,10 @@ export async function getAllTrails(req: Request, res: Response): Promise<void> {
     console.log("[getAllTrails] Step 1: Building query...");
     const query = `
       SELECT 
-        id, slug, name, name_ar, description, description_ar,
-        region, region_ar,
-        ST_Length(geometry) as length_meters,
-        elevation_gain_meters, elevation_min, elevation_max,
-        estimated_duration_minutes, difficulty,
-        rating, reviews, image, images,
-        features, features_ar,
-        has_checkpoint, checkpoint_note, tags,
-        user_id, is_active, created_at, updated_at,
-        ST_AsText(start_point::geometry) AS start_point_text,
-        ST_AsText(end_point::geometry) AS end_point_text,
-        ST_X(ST_StartPoint(CAST(geometry AS geometry))) as start_lng,
-        ST_Y(ST_StartPoint(CAST(geometry AS geometry))) as start_lat,
-        ST_AsText(geometry) AS geometry_text
+        ${getTrailSelectFields()}
       FROM trails
       WHERE is_active = true
+        AND deleted_at IS NULL
       ORDER BY created_at DESC
     `;
 
@@ -248,48 +399,19 @@ export async function getTrailById(req: Request, res: Response): Promise<void> {
     console.log("[getTrailById] Step 1: Building query...");
     const query = `
       SELECT
-        id,
-        slug,
-        name,
-        name_ar,
-        description,
-        description_ar,
-        region,
-        region_ar,
-        ST_Length(geometry) AS length_meters,
-        elevation_gain_meters,
-        elevation_min,
-        elevation_max,
-        estimated_duration_minutes,
-        difficulty,
-        rating,
-        reviews,
-        image,
-        images,
-        features,
-        features_ar,
-        has_checkpoint,
-        checkpoint_note,
-        tags,
-        user_id,
-        is_active,
-        created_at,
-        updated_at,
-        ST_AsText(start_point::geometry) AS start_point_text,
-        ST_AsText(end_point::geometry) AS end_point_text,
-        ST_X(ST_StartPoint(CAST(geometry AS geometry))) AS start_lng,
-        ST_Y(ST_StartPoint(CAST(geometry AS geometry))) AS start_lat,
-        ST_AsText(geometry) AS geometry_text
+        ${getTrailSelectFields()}
       FROM trails
       WHERE id = $1
+        AND deleted_at IS NULL
     `;
 
     console.log("[getTrailById] Step 2: Executing query...");
-    const trailResult = await pool.query(query, [req.params.id]);
+    const trailId = getRequestId(req.params.id);
+    const trailResult = await pool.query(query, [trailId]);
     console.log("[getTrailById] Step 3: Query succeeded, rows:", trailResult.rows.length);
 
     if (trailResult.rows.length === 0) {
-      console.log("[getTrailById] No trail found for id:", req.params.id);
+      console.log("[getTrailById] No trail found for id:", trailId);
       res.status(404).json({ error: "Trail not found" });
       return;
     }
@@ -304,6 +426,63 @@ export async function getTrailById(req: Request, res: Response): Promise<void> {
     console.error("[getTrailById] Error message:", error instanceof Error ? error.message : String(error));
     console.error("[getTrailById] Error stack:", error instanceof Error ? error.stack : "No stack");
     res.status(500).json({ error: "Internal server error", details: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+export async function getElevationProfile(req: Request, res: Response): Promise<void> {
+  try {
+    const trailId = getRequestId(req.params.id);
+    const query = elevationProfileQuerySchema.safeParse(req.query);
+
+    if (!query.success) {
+      res.status(400).json({ error: "Validation failed", details: query.error.flatten() });
+      return;
+    }
+
+    const { points, simplify } = query.data;
+    const cacheKey = getElevationProfileCacheKey(trailId, points, simplify);
+    const cachedProfile = getCachedElevationProfile(cacheKey);
+
+    if (cachedProfile) {
+      const cachedResponse: ElevationProfileResponse = { data: cachedProfile };
+      res.json(cachedResponse);
+      return;
+    }
+
+    const samplePoints = await getTrailSamplePoints(trailId, points);
+    if (samplePoints.length === 0) {
+      res.status(404).json({ error: "Trail not found" });
+      return;
+    }
+
+    const { elevations: rawElevations, warnings, completeFailure } = await resolveElevationsForSamples(trailId, samplePoints);
+    if (completeFailure) {
+      res.status(500).json({
+        error: "Elevation API failed completely",
+        details: "No elevation samples could be resolved for this trail",
+      });
+      return;
+    }
+
+    const elevations = simplify ? smoothElevationSeries(rawElevations) : rawElevations;
+    const distances = samplePoints.map((point) => Math.round(Number(point.distance_meters)));
+    const profile: ElevationProfileData = {
+      elevations,
+      distances,
+      ...calculateElevationProfileStats(elevations),
+      ...(warnings.length > 0 ? { warnings } : {}),
+    };
+
+    setCachedElevationProfile(cacheKey, profile);
+
+    const response: ElevationProfileResponse = { data: profile };
+    res.json(response);
+  } catch (error) {
+    console.error("[getElevationProfile] Error:", error);
+    res.status(500).json({
+      error: "Internal server error",
+      details: error instanceof Error ? error.message : String(error),
+    });
   }
 }
 
@@ -362,7 +541,6 @@ export async function createTrail(req: Request, res: Response): Promise<void> {
     const region = "Unknown";
     const linestring = `LINESTRING(${coordinates.map(([lng, lat]) => `${lng} ${lat}`).join(", ")})`;
     const [startLng, startLat] = coordinates[0];
-    const [endLng, endLat] = coordinates[coordinates.length - 1];
 
     const insertQuery = `INSERT INTO trails (
       slug,
@@ -370,24 +548,19 @@ export async function createTrail(req: Request, res: Response): Promise<void> {
       description,
       region,
       difficulty,
-      length_km,
       length_meters,
-      estimated_duration_min,
       elevation_gain_meters,
-      elevation_gain_m,
       estimated_duration_minutes,
       start_point,
-      end_point,
       geometry,
       user_id,
       is_active
     ) VALUES (
-      $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-      ST_GeogFromText($12),
-      ST_GeogFromText($13),
-      ST_GeogFromText($14),
-      $15,
-      $16
+      $1, $2, $3, $4, $5, $6, $7, $8,
+      ST_GeogFromText($9),
+      ST_GeogFromText($10),
+      $11,
+      $12
     ) RETURNING id`;
 
     const queryValues = [
@@ -396,14 +569,10 @@ export async function createTrail(req: Request, res: Response): Promise<void> {
       description ?? "",
       region,
       stats.difficulty,
-      stats.length_meters / 1000,
       Math.round(stats.length_meters),
-      Math.round(stats.estimated_duration_minutes),
-      stats.elevation_gain_meters,
       stats.elevation_gain_meters,
       Math.round(stats.estimated_duration_minutes),
       `POINT(${startLng} ${startLat})`,
-      `POINT(${endLng} ${endLat})`,
       linestring,
       userId,
       true,
@@ -415,11 +584,7 @@ export async function createTrail(req: Request, res: Response): Promise<void> {
     const result = await pool.query(insertQuery, queryValues);
     const createdTrail = await pool.query(
       `SELECT
-         *,
-         ST_Length(geometry) AS length_meters,
-         ST_AsText(start_point::geometry) AS start_point_text,
-         ST_AsText(end_point::geometry) AS end_point_text,
-         ST_AsText(geometry::geometry) AS geometry_text
+         ${getTrailSelectFields()}
        FROM trails
        WHERE id = $1`,
       [result.rows[0].id]
@@ -1007,28 +1172,24 @@ export async function getSavedTrails(req: Request, res: Response): Promise<void>
         st.id as saved_id,
         st.notes,
         st.created_at as saved_at,
-        t.id as trail_id,
-        t.*,
-        ST_Length(t.geometry) AS length_meters,
-        ST_AsText(t.start_point::geometry) AS start_point_text,
-        ST_AsText(t.end_point::geometry) AS end_point_text,
-        ST_AsText(t.geometry::geometry) AS geometry_text
+        ${getTrailSelectFields("t")}
        FROM saved_trails st
        JOIN trails t ON st.trail_id = t.id
-       WHERE st.user_id = $1 AND st.list_type = $2 AND t.deleted_at IS NULL
+       WHERE st.user_id = $1
+         AND st.list_type = $2
+         AND t.deleted_at IS NULL
        ORDER BY st.created_at DESC
        LIMIT $3 OFFSET $4`,
       [auth.sub, list_type, limit, offset]
     );
 
-    const pages = Math.ceil(total / limit);
+    const pages = total === 0 ? 0 : Math.ceil(total / limit);
     console.log("[getSavedTrails] 5. Query successful, returned", result.rows.length, "trails");
     const formattedResults = result.rows.map((row) => ({
+      ...formatTrailForApp(row),
       saved_id: row.saved_id,
-      id: row.trail_id,
       notes: row.notes,
       saved_at: row.saved_at,
-      ...formatTrailForApp({ ...row, id: row.trail_id }),
     }));
 
     res.json({
