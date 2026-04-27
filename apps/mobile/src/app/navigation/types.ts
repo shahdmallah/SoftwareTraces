@@ -5,7 +5,21 @@ export type RootStackParamList = {
   Auth: { mode?: 'signin' | 'signup' } | undefined;
   AppTabs: NavigatorScreenParams<AppTabParamList> | undefined;
   TrailDetail: { trailId: string };
-  Recording: undefined;
+  TrailMedia: { trailId: string };
+  ActivityMessages: undefined;
+  ActivityShare:
+    | {
+        draft?: {
+          trailName: string;
+          rating: number;
+          review: string;
+          photoUris: string[];
+        };
+      }
+    | undefined;
+  CreateTrail: undefined;
+  Recording: { trailId: string };
+  TrailReview: undefined;
 };
 
 export type AppTabParamList = {

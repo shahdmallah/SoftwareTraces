@@ -14,6 +14,11 @@
     },
     "ios": {
       "supportsTablet": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "Allow Traces to take trail photos and tag them to your current location.",
+        "NSPhotoLibraryUsageDescription": "Allow Traces to attach saved trail photos to your current location.",
+        "NSPhotoLibraryAddUsageDescription": "Allow Traces to save captured trail photos when needed."
+      },
       "bundleIdentifier": "com.shahdmallah.traces"
     },
     "android": {
@@ -27,7 +32,9 @@
       "permissions": [
         "ACCESS_COARSE_LOCATION",
         "ACCESS_FINE_LOCATION",
-        "FOREGROUND_SERVICE"
+        "FOREGROUND_SERVICE",
+        "CAMERA",
+        "READ_MEDIA_IMAGES"
       ]
     },
     "web": {
@@ -44,6 +51,12 @@
         "expo-location",
         {
           "locationAlwaysAndWhenInUsePermission": "Allow Palestine Trails to use your location to show trails near you."
+        }
+      ],
+      [
+        "expo-sensors",
+        {
+          "motionPermission": "Allow Traces to access motion data so it can count your steps during a trail recording."
         }
       ]
     ]

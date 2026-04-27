@@ -1,5 +1,6 @@
 CREATE EXTENSION IF NOT EXISTS postgis;
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 CREATE TABLE IF NOT EXISTS users (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -30,16 +31,34 @@ CREATE TABLE IF NOT EXISTS trails (
   name TEXT NOT NULL,
   name_ar TEXT,
   description TEXT NOT NULL,
+  description_ar TEXT,
   region TEXT NOT NULL,
+  region_ar TEXT,
   difficulty TEXT NOT NULL,
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   length_km NUMERIC NOT NULL,
+  length_meters NUMERIC,
   estimated_duration_min INTEGER NOT NULL,
+  estimated_duration_minutes INTEGER,
+  elevation_gain_meters NUMERIC,
   elevation_gain_m NUMERIC NOT NULL DEFAULT 0,
+  elevation_min NUMERIC NOT NULL DEFAULT 0,
+  elevation_max NUMERIC NOT NULL DEFAULT 0,
   elevation_loss_m NUMERIC NOT NULL DEFAULT 0,
+  rating NUMERIC NOT NULL DEFAULT 0,
+  reviews INTEGER NOT NULL DEFAULT 0,
   tags TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+  image TEXT,
+  images TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+  features TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+  features_ar TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+  has_checkpoint BOOLEAN NOT NULL DEFAULT FALSE,
+  checkpoint_note TEXT,
   hero_image_url TEXT,
   is_featured BOOLEAN NOT NULL DEFAULT FALSE,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  status TEXT NOT NULL DEFAULT 'published',
+  deleted_at TIMESTAMPTZ,
   start_point GEOGRAPHY(POINT, 4326) NOT NULL,
   end_point GEOGRAPHY(POINT, 4326) NOT NULL,
   geometry GEOGRAPHY(LINESTRING, 4326) NOT NULL,
@@ -52,7 +71,11 @@ CREATE TABLE IF NOT EXISTS trail_reviews (
   trail_id UUID NOT NULL REFERENCES trails(id) ON DELETE CASCADE,
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   rating INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 5),
-  comment TEXT NOT NULL,
+  title TEXT,
+  content TEXT NOT NULL DEFAULT '',
+  comment TEXT NOT NULL DEFAULT '',
+  photo_url TEXT,
+  photo_storage_path TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -60,9 +83,15 @@ CREATE TABLE IF NOT EXISTS trail_conditions (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   trail_id UUID NOT NULL REFERENCES trails(id) ON DELETE CASCADE,
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  status TEXT NOT NULL,
-  note TEXT NOT NULL,
-  reported_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  condition_type TEXT,
+  severity TEXT,
+  description TEXT,
+  status TEXT NOT NULL DEFAULT 'reported',
+  note TEXT NOT NULL DEFAULT '',
+  reported_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  is_resolved BOOLEAN NOT NULL DEFAULT FALSE,
+  resolved_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS activities (
@@ -136,6 +165,19 @@ CREATE TABLE IF NOT EXISTS user_achievements (
   unlocked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (achievement_id, user_id)
 );
+
+CREATE TABLE IF NOT EXISTS saved_trails (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  trail_id UUID NOT NULL REFERENCES trails(id) ON DELETE CASCADE,
+  list_type TEXT NOT NULL DEFAULT 'favorites',
+  notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(user_id, trail_id, list_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_saved_trails_user ON saved_trails(user_id);
+CREATE INDEX IF NOT EXISTS idx_saved_trails_trail ON saved_trails(trail_id);
 
 CREATE OR REPLACE FUNCTION set_updated_at()
 RETURNS TRIGGER AS $$

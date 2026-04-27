@@ -4,113 +4,155 @@ import { commonShadows, theme } from '../theme';
 
 export const exploreTrailCardStyles = StyleSheet.create({
   card: {
-    backgroundColor: theme.colors.surface,
-    borderRadius: theme.radii.xl,
-    overflow: 'hidden',
-    marginBottom: theme.spacing.lg,
-    ...commonShadows.medium,
+    marginBottom: theme.spacing.xl,
   },
   cardImageWrapper: {
-    height: theme.sizes.layout.cardImageHeight,
+    height: 274,
+    borderRadius: 30,
+    overflow: 'hidden',
+    backgroundColor: theme.colors.surfaceMuted,
+    position: 'relative',
+    ...commonShadows.medium,
   },
   cardImage: {
     width: '100%',
     height: '100%',
   },
-  cardBadge: {
+  favoriteButton: {
     position: 'absolute',
-    top: theme.spacing.md,
-    right: theme.spacing.md,
-    paddingHorizontal: theme.spacing.smd,
-    paddingVertical: theme.spacing.xxs,
-    borderRadius: theme.radii.md,
-  },
-  cardBadgeText: {
-    color: theme.colors.textInverse,
-    fontSize: theme.typography.fontSize.sm,
-    fontWeight: theme.typography.fontWeight.bold,
-  },
-  cardRating: {
-    position: 'absolute',
-    top: theme.spacing.md,
-    left: theme.spacing.md,
-    flexDirection: 'row',
+    top: theme.spacing.lg,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: 'rgba(255,255,255,0.97)',
     alignItems: 'center',
-    backgroundColor: theme.colors.overlayStrong,
-    paddingHorizontal: theme.spacing.sm,
-    paddingVertical: theme.spacing.xxs,
-    borderRadius: theme.radii.md,
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOpacity: 0.14,
+    shadowOffset: { width: 0, height: 8 },
+    shadowRadius: 18,
+    elevation: 5,
   },
-  cardRatingText: {
-    color: theme.colors.textInverse,
-    marginLeft: theme.spacing.xxs,
-    fontSize: theme.typography.fontSize.sm,
-    fontWeight: theme.typography.fontWeight.bold,
+  favoriteButtonPressed: {
+    opacity: 0.7,
   },
-  cardNameOverlay: {
+  favoriteButtonActive: {
+    backgroundColor: '#630E13',
+  },
+  favoriteButtonLtr: {
+    right: theme.spacing.lg,
+  },
+  favoriteButtonRtl: {
+    left: theme.spacing.lg,
+  },
+  mapPreviewCard: {
+    position: 'absolute',
+    bottom: 18,
+    width: 94,
+    height: 94,
+    borderRadius: 22,
+    overflow: 'hidden',
+    borderWidth: 4,
+    borderColor: theme.colors.textInverse,
+    backgroundColor: '#F7F1E4',
+    shadowColor: '#000',
+    shadowOpacity: 0.18,
+    shadowOffset: { width: 0, height: 10 },
+    shadowRadius: 18,
+    elevation: 6,
+  },
+  mapPreviewCardLtr: {
+    right: theme.spacing.lg,
+  },
+  mapPreviewCardRtl: {
+    left: theme.spacing.lg,
+  },
+  mapPreviewCardPressed: {
+    opacity: 0.9,
+    transform: [{ scale: 0.97 }],
+  },
+  paginationDots: {
     position: 'absolute',
     left: 0,
     right: 0,
-    bottom: 0,
-    padding: theme.spacing.md,
-    backgroundColor: theme.colors.overlayCard,
+    bottom: theme.spacing.lg,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+    zIndex: 2,
   },
-  cardName: {
-    color: theme.colors.textInverse,
-    fontSize: theme.typography.fontSize.title,
-    fontWeight: theme.typography.fontWeight.extraBold,
+  paginationDot: {
+    width: 9,
+    height: 9,
+    borderRadius: theme.radii.pill,
+    backgroundColor: 'rgba(255,255,255,0.56)',
+  },
+  paginationDotActive: {
+    backgroundColor: theme.colors.textInverse,
   },
   cardInfo: {
-    paddingHorizontal: theme.spacing.mdPlus,
-    paddingVertical: theme.spacing.md,
+    paddingTop: theme.spacing.md,
+    paddingBottom: theme.spacing.sm,
   },
-  cardLocationRow: {
-    alignItems: 'center',
-    marginBottom: theme.spacing.smd,
+  cardHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: theme.spacing.md,
   },
-  cardLocationIcon: {
-    marginRight: theme.spacing.xs,
+  cardCopy: {
+    flex: 1,
+  },
+  cardName: {
+    color: '#1F211A',
+    fontSize: 23,
+    lineHeight: 28,
+    fontWeight: '800',
+    letterSpacing: -0.4,
+  },
+  cardMapAction: {
+  padding: 6,        
+  marginLeft: 8,
+  borderRadius: 0,   
+  backgroundColor: 'transparent',
+},
+  cardActionIconPressed: {
+    opacity: 0.7,
   },
   cardLocationText: {
-    color: theme.colors.textMuted,
-    fontSize: theme.typography.fontSize.sm,
+    marginTop: 6,
+    color: '#7A7265',
+    fontSize: 16,
+    lineHeight: 21,
   },
-  cardLocationDot: {
-    color: theme.colors.borderMuted,
-    marginHorizontal: theme.spacing.xs,
-    fontSize: theme.typography.fontSize.sm,
-  },
-  cardStatsRow: {
+  cardMetaRow: {
+    marginTop: theme.spacing.md,
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: theme.spacing.smd,
-  },
-  cardStatItem: {
     alignItems: 'center',
-  },
-  cardStatValue: {
-    fontSize: theme.typography.fontSize.base,
-    fontWeight: theme.typography.fontWeight.bold,
-    color: theme.colors.textPrimary,
-  },
-  cardStatLabel: {
-    fontSize: theme.typography.fontSize.xs,
-    color: theme.colors.textMuted,
-  },
-  cardChipsRow: {
-    flexDirection: 'row',
     flexWrap: 'wrap',
+    rowGap: theme.spacing.xs,
+    columnGap: theme.spacing.sm,
   },
-  cardChip: {
-    backgroundColor: theme.colors.chipBackground,
-    borderRadius: theme.radii.sm,
-    paddingHorizontal: theme.spacing.sm,
-    paddingVertical: theme.spacing.xxxs,
-    marginRight: theme.spacing.sm,
-    marginBottom: theme.spacing.sm,
+  metaItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.xs,
   },
-  cardChipText: {
-    color: theme.colors.chipText,
-    fontSize: theme.typography.fontSize.sm,
+  metaText: {
+    color: '#70756B',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
+  },
+  metaDivider: {
+    color: '#A49B8D',
+    fontSize: 16,
+    lineHeight: 16,
+  },
+  difficultyMarker: {
+    width: 12,
+    height: 12,
+    borderRadius: 4,
   },
 });

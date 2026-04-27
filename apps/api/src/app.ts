@@ -8,6 +8,7 @@ import authRoutes from "./features/auth/auth.routes";
 import debugRoutes from "./features/debug/debug.routes";
 import healthRoutes from "./features/health/health.routes";
 import offlineRoutes from "./features/offline/offline.routes";
+import profilesRoutes from "./features/profiles/profiles.routes";
 import socialRoutes from "./features/social/social.routes";
 import trailsRoutes from "./features/trails/trails.routes";
 import { errorHandler } from "./middleware/errorHandler";
@@ -30,7 +31,8 @@ export function createApp() {
   app.use("/api/trails", trailsRoutes);
   app.use("/api/activities", activitiesRoutes);
   app.use("/api/health", healthRoutes);
-  app.use("/api", socialRoutes);
+  app.use("/api/social", socialRoutes);
+  app.use("/api/profiles", profilesRoutes);
   app.use("/api/offline", offlineRoutes);
   app.use("/api/achievements", achievementsRoutes);
 

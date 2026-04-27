@@ -1,136 +1,308 @@
 import { StyleSheet } from 'react-native';
 
-import { commonShadows, theme } from '../theme';
-
 export const exploreScreenStyles = StyleSheet.create({
+  // ── Layout ──────────────────────────────────────────────
   container: {
     flex: 1,
-    backgroundColor: theme.colors.background,
+    backgroundColor: '#F7F7F7',
   },
-  header: {
-    paddingHorizontal: theme.spacing.lg,
-    paddingTop: theme.spacing.xl,
-    paddingBottom: theme.spacing.md,
+
+  headerContent: {
+    paddingHorizontal: 16,
+    paddingBottom: 16,
   },
-  heroBanner: {
-    minHeight: theme.sizes.layout.heroMinHeight,
-    borderRadius: theme.radii.hero,
-    overflow: 'hidden',
-    backgroundColor: theme.colors.surfaceAccent,
+
+  listContent: {
+    paddingBottom: 120,
   },
-  heroBannerImage: {
-    borderRadius: theme.radii.hero,
+
+  cardBlock: {
+    paddingHorizontal: 16,
+    marginBottom: 12,
   },
-  heroBannerOverlay: {
-    flex: 1,
-    padding: theme.spacing.lgPlus,
-    backgroundColor: theme.colors.overlayHero,
-    justifyContent: 'space-between',
-  },
-  headerTopRow: {
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    gap: theme.spacing.md,
-  },
-  headerCopy: {
-    flex: 1,
-  },
-  headerEyebrow: {
-    fontSize: theme.typography.fontSize.sm,
-    fontWeight: theme.typography.fontWeight.bold,
-    letterSpacing: theme.typography.letterSpacing.wide,
-    textTransform: 'uppercase',
-    color: theme.colors.textInverseMuted,
-    marginBottom: theme.spacing.xs,
-  },
-  headerTitle: {
-    fontSize: theme.typography.fontSize.heading,
-    fontWeight: theme.typography.fontWeight.extraBold,
-    color: theme.colors.textInverse,
-  },
-  headerSubtitle: {
-    fontSize: theme.typography.fontSize.body,
-    color: theme.colors.textInverseSoft,
-    marginTop: theme.spacing.xxs,
-    lineHeight: theme.typography.lineHeight.body,
-  },
-  searchBox: {
-    marginTop: theme.spacing.md,
+
+  // ── Search ───────────────────────────────────────────────
+  searchRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: theme.colors.surface,
-    borderRadius: theme.radii.lg,
-    paddingHorizontal: theme.spacing.md,
-    paddingVertical: theme.spacing.smd,
-    ...commonShadows.soft,
+    gap: 10,
+    marginBottom: 14,
   },
+
+  searchBox: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    height: 54,
+    backgroundColor: '#F1EFE9',
+    borderRadius: 28,
+    paddingHorizontal: 16,
+    gap: 8,
+  },
+
   searchInput: {
     flex: 1,
-    marginLeft: theme.spacing.sm,
-    color: theme.colors.textPrimary,
-    fontSize: theme.typography.fontSize.body,
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#2C2418',
   },
-  filterToggle: {
+
+  searchInputLtr: {
+    marginLeft: 2,
+    textAlign: 'left',
+  },
+
+  searchInputRtl: {
+    marginRight: 2,
+    textAlign: 'right',
+  },
+
+  // ── Header action button (filter toggle) ─────────────────
+  headerActionButton: {
+    width: 54,
+    height: 54,
+    borderRadius: 27,
+    backgroundColor: '#F1EFE9',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  headerActionButtonActive: {
+    backgroundColor: '#E7F5EA',
+  },
+
+  headerActionPressed: {
+    opacity: 0.7,
+  },
+
+  // Dot indicator for active filters
+  headerActionIndicator: {
+    position: 'absolute',
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#630E13',
+    top: 10,
+  },
+
+  headerActionIndicatorLtr: {
+    right: 10,
+  },
+
+  headerActionIndicatorRtl: {
+    left: 10,
+  },
+
+  // ── Quick-filter chips (feature row) ─────────────────────
+  quickFiltersBlock: {
+    marginBottom: 16,
+  },
+
+  quickFiltersContent: {
+    gap: 10,
+    paddingRight: 4,
+  },
+
+  filtersContentRtl: {
+    flexDirection: 'row-reverse',
+  },
+
+  quickFilterChip: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 20,
+    backgroundColor: '#F1EFE9',
+  },
+
+  quickFilterChipActive: {
+    backgroundColor: '#E7F5EA',
+  },
+
+  quickFilterChipPressed: {
+    opacity: 0.7,
+  },
+
+  quickFilterInner: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: theme.spacing.xs,
-    backgroundColor: theme.colors.overlayGlass,
-    borderRadius: theme.radii.pill,
-    paddingHorizontal: theme.spacing.md,
-    paddingVertical: theme.spacing.smd,
+    gap: 6,
   },
-  filterToggleText: {
-    color: theme.colors.textInverse,
-    fontSize: theme.typography.fontSize.md,
-    fontWeight: theme.typography.fontWeight.bold,
+
+  quickFilterLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#2C2418',
   },
-  filterTogglePressed: {
-    opacity: 0.9,
-    transform: [{ scale: 0.98 }],
+
+  quickFilterLabelActive: {
+    color: '#2A6B35',
   },
+
+  // ── Advanced filters card ─────────────────────────────────
   filtersCard: {
-    marginHorizontal: theme.spacing.lg,
-    marginBottom: theme.spacing.md,
-    padding: theme.spacing.mdPlus,
-    borderRadius: theme.radii.xxxl,
-    backgroundColor: theme.colors.surfaceMuted,
+    marginBottom: 16,
+    backgroundColor: '#F1EFE9',
+    borderRadius: 20,
+    padding: 14,
+    gap: 4,
   },
+
   filterSection: {
-    marginBottom: theme.spacing.md,
+    marginBottom: 12,
   },
+
   filterSectionTitle: {
-    fontSize: theme.typography.fontSize.md,
-    fontWeight: theme.typography.fontWeight.extraBold,
-    color: theme.colors.textSecondary,
-    marginBottom: theme.spacing.smd,
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#8A7A6A',
+    marginBottom: 8,
   },
-  filterButton: {
-    paddingHorizontal: theme.spacing.lg,
-    paddingVertical: theme.spacing.smd,
-    borderRadius: theme.radii.xxl,
-    backgroundColor: theme.colors.surface,
-    marginRight: theme.spacing.smd,
+
+  compactFiltersContent: {
+    gap: 8,
+    paddingRight: 4,
   },
-  filterButtonActive: {
-    backgroundColor: theme.colors.buttonPrimary,
+
+  compactFilterChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 16,
+    backgroundColor: '#E3DFD7',
   },
-  filterButtonPressed: {
-    opacity: 0.9,
-    transform: [{ scale: 0.98 }],
+
+  compactFilterChipActive: {
+    backgroundColor: '#630E13',
   },
-  filterLabel: {
-    color: theme.colors.textSecondary,
-    fontSize: theme.typography.fontSize.base,
-    fontWeight: theme.typography.fontWeight.medium,
+
+  compactFilterLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#2C2418',
   },
-  filterLabelActive: {
-    color: theme.colors.textInverse,
+
+  compactFilterLabelActive: {
+    color: '#fff',
   },
-  listContent: {
-    paddingHorizontal: theme.spacing.lg,
-    paddingBottom: theme.spacing.xl,
+
+  // ── Results row ───────────────────────────────────────────
+  resultsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
   },
-  listWrapper: {
+
+  resultsTextBlock: {
     flex: 1,
+    gap: 1,
+  },
+
+  resultsCount: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#2C2418',
+  },
+
+  resultsCaption: {
+    fontSize: 13,
+    color: '#8A7A6A',
+  },
+
+  // ── Sort button & menu ────────────────────────────────────
+  sortButton: {
+    backgroundColor: '#F1EFE9',
+    borderRadius: 18,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+
+  sortButtonActive: {
+    backgroundColor: '#E7F5EA',
+  },
+
+  sortButtonInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+
+  sortButtonText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#2C2418',
+  },
+
+  sortMenu: {
+    marginBottom: 12,
+  },
+
+  // ── Status / error banner ─────────────────────────────────
+  statusBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#FDF3F3',
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    marginBottom: 12,
+    gap: 10,
+  },
+
+  statusBannerText: {
+    flex: 1,
+    fontSize: 13,
+    color: '#630E13',
+    fontWeight: '500',
+  },
+
+  statusBannerButton: {
+    backgroundColor: '#630E13',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+
+  statusBannerButtonText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#fff',
+  },
+
+  // ── Empty / loading state ─────────────────────────────────
+  emptyStateCard: {
+    marginHorizontal: 16,
+    padding: 20,
+    borderRadius: 20,
+    backgroundColor: '#F1EFE9',
+  },
+
+  emptyStateTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#2C2418',
+  },
+
+  emptyStateText: {
+    marginTop: 6,
+    fontSize: 14,
+    color: '#8A7A6A',
+  },
+
+  emptyStateButton: {
+    marginTop: 14,
+    alignSelf: 'flex-start',
+    backgroundColor: '#630E13',
+    borderRadius: 14,
+    paddingHorizontal: 16,
+    paddingVertical: 9,
+  },
+
+  emptyStateButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#fff',
   },
 });

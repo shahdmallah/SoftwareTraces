@@ -66,6 +66,10 @@ const translations = {
   lengthShort: { ar: 'أقل من 7كم', en: '<7km' },
   lengthMedium: { ar: '7–12كم', en: '7–12km' },
   lengthLong: { ar: 'أكثر من 12كم', en: '>12km' },
+  reviewsAny: { ar: 'أي عدد', en: 'Any' },
+  reviewsProven: { ar: 'مثبت (10+)', en: 'Proven (10+)' },
+  reviewsPopular: { ar: 'شائع (50+)', en: 'Popular (50+)' },
+  reviewsLegendary: { ar: 'أسطوري (200+)', en: 'Legendary (200+)' },
   featureWater: { ar: 'مياه', en: 'Water' },
   featureHistorical: { ar: 'تاريخي', en: 'Historical' },
   featureOlive: { ar: 'زيتون', en: 'Olive' },
@@ -181,7 +185,7 @@ const translations = {
 const LanguageContext = createContext<LanguageContextValue | undefined>(undefined);
 
 export function LanguageProvider({ children }: { children: ReactNode }) {
-  const [language, setLanguage] = useState<Language>('ar');
+  const [language, setLanguage] = useState<Language>('en');
 
   const t = useMemo(
     () => (key: keyof typeof translations) => translations[key][language],

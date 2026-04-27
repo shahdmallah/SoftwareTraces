@@ -3,6 +3,7 @@ import { formatDuration } from "./formatDuration";
 
 interface TrailRecord {
   id: string;
+  slug?: string | null;
   name?: string | null;
   name_ar?: string | null;
   region?: string | null;
@@ -27,7 +28,10 @@ interface TrailRecord {
   geometry?: string | null;
   start_lng?: number | string | null;
   start_lat?: number | string | null;
+  start_point_text?: string | null;
   tags?: unknown;
+  created_at?: string | Date | null;
+  updated_at?: string | Date | null;
 }
 
 function normalizeDifficulty(value: string | null | undefined): Difficulty {
@@ -43,60 +47,133 @@ function normalizeDifficulty(value: string | null | undefined): Difficulty {
   }
 }
 
-function parseFirstPointFromGeometry(geometry: string | null | undefined): [number, number] {
-  if (!geometry) {
-    return [0, 0];
+function toNumber(value: number | string | null | undefined, fallback = 0): number {
+  if (value == null) {
+    return fallback;
   }
 
-  const linestringMatch = geometry.match(/LINESTRING\s*\(([^)]+)\)/i);
-  const pointMatch = geometry.match(/POINT\s*\(([^)]+)\)/i);
-  const pointText = linestringMatch?.[1] ?? pointMatch?.[1];
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
 
+function parsePointText(pointText: string | null | undefined): [number, number] | null {
   if (!pointText) {
-    return [0, 0];
+    return null;
   }
 
-  const firstPair = pointText.split(",")[0].trim().split(/\s+/);
-  const [lng, lat] = firstPair.map(Number);
+  const match = pointText.match(/POINT\s*\(([^)]+)\)/i);
+  const rawPoint = match?.[1] ?? pointText;
+  const [lng, lat] = rawPoint.trim().split(/\s+/).map(Number);
+
   if (Number.isFinite(lat) && Number.isFinite(lng)) {
     return [lat, lng];
   }
 
-  return [0, 0];
+  return null;
+}
+
+export function extractFullGeometry(geometry: string | null | undefined): Array<[number, number]> {
+  if (!geometry) {
+    return [];
+  }
+
+  const linestringMatch = geometry.match(/LINESTRING\s*\(([^)]+)\)/i);
+  if (linestringMatch?.[1]) {
+    return linestringMatch[1]
+      .split(",")
+      .map((pair) => pair.trim().split(/\s+/).map(Number))
+      .filter(([lng, lat]) => Number.isFinite(lat) && Number.isFinite(lng))
+      .map(([lng, lat]) => [lat, lng] as [number, number]);
+  }
+
+  const point = parsePointText(geometry);
+  return point ? [point] : [];
+}
+
+function normalizeStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.filter((item): item is string => typeof item === "string");
+  }
+
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
+    } catch {
+      return [];
+    }
+  }
+
+  return [];
+}
+
+function normalizeUnknownArray<T>(value: unknown): T[] {
+  if (Array.isArray(value)) {
+    return value as T[];
+  }
+
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      return Array.isArray(parsed) ? parsed as T[] : [];
+    } catch {
+      return [];
+    }
+  }
+
+  return [];
+}
+
+function toIsoString(value: string | Date | null | undefined): string {
+  if (!value) {
+    return new Date(0).toISOString();
+  }
+
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? new Date(0).toISOString() : parsed.toISOString();
 }
 
 export function formatTrailForApp(dbTrail: TrailRecord) {
-  const distance = dbTrail.length_meters != null
-    ? Number(dbTrail.length_meters) / 1000
-    : 0;
-
-  const coordinates = parseFirstPointFromGeometry(dbTrail.geometry_text ?? dbTrail.geometry);
+  const distanceMeters = toNumber(dbTrail.length_meters);
+  const distance = Number((distanceMeters / 1000).toFixed(2));
+  const durationMinutes = Math.round(toNumber(dbTrail.estimated_duration_minutes));
+  const routeCoordinates = extractFullGeometry(dbTrail.geometry_text ?? dbTrail.geometry);
+  const fallbackCoordinates = parsePointText(dbTrail.start_point_text) ?? [toNumber(dbTrail.start_lat), toNumber(dbTrail.start_lng)] as [number, number];
+  const coordinates = routeCoordinates[0] ?? fallbackCoordinates;
 
   return {
     id: dbTrail.id,
+    slug: dbTrail.slug ?? dbTrail.id,
     name: dbTrail.name ?? "",
     nameAr: dbTrail.name_ar ?? "",
-    region: dbTrail.region ?? "",
-    regionAr: dbTrail.region_ar ?? "",
     description: dbTrail.description ?? "",
     descriptionAr: dbTrail.description_ar ?? "",
+    region: dbTrail.region ?? "",
+    regionAr: dbTrail.region_ar ?? "",
     distance,
-    duration: formatDuration(Number(dbTrail.estimated_duration_minutes ?? 0)),
-    elevationGain: Number(dbTrail.elevation_gain_meters ?? 0),
-    elevationMin: Number(dbTrail.elevation_min ?? 0),
-    elevationMax: Number(dbTrail.elevation_max ?? 0),
+    duration: formatDuration(durationMinutes),
+    elevationGain: toNumber(dbTrail.elevation_gain_meters),
+    elevationMin: toNumber(dbTrail.elevation_min),
+    elevationMax: toNumber(dbTrail.elevation_max),
     difficulty: normalizeDifficulty(dbTrail.difficulty),
-    rating: Number(dbTrail.rating ?? 0),
-    reviews: Number(dbTrail.reviews ?? 0),
+    rating: toNumber(dbTrail.rating),
+    reviews: Math.round(toNumber(dbTrail.reviews)),
     image: dbTrail.image ?? "",
-    images: Array.isArray(dbTrail.images) ? dbTrail.images.filter((item): item is string => typeof item === "string") : [],
-    features: Array.isArray(dbTrail.features) ? dbTrail.features.filter((item): item is string => typeof item === "string") : [],
-    featuresAr: Array.isArray(dbTrail.features_ar) ? dbTrail.features_ar.filter((item): item is string => typeof item === "string") : [],
-    hasCheckpoint: Boolean(dbTrail.has_checkpoint ?? false),
+    images: normalizeUnknownArray<string>(dbTrail.images),
+    features: normalizeUnknownArray<string>(dbTrail.features),
+    featuresAr: normalizeUnknownArray<string>(dbTrail.features_ar),
+    hasCheckpoint: Boolean(dbTrail.has_checkpoint),
     checkpointNote: dbTrail.checkpoint_note ?? "",
+    tags: normalizeStringArray(dbTrail.tags),
     coordinates,
-    mapX: Number(dbTrail.start_lng ?? 0),
-    mapY: Number(dbTrail.start_lat ?? 0),
-    tags: Array.isArray(dbTrail.tags) ? dbTrail.tags.filter((item): item is string => typeof item === "string") : [],
+    routeCoordinates,
+    mapX: 0,
+    mapY: 0,
+    createdAt: toIsoString(dbTrail.created_at),
+    updatedAt: toIsoString(dbTrail.updated_at),
   };
 }

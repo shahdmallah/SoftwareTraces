@@ -1,3 +1,4 @@
+// Updated so sign-in waits for auth hydration and persists the session through the shared auth context.
 import React, { useState } from 'react';
 import {
   View,
@@ -26,7 +27,7 @@ export function AuthScreen() {
   const navigation = useNavigation<AuthNavigationProp>();
   const route = useRoute<AuthRouteProp>();
   const { t, language } = useLanguage();
-  const { setSession } = useAuth();
+  const { isLoading, setSession } = useAuth();
   const isArabic = language === 'ar';
   const [mode, setMode] = useState<'signin' | 'signup'>(route.params?.mode ?? 'signin');
   const [showPassword, setShowPassword] = useState(false);
@@ -200,30 +201,13 @@ export function AuthScreen() {
 
             <Pressable
               onPress={handleSubmit}
-              disabled={isSubmitting}
-              style={[styles.submitButton, isSubmitting && styles.submitButtonDisabled]}
+              disabled={isSubmitting || isLoading}
+              style={[styles.submitButton, (isSubmitting || isLoading) && styles.submitButtonDisabled]}
             >
               <Text style={styles.submitButtonText}>
-                {isSubmitting ? 'Please wait...' : mode === 'signin' ? t('authSignIn') : t('authSignUp')}
+                {isSubmitting || isLoading ? 'Please wait...' : mode === 'signin' ? t('authSignIn') : t('authSignUp')}
               </Text>
             </Pressable>
-
-            <View style={styles.dividerRow}>
-              <View style={styles.divider} />
-              <Text style={styles.dividerText}>or</Text>
-              <View style={styles.divider} />
-            </View>
-
-            <View style={styles.socialRow}>
-              <Pressable style={styles.socialButton}>
-                <Ionicons name="logo-google" size={16} color="#2C2418" />
-                <Text style={styles.socialButtonText}>Google</Text>
-              </Pressable>
-              <Pressable style={styles.socialButton}>
-                <Ionicons name="logo-apple" size={16} color="#2C2418" />
-                <Text style={styles.socialButtonText}>Apple</Text>
-              </Pressable>
-            </View>
 
             <Pressable onPress={handleGuest} style={styles.guestButton}>
               <Text style={styles.guestButtonText}>{t('skip')}</Text>
@@ -410,41 +394,6 @@ const styles = StyleSheet.create({
     color: 'white',
     fontSize: 15,
     fontWeight: '800',
-  },
-  dividerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    marginVertical: 18,
-  },
-  divider: {
-    flex: 1,
-    height: 1,
-    backgroundColor: '#D1C3A4',
-  },
-  dividerText: {
-    color: '#8A7A6A',
-    fontSize: 12,
-  },
-  socialRow: {
-    flexDirection: 'row',
-    gap: 10,
-  },
-  socialButton: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    borderWidth: 1,
-    borderColor: 'rgba(99,14,19,0.12)',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    paddingVertical: 13,
-  },
-  socialButtonText: {
-    color: '#2C2418',
-    fontWeight: '700',
   },
   guestButton: {
     marginTop: 14,

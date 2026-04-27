@@ -1,24 +1,21 @@
+// Updated to support staged trail creation with start, optional middle waypoints, end, and loop routes.
 import React, { useMemo, useRef, useState } from 'react';
-import { View, Text, TextInput, Pressable, StyleSheet, ActivityIndicator, Platform, Alert } from 'react-native';
+import { View, Text, TextInput, Pressable, StyleSheet, ActivityIndicator, Alert } from 'react-native';
 import Mapbox from '@rnmapbox/maps';
 import type { Feature, FeatureCollection, LineString, Point } from 'geojson';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { createTrail, getTrailStats, type TrailStatsResponse } from '../api/trailsApi';
+import { setTrailRouteCoordinates } from '../state/trailRoutes';
 
 type LngLat = [number, number];
-
-type CalculateResponse = {
-  length_meters: number;
-  elevation_gain_meters: number;
-  estimated_duration_minutes: number;
-  difficulty: 'Easy' | 'Moderate' | 'Hard' | 'Expert' | string;
-};
+type DrawingStage = 'start' | 'middle' | 'end';
 
 type SaveTrailBody = {
   name: string;
   description: string;
   coordinates: LngLat[];
-  stats: CalculateResponse;
+  stats: TrailStatsResponse;
 };
 
 type DirectionsResponse = {
@@ -35,7 +32,6 @@ export type TrailCreatorProps = {
   styleURL?: string;
   initialCenter?: LngLat;
   initialZoom?: number;
-  apiBaseUrl?: string;
   onSaved?: (payload: SaveTrailBody & { id?: string }) => void;
 };
 
@@ -72,30 +68,34 @@ function toLineFeature(routeCoordinates: LngLat[]): FeatureCollection {
 }
 
 function toPointFeature(coordinate: LngLat | null): FeatureCollection {
-  const pointFeature: Feature<Point>[] = coordinate
-    ? [
-        {
-          type: 'Feature',
-          properties: {},
-          geometry: { type: 'Point', coordinates: coordinate },
-        },
-      ]
-    : [];
+  return toPointsFeatureCollection(coordinate ? [coordinate] : []);
+}
+
+function toPointsFeatureCollection(coordinates: LngLat[]): FeatureCollection {
+  const pointFeatures: Feature<Point>[] = coordinates.map((coordinate, index) => ({
+    type: 'Feature',
+    properties: { index },
+    geometry: { type: 'Point', coordinates: coordinate },
+  }));
 
   return {
     type: 'FeatureCollection',
-    features: pointFeature,
+    features: pointFeatures,
   };
 }
 
 function difficultyTone(difficulty: string) {
   switch (difficulty) {
+    case 'easy':
     case 'Easy':
       return { bg: 'rgba(122,154,58,0.16)', fg: '#5B7A2C', dot: '#7A9A3A' };
+    case 'moderate':
     case 'Moderate':
       return { bg: 'rgba(212,168,67,0.18)', fg: '#8E6A09', dot: '#D4A843' };
+    case 'hard':
     case 'Hard':
       return { bg: 'rgba(187,40,35,0.14)', fg: '#BB2823', dot: '#BB2823' };
+    case 'expert':
     case 'Expert':
       return { bg: 'rgba(99,14,19,0.14)', fg: '#630E13', dot: '#630E13' };
     default:
@@ -105,13 +105,13 @@ function difficultyTone(difficulty: string) {
 
 function estimateDifficulty(distanceMeters: number) {
   const distanceKm = distanceMeters / 1000;
-  if (distanceKm < 5) return 'Easy';
-  if (distanceKm < 10) return 'Moderate';
-  if (distanceKm < 16) return 'Hard';
-  return 'Expert';
+  if (distanceKm < 5) return 'easy';
+  if (distanceKm < 10) return 'moderate';
+  if (distanceKm < 16) return 'hard';
+  return 'expert';
 }
 
-function toFallbackStats(distanceMeters: number, durationSeconds: number): CalculateResponse {
+function toFallbackStats(distanceMeters: number, durationSeconds: number): TrailStatsResponse {
   return {
     length_meters: distanceMeters,
     elevation_gain_meters: 0,
@@ -120,8 +120,8 @@ function toFallbackStats(distanceMeters: number, durationSeconds: number): Calcu
   };
 }
 
-function buildDirectionsUrl(startCoordinate: LngLat, endCoordinate: LngLat) {
-  const coordinates = `${startCoordinate[0]},${startCoordinate[1]};${endCoordinate[0]},${endCoordinate[1]}`;
+function buildDirectionsUrl(waypoints: LngLat[]) {
+  const coordinates = waypoints.map(([lng, lat]) => `${lng},${lat}`).join(';');
   const params = new URLSearchParams({
     access_token: MAPBOX_ACCESS_TOKEN,
     geometries: 'geojson',
@@ -135,25 +135,21 @@ export function TrailCreator({
   styleURL,
   initialCenter = [35.24, 31.78],
   initialZoom = 7.8,
-  apiBaseUrl,
   onSaved,
 }: TrailCreatorProps) {
   const insets = useSafeAreaInsets();
   const cameraRef = useRef<Mapbox.Camera>(null);
 
-  const resolvedApiBaseUrl = useMemo(() => {
-    if (apiBaseUrl) return apiBaseUrl.replace(/\/$/, '');
-    if (Platform.OS === 'android') return 'http://10.0.2.2:3000';
-    return 'http://localhost:3000';
-  }, [apiBaseUrl]);
-
   const [isDrawing, setIsDrawing] = useState(false);
   const [isFinished, setIsFinished] = useState(false);
+  const [drawingStage, setDrawingStage] = useState<DrawingStage>('start');
+  const [isLoop, setIsLoop] = useState(false);
   const [startCoordinate, setStartCoordinate] = useState<LngLat | null>(null);
+  const [middleCoordinates, setMiddleCoordinates] = useState<LngLat[]>([]);
   const [endCoordinate, setEndCoordinate] = useState<LngLat | null>(null);
   const [routeCoordinates, setRouteCoordinates] = useState<LngLat[]>([]);
 
-  const [stats, setStats] = useState<CalculateResponse | null>(null);
+  const [stats, setStats] = useState<TrailStatsResponse | null>(null);
   const [isCalculating, setIsCalculating] = useState(false);
   const [calcError, setCalcError] = useState<string | null>(null);
 
@@ -165,9 +161,13 @@ export function TrailCreator({
 
   const routeGeojson = useMemo(() => toLineFeature(routeCoordinates), [routeCoordinates]);
   const startGeojson = useMemo(() => toPointFeature(startCoordinate), [startCoordinate]);
+  const middleGeojson = useMemo(() => toPointsFeatureCollection(middleCoordinates), [middleCoordinates]);
   const endGeojson = useMemo(() => toPointFeature(endCoordinate), [endCoordinate]);
 
-  const canUndo = isDrawing && Boolean(startCoordinate || endCoordinate);
+  const waypointCount = middleCoordinates.length + (startCoordinate ? 1 : 0) + (endCoordinate ? 1 : 0);
+  const canUndo = isDrawing && waypointCount > 0;
+  const canMarkEnd = isDrawing && Boolean(startCoordinate) && drawingStage === 'middle';
+  const canFinish = isDrawing && Boolean(startCoordinate && endCoordinate) && !isCalculating;
 
   const begin = () => {
     setSaveSuccess(null);
@@ -175,16 +175,22 @@ export function TrailCreator({
     setCalcError(null);
     setStats(null);
     setStartCoordinate(null);
+    setMiddleCoordinates([]);
     setEndCoordinate(null);
     setRouteCoordinates([]);
+    setIsLoop(false);
+    setDrawingStage('start');
     setIsDrawing(true);
     setIsFinished(false);
   };
 
   const clear = () => {
     setStartCoordinate(null);
+    setMiddleCoordinates([]);
     setEndCoordinate(null);
     setRouteCoordinates([]);
+    setIsLoop(false);
+    setDrawingStage('start');
     setIsDrawing(false);
     setIsFinished(false);
     setStats(null);
@@ -198,22 +204,44 @@ export function TrailCreator({
     setSaveError(null);
     setCalcError(null);
     setStats(null);
+    setRouteCoordinates([]);
+    setIsFinished(false);
 
     if (endCoordinate) {
       setEndCoordinate(null);
-      setRouteCoordinates([]);
-      setIsFinished(false);
+      setDrawingStage('end');
+      return;
+    }
+
+    if (middleCoordinates.length) {
+      setMiddleCoordinates((current) => current.slice(0, -1));
+      setDrawingStage('middle');
       return;
     }
 
     if (startCoordinate) {
       setStartCoordinate(null);
-      setRouteCoordinates([]);
-      setIsFinished(false);
+      setDrawingStage('start');
     }
   };
 
-  const fetchTrail = async (nextStart: LngLat, nextEnd: LngLat) => {
+  const buildManualWaypoints = () => {
+    if (!startCoordinate || !endCoordinate) {
+      return [];
+    }
+
+    const points = [startCoordinate, ...middleCoordinates, endCoordinate];
+    return isLoop ? [...points, startCoordinate] : points;
+  };
+
+  const fetchTrail = async () => {
+    const waypoints = buildManualWaypoints();
+
+    if (waypoints.length < 2) {
+      setCalcError('Choose a start and end point first.');
+      return;
+    }
+
     setSaveSuccess(null);
     setSaveError(null);
     setIsCalculating(true);
@@ -225,7 +253,7 @@ export function TrailCreator({
         throw new Error('Missing EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN.');
       }
 
-      const res = await fetch(buildDirectionsUrl(nextStart, nextEnd));
+      const res = await fetch(buildDirectionsUrl(waypoints));
       if (!res.ok) {
         const text = await res.text().catch(() => '');
         throw new Error(text || `Directions request failed (${res.status})`);
@@ -244,24 +272,13 @@ export function TrailCreator({
       setIsFinished(true);
 
       try {
-        const calculateRes = await fetch(`${resolvedApiBaseUrl}/api/trails/calculate`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ coordinates: geometryCoordinates }),
-        });
-
-        if (!calculateRes.ok) {
-          throw new Error('Backend trail stats unavailable.');
-        }
-
-        const calculateJson = (await calculateRes.json()) as CalculateResponse;
+        const calculateJson = await getTrailStats({ coordinates: geometryCoordinates });
         setStats(calculateJson);
       } catch {
         setStats(toFallbackStats(route.distance, route.duration));
       }
     } catch (e) {
       setRouteCoordinates([]);
-      setEndCoordinate(null);
       setIsFinished(false);
       setCalcError(e instanceof Error ? e.message : 'Failed to calculate stats.');
     } finally {
@@ -286,24 +303,58 @@ export function TrailCreator({
         coordinates: routeCoordinates,
         stats,
       };
-      const res = await fetch(`${resolvedApiBaseUrl}/api/trails`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      if (!res.ok) {
-        const text = await res.text().catch(() => '');
-        throw new Error(text || `Save failed (${res.status})`);
-      }
-      const json = (await res.json()) as { id?: string };
+      const json = await createTrail(payload);
+      setTrailRouteCoordinates(json.data.id, routeCoordinates);
       setSaveSuccess('Saved!');
-      onSaved?.({ ...payload, ...json });
+      onSaved?.({ ...payload, id: json.data.id });
     } catch (e) {
       setSaveError(e instanceof Error ? e.message : 'Failed to save trail.');
     } finally {
       setIsSaving(false);
     }
   };
+
+  const handleMapPress = (coord: LngLat | null) => {
+    if (!isDrawing || !coord || coord.length !== 2 || isCalculating) {
+      return;
+    }
+
+    setSaveSuccess(null);
+    setSaveError(null);
+    setCalcError(null);
+    setStats(null);
+    setRouteCoordinates([]);
+    setIsFinished(false);
+
+    if (drawingStage === 'start') {
+      setStartCoordinate(coord);
+      setMiddleCoordinates([]);
+      setEndCoordinate(null);
+      setDrawingStage('middle');
+      return;
+    }
+
+    if (drawingStage === 'middle') {
+      setMiddleCoordinates((current) => [...current, coord]);
+      return;
+    }
+
+    setEndCoordinate(coord);
+  };
+
+  const stageTitle =
+    drawingStage === 'start'
+      ? 'Tap a starting point'
+      : drawingStage === 'middle'
+      ? 'Add middle points or switch to the end point'
+      : 'Tap the ending point';
+
+  const stageSummary = [
+    startCoordinate ? 'Start set' : 'Choose a start',
+    middleCoordinates.length ? `${middleCoordinates.length} middle point${middleCoordinates.length === 1 ? '' : 's'}` : 'No middle points',
+    endCoordinate ? 'End set' : 'Choose an end',
+    isLoop ? 'Loop on' : 'Loop off',
+  ].join(' | ');
 
   return (
     <View style={styles.root}>
@@ -315,35 +366,8 @@ export function TrailCreator({
         logoEnabled={false}
         attributionEnabled={false}
         onPress={(e) => {
-          if (!isDrawing) return;
           const coord = (e.geometry?.coordinates ?? null) as unknown as LngLat | null;
-          if (!coord || coord.length !== 2 || isCalculating) return;
-
-          setSaveSuccess(null);
-          setSaveError(null);
-
-          if (!startCoordinate) {
-            setStartCoordinate(coord);
-            setEndCoordinate(null);
-            setRouteCoordinates([]);
-            setStats(null);
-            setCalcError(null);
-            setIsFinished(false);
-            return;
-          }
-
-          if (!endCoordinate) {
-            setEndCoordinate(coord);
-            void fetchTrail(startCoordinate, coord);
-            return;
-          }
-
-          setStartCoordinate(coord);
-          setEndCoordinate(null);
-          setRouteCoordinates([]);
-          setStats(null);
-          setCalcError(null);
-          setIsFinished(false);
+          handleMapPress(coord);
         }}
       >
         <Mapbox.Camera
@@ -381,6 +405,18 @@ export function TrailCreator({
           />
         </Mapbox.ShapeSource>
 
+        <Mapbox.ShapeSource id="trail-middle-source" shape={middleGeojson}>
+          <Mapbox.CircleLayer
+            id="trail-middle-points"
+            style={{
+              circleColor: '#FFFFFF',
+              circleStrokeColor: '#D4A843',
+              circleStrokeWidth: 2.5,
+              circleRadius: 5,
+            }}
+          />
+        </Mapbox.ShapeSource>
+
         <Mapbox.ShapeSource id="trail-end-source" shape={endGeojson}>
           <Mapbox.CircleLayer
             id="trail-end-point"
@@ -414,6 +450,28 @@ export function TrailCreator({
                 <Ionicons name="arrow-undo-outline" size={18} color={canUndo ? '#2C2418' : '#B0A090'} />
                 <Text style={[styles.iconText, !canUndo && styles.iconTextDisabled]}>Undo</Text>
               </Pressable>
+
+              <Pressable
+                style={[styles.iconButton, isLoop && styles.loopIconButton]}
+                onPress={() => setIsLoop((current) => !current)}
+              >
+                <Ionicons name="sync-outline" size={18} color={isLoop ? '#FFFFFF' : '#2C2418'} />
+                <Text style={[styles.iconText, isLoop && styles.loopText]}>Loop</Text>
+              </Pressable>
+
+              <Pressable
+                style={[styles.iconButton, !canMarkEnd && styles.iconButtonDisabled]}
+                onPress={() => {
+                  if (canMarkEnd) {
+                    setDrawingStage('end');
+                  }
+                }}
+                disabled={!canMarkEnd}
+              >
+                <Ionicons name="flag-outline" size={18} color={canMarkEnd ? '#2C2418' : '#B0A090'} />
+                <Text style={[styles.iconText, !canMarkEnd && styles.iconTextDisabled]}>Set end</Text>
+              </Pressable>
+
               <Pressable style={[styles.iconButton, styles.dangerIconButton]} onPress={clear}>
                 <Ionicons name="trash-outline" size={18} color="#BB2823" />
                 <Text style={[styles.iconText, styles.dangerText]}>Clear</Text>
@@ -435,17 +493,28 @@ export function TrailCreator({
           <View style={styles.bottomPanel}>
             <View style={styles.panelHeaderRow}>
               <View style={{ flex: 1 }}>
-                <Text style={styles.panelTitle}>
-                  {isDrawing ? 'Tap start and end points' : 'Trail details'}
-                </Text>
-                <Text style={styles.panelSubtitle}>
-                  {startCoordinate ? 'Start set' : 'Choose a start'} | {endCoordinate ? 'End set' : 'Choose an end'}
-                </Text>
+                <Text style={styles.panelTitle}>{isDrawing ? stageTitle : 'Trail details'}</Text>
+                <Text style={styles.panelSubtitle}>{stageSummary}</Text>
               </View>
               {isCalculating ? <ActivityIndicator /> : null}
             </View>
 
             {calcError ? <Text style={styles.errorText}>{calcError}</Text> : null}
+
+            {isDrawing ? (
+              <View style={styles.drawingActionsRow}>
+                <Pressable
+                  style={[styles.secondaryActionButton, !canFinish && styles.secondaryActionButtonDisabled]}
+                  disabled={!canFinish}
+                  onPress={() => void fetchTrail()}
+                >
+                  <Ionicons name="sparkles-outline" size={16} color={canFinish ? '#2C2418' : '#B0A090'} />
+                  <Text style={[styles.secondaryActionText, !canFinish && styles.iconTextDisabled]}>
+                    Build route
+                  </Text>
+                </Pressable>
+              </View>
+            ) : null}
 
             {stats ? (
               <View style={styles.statsGrid}>
@@ -477,7 +546,7 @@ export function TrailCreator({
                   <TextInput
                     value={name}
                     onChangeText={setName}
-                    placeholder="e.g. Wadi Qelt Loop"
+                    placeholder={isLoop ? 'e.g. Wadi Qelt Loop' : 'e.g. Wadi Qelt Traverse'}
                     placeholderTextColor="#9E8E80"
                     style={styles.input}
                   />
@@ -513,12 +582,12 @@ export function TrailCreator({
                 </Pressable>
 
                 <Text style={styles.hint}>
-                  Backend: {resolvedApiBaseUrl} | If you're on a real phone, replace localhost with your LAN IP.
+                  Trail creation uses the shared mobile API URL from `EXPO_PUBLIC_API_URL`.
                 </Text>
               </>
             ) : (
               <Text style={styles.hint}>
-                First tap drops the green start marker, second tap drops the coral end marker and draws the route automatically.
+                Tap once to place the start, add as many middle waypoints as you need, switch to end mode, then tap the ending point. Turn on loop to close the route back to the start.
               </Text>
             )}
           </View>
@@ -581,9 +650,17 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.94)',
     borderColor: 'rgba(187,40,35,0.22)',
   },
+  loopIconButton: {
+    backgroundColor: '#630E13',
+    borderColor: 'rgba(99,14,19,0.28)',
+  },
+  iconButtonDisabled: {
+    opacity: 0.65,
+  },
   iconText: { fontSize: 12, fontWeight: '800', color: '#2C2418' },
   iconTextDisabled: { color: '#B0A090' },
   primaryIconText: { fontSize: 12, fontWeight: '900', color: '#fff' },
+  loopText: { color: '#fff' },
   dangerText: { color: '#BB2823' },
 
   bottomPanelWrap: {
@@ -608,6 +685,26 @@ const styles = StyleSheet.create({
   panelHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10 },
   panelTitle: { fontSize: 14, fontWeight: '900', color: '#2C2418' },
   panelSubtitle: { marginTop: 3, fontSize: 11, color: '#8A7A6A', fontWeight: '700' },
+  drawingActionsRow: { marginBottom: 10 },
+  secondaryActionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 11,
+    borderRadius: 14,
+    backgroundColor: '#F7F3E7',
+    borderWidth: 1,
+    borderColor: 'rgba(44,36,24,0.08)',
+  },
+  secondaryActionButtonDisabled: {
+    opacity: 0.65,
+  },
+  secondaryActionText: {
+    color: '#2C2418',
+    fontWeight: '800',
+    fontSize: 13,
+  },
 
   statsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 8, marginBottom: 10 },
   statCard: {

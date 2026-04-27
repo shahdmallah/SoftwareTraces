@@ -1,20 +1,17 @@
+// Updated to request device location, load nearby trails from the backend, and render full trail previews with a neon green route line.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import {
-  View,
-  Text,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Dimensions,
-} from 'react-native';
+import { View, Text, Pressable, ScrollView, StyleSheet, Dimensions } from 'react-native';
 import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
+import * as Location from 'expo-location';
+import type { Feature, FeatureCollection, LineString } from 'geojson';
 import { AppTabParamList, RootStackParamList } from '../navigation/types';
-import { trails, type Trail } from '../data/trails';
+import { getNearbyTrails, getTrailById, type Trail } from '../api/trailsApi';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useLanguage } from '../contexts/LanguageContext';
 import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
+import { getTrailRouteCoordinates } from '../state/trailRoutes';
 import { ltrRow, ltrText, rtlRow, rtlText } from '../utils/direction';
 
 type MapScreenNavigationProp = StackNavigationProp<RootStackParamList, 'TrailDetail'>;
@@ -45,47 +42,189 @@ const difficultyColor: Record<string, string> = {
   Expert: '#630E13',
 };
 
-const mapCenter: [number, number] = [35.24, 31.78];
+const fallbackCenter: [number, number] = [35.24, 31.78];
 
 function toMapboxCoordinate(trail: Trail): [number, number] {
   return [trail.coordinates[1], trail.coordinates[0]];
+}
+
+function toLineFeature(coordinates: [number, number][] | null): FeatureCollection {
+  const features: Feature<LineString>[] =
+    coordinates && coordinates.length >= 2
+      ? [
+          {
+            type: 'Feature',
+            properties: {},
+            geometry: {
+              type: 'LineString',
+              coordinates,
+            },
+          },
+        ]
+      : [];
+
+  return {
+    type: 'FeatureCollection',
+    features,
+  };
 }
 
 export function MapScreen() {
   const navigation = useNavigation<MapScreenNavigationProp>();
   const route = useRoute<MapScreenRouteProp>();
   const cameraRef = useRef<any>(null);
-  const [selectedTrail, setSelectedTrail] = useState<Trail | null>(trails[0] ?? null);
+  const [selectedTrail, setSelectedTrail] = useState<Trail | null>(null);
+  const [nearbyTrails, setNearbyTrails] = useState<Trail[]>([]);
+  const [userLocation, setUserLocation] = useState<[number, number] | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [locationMessage, setLocationMessage] = useState<string | null>(null);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+  const [zoomLevel, setZoomLevel] = useState(7.6);
+  const [isThreeD, setIsThreeD] = useState(true);
   const insets = useSafeAreaInsets();
   const { t, language } = useLanguage();
   const isArabic = language === 'ar';
 
-  const trailCountLabel = useMemo(() => `${trails.length} trails`, []);
   const canRenderMapbox = Boolean(Mapbox && !mapboxLoadError);
+  const trailCountLabel = useMemo(() => `${nearbyTrails.length} trails`, [nearbyTrails.length]);
+  const selectedTrailRoute = useMemo(() => {
+    if (!selectedTrail) {
+      return null;
+    }
+
+    return selectedTrail.routeCoordinates ?? getTrailRouteCoordinates(selectedTrail.id);
+  }, [selectedTrail]);
+  const selectedTrailLine = useMemo(() => toLineFeature(selectedTrailRoute), [selectedTrailRoute]);
 
   useEffect(() => {
-    if (!canRenderMapbox || !selectedTrail) {
+    let cancelled = false;
+
+    const loadNearby = async () => {
+      setIsLoading(true);
+      setFetchError(null);
+      setLocationMessage(null);
+
+      try {
+        const permission = await Location.requestForegroundPermissionsAsync();
+
+        if (permission.status !== 'granted') {
+          throw new Error('Location permission is required to load nearby trails.');
+        }
+
+        const position = await Location.getCurrentPositionAsync({});
+        const coords: [number, number] = [position.coords.latitude, position.coords.longitude];
+        const trails = await getNearbyTrails({
+          lat: coords[0],
+          lng: coords[1],
+          radius: 20000,
+        });
+
+        if (!cancelled) {
+          setUserLocation(coords);
+          setNearbyTrails(trails);
+          setSelectedTrail(trails[0] ?? null);
+          
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setNearbyTrails([]);
+          setSelectedTrail(null);
+          setFetchError(error instanceof Error ? error.message : 'Unable to load nearby trails.');
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoading(false);
+        }
+      }
+    };
+
+    void loadNearby();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!canRenderMapbox) {
+      return;
+    }
+
+    const nextCenter = selectedTrail
+      ? toMapboxCoordinate(selectedTrail)
+      : userLocation
+        ? [userLocation[1], userLocation[0]]
+        : fallbackCenter;
+
+    cameraRef.current?.setCamera({
+      centerCoordinate: nextCenter,
+      zoomLevel: selectedTrail ? 8.8 : 7.6,
+      pitch: isThreeD ? 48 : 0,
+      animationDuration: 900,
+    });
+
+    setZoomLevel(selectedTrail ? 8.8 : 7.6);
+
+    if (selectedTrailRoute && selectedTrailRoute.length >= 2) {
+      const longitudes = selectedTrailRoute.map((point) => point[0]);
+      const latitudes = selectedTrailRoute.map((point) => point[1]);
+
+      cameraRef.current?.fitBounds(
+        [Math.max(...longitudes), Math.max(...latitudes)],
+        [Math.min(...longitudes), Math.min(...latitudes)],
+        80,
+        900,
+      );
+    }
+  }, [canRenderMapbox, isThreeD, selectedTrail, selectedTrailRoute, userLocation]);
+
+  useEffect(() => {
+    if (!canRenderMapbox) {
       return;
     }
 
     cameraRef.current?.setCamera({
-      centerCoordinate: toMapboxCoordinate(selectedTrail),
-      zoomLevel: 8.8,
-      animationDuration: 900,
+      zoomLevel,
+      pitch: isThreeD ? 48 : 0,
+      animationDuration: 250,
     });
-  }, [canRenderMapbox, selectedTrail]);
+  }, [canRenderMapbox, isThreeD, zoomLevel]);
 
   useEffect(() => {
     const selectedTrailId = route.params?.selectedTrailId;
+
     if (!selectedTrailId) {
       return;
     }
 
-    const matchingTrail = trails.find((trail) => trail.id === selectedTrailId);
-    if (matchingTrail) {
-      setSelectedTrail(matchingTrail);
+    const existingTrail = nearbyTrails.find((trail) => trail.id === selectedTrailId);
+
+    if (existingTrail) {
+      setSelectedTrail(existingTrail);
+      return;
     }
-  }, [route.params?.selectedTrailId]);
+
+    let cancelled = false;
+
+    const loadRequestedTrail = async () => {
+      try {
+        const trail = await getTrailById(selectedTrailId);
+
+        if (!cancelled) {
+          setSelectedTrail(trail);
+          setNearbyTrails((current) => (current.some((item) => item.id === trail.id) ? current : [trail, ...current]));
+        }
+      } catch {
+        // Keep the current map state if the linked trail cannot be fetched.
+      }
+    };
+
+    void loadRequestedTrail();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [nearbyTrails, route.params?.selectedTrailId]);
 
   const handleTrailPress = (trail: Trail) => {
     setSelectedTrail(trail);
@@ -95,6 +234,23 @@ export function MapScreen() {
     if (selectedTrail) {
       navigation.navigate('TrailDetail', { trailId: selectedTrail.id });
     }
+  };
+
+  const handleBack = () => {
+    if (navigation.canGoBack()) {
+      navigation.goBack();
+      return;
+    }
+
+    navigation.navigate('AppTabs', { screen: 'Explore' });
+  };
+
+  const handleZoomIn = () => {
+    setZoomLevel((current) => Math.min(current + 0.7, 18));
+  };
+
+  const handleZoomOut = () => {
+    setZoomLevel((current) => Math.max(current - 0.7, 3));
   };
 
   return (
@@ -113,14 +269,29 @@ export function MapScreen() {
           <Mapbox.Camera
             ref={cameraRef}
             defaultSettings={{
-              centerCoordinate: selectedTrail ? toMapboxCoordinate(selectedTrail) : mapCenter,
+              centerCoordinate: fallbackCenter,
               zoomLevel: 7.2,
               pitch: 20,
             }}
           />
-          <Mapbox.LocationPuck visible puckBearingEnabled puckBearing="heading" />
+          <Mapbox.LocationPuck visible={Boolean(userLocation)} puckBearingEnabled puckBearing="heading" />
 
-          {trails.map((trail) => {
+          {selectedTrailRoute && selectedTrailRoute.length >= 2 ? (
+            <Mapbox.ShapeSource id="selected-trail-route-source" shape={selectedTrailLine}>
+              <Mapbox.LineLayer
+                id="selected-trail-route-line"
+                style={{
+                  lineColor: '#39FF14',
+                  lineWidth: 5,
+                  lineOpacity: 0.9,
+                  lineJoin: 'round',
+                  lineCap: 'round',
+                }}
+              />
+            </Mapbox.ShapeSource>
+          ) : null}
+
+          {nearbyTrails.map((trail) => {
             const active = selectedTrail?.id === trail.id;
 
             return (
@@ -161,24 +332,27 @@ export function MapScreen() {
             <Text style={styles.fallbackCode}>
               {mapboxLoadError ?? 'Mapbox native code not available.'}
             </Text>
-            <Text style={styles.fallbackStepsTitle}>Next step</Text>
-            <Text style={styles.fallbackStep}>1. Close Expo Go or uninstall the old dev build.</Text>
-            <Text style={styles.fallbackStep}>2. Run `npx expo run:android` from `mobile`.</Text>
-            <Text style={styles.fallbackStep}>3. Start Metro with `npx expo start --dev-client`.</Text>
           </View>
         </View>
       )}
 
       <AnimatedBlock delay={60} style={[styles.topOverlay, { paddingTop: Math.max(insets.top + 8, 20) }]}>
-        <View style={[styles.heroCard, isArabic ? rtlRow : ltrRow]}>
-          <View>
-            <Text style={[styles.heroEyebrow, isArabic ? rtlText : ltrText]}>Palestine Trails</Text>
-            <Text style={[styles.heroTitle, isArabic ? rtlText : ltrText]}>Trail Map</Text>
-          </View>
-          <View style={styles.heroBadge}>
+        <View style={[styles.headerControls, isArabic ? rtlRow : ltrRow]}>
+          <Pressable style={styles.floatingControlButton} onPress={handleBack}>
+            <Ionicons name={isArabic ? 'arrow-forward' : 'arrow-back'} size={22} color="#2C2418" />
+          </Pressable>
+
+          <View style={[styles.headerStatusPill, isArabic ? rtlRow : ltrRow]}>
             <Ionicons name="map-outline" size={14} color="#EAE2CC" />
             <Text style={styles.heroBadgeText}>{trailCountLabel}</Text>
           </View>
+
+          <Pressable
+            style={[styles.floatingControlButton, isThreeD && styles.floatingControlButtonActive]}
+            onPress={() => setIsThreeD((current) => !current)}
+          >
+            <Text style={[styles.floatingControlLabel, isThreeD && styles.floatingControlLabelActive]}>3D</Text>
+          </Pressable>
         </View>
 
         {!MAPBOX_ACCESS_TOKEN ? (
@@ -189,97 +363,133 @@ export function MapScreen() {
             </Text>
           </View>
         ) : null}
+
+        {locationMessage ? (
+          <View style={styles.infoBanner}>
+            <Text style={[styles.infoBannerText, isArabic ? rtlText : ltrText]}>{locationMessage}</Text>
+          </View>
+        ) : null}
+      </AnimatedBlock>
+
+      <AnimatedBlock
+        delay={100}
+        style={[styles.zoomControls, { top: Math.max(insets.top + 96, 118) }]}
+      >
+        <Pressable style={styles.zoomButton} onPress={handleZoomIn}>
+          <Ionicons name="add" size={22} color="#2C2418" />
+        </Pressable>
+        <View style={styles.zoomDivider} />
+        <Pressable style={styles.zoomButton} onPress={handleZoomOut}>
+          <Ionicons name="remove" size={22} color="#2C2418" />
+        </Pressable>
       </AnimatedBlock>
 
       <AnimatedBlock delay={140} style={[styles.bottomOverlay, { paddingBottom: Math.max(insets.bottom + 14, 24) }]}>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.trailStrip}
-        >
-          {trails.map((trail) => {
-            const active = selectedTrail?.id === trail.id;
-            return (
-              <Pressable
-                key={trail.id}
-                style={[styles.trailChip, active && styles.trailChipActive]}
-                onPress={() => handleTrailPress(trail)}
-              >
-                <View
-                  style={[
-                    styles.trailChipDot,
-                    { backgroundColor: difficultyColor[trail.difficulty] || '#7A9A3A' },
-                  ]}
-                />
-                <View>
-                  <Text style={[styles.trailChipName, isArabic ? rtlText : ltrText, active && styles.trailChipNameActive]}>
-                    {isArabic ? trail.nameAr : trail.name}
-                  </Text>
-                  <Text style={[styles.trailChipMeta, active && styles.trailChipMetaActive]}>
-                    {trail.distance} km
-                  </Text>
-                </View>
-              </Pressable>
-            );
-          })}
-        </ScrollView>
-
-        {selectedTrail ? (
-          <View style={styles.trailCard}>
-            <View style={[styles.trailCardHeader, isArabic ? rtlRow : ltrRow]}>
-              <View>
-                <Text style={[styles.trailName, isArabic ? rtlText : ltrText]}>{isArabic ? selectedTrail.nameAr : selectedTrail.name}</Text>
-                <Text style={[styles.trailRegion, isArabic ? rtlText : ltrText]}>{isArabic ? selectedTrail.regionAr : selectedTrail.region}</Text>
-              </View>
-              <View
-                style={[
-                  styles.difficultyPill,
-                  { backgroundColor: `${difficultyColor[selectedTrail.difficulty] || '#7A9A3A'}22` },
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.difficultyPillText,
-                    { color: difficultyColor[selectedTrail.difficulty] || '#7A9A3A' },
-                  ]}
-                >
-                  {selectedTrail.difficulty}
-                </Text>
-              </View>
-            </View>
-
-            <View style={styles.statsRow}>
-              <View style={styles.statPill}>
-                <Ionicons name="resize-outline" size={14} color="#D4A843" />
-                <Text style={styles.statPillText}>{selectedTrail.distance} km</Text>
-              </View>
-              <View style={styles.statPill}>
-                <Ionicons name="time-outline" size={14} color="#7DB3CC" />
-                <Text style={styles.statPillText}>{selectedTrail.duration}</Text>
-              </View>
-              <View style={styles.statPill}>
-                <Ionicons name="trending-up-outline" size={14} color="#BB2823" />
-                <Text style={styles.statPillText}>{selectedTrail.elevationGain} m</Text>
-              </View>
-            </View>
-
-            <Text numberOfLines={2} style={[styles.trailDescription, isArabic ? rtlText : ltrText]}>
-              {isArabic ? selectedTrail.descriptionAr : selectedTrail.description}
-            </Text>
-
-            <View style={[styles.cardActions, isArabic ? rtlRow : ltrRow]}>
-              <Pressable style={styles.secondaryButton} onPress={() => handleTrailPress(selectedTrail)}>
-                <Ionicons name="locate-outline" size={16} color="#2C2418" />
-                <Text style={styles.secondaryButtonText}>Center</Text>
-              </Pressable>
-              <Pressable style={styles.detailButton} onPress={handleTrailDetail}>
-                <Ionicons name="information-circle-outline" size={16} color="#fff" />
-                <Text style={styles.detailButtonText}>{t('viewDetails')}</Text>
-              </Pressable>
-            </View>
+        {isLoading ? (
+          <View style={styles.stateCard}>
+            <Text style={styles.stateTitle}>Finding trails near you...</Text>
           </View>
-        ) : null}
+        ) : fetchError ? (
+          <View style={styles.stateCard}>
+            <Text style={styles.stateTitle}>{fetchError}</Text>
+            <Text style={styles.stateText}>Reopen this tab after granting location permission.</Text>
+          </View>
+        ) : nearbyTrails.length === 0 ? (
+          <View style={styles.stateCard}>
+            <Text style={styles.stateTitle}>No nearby trails found.</Text>
+            <Text style={styles.stateText}>Try moving to a different area and loading the map again.</Text>
+          </View>
+        ) : (
+          <>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.trailStrip}
+            >
+              {nearbyTrails.map((trail) => {
+                const active = selectedTrail?.id === trail.id;
+                return (
+                  <Pressable
+                    key={trail.id}
+                    style={[styles.trailChip, active && styles.trailChipActive]}
+                    onPress={() => handleTrailPress(trail)}
+                  >
+                    <View
+                      style={[
+                        styles.trailChipDot,
+                        { backgroundColor: difficultyColor[trail.difficulty] || '#7A9A3A' },
+                      ]}
+                    />
+                    <View>
+                      <Text style={[styles.trailChipName, isArabic ? rtlText : ltrText, active && styles.trailChipNameActive]}>
+                        {isArabic ? trail.nameAr : trail.name}
+                      </Text>
+                      <Text style={[styles.trailChipMeta, active && styles.trailChipMetaActive]}>
+                        {trail.distance.toFixed(1)} km
+                      </Text>
+                    </View>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
 
+            {selectedTrail ? (
+              <View style={styles.trailCard}>
+                <View style={[styles.trailCardHeader, isArabic ? rtlRow : ltrRow]}>
+                  <View>
+                    <Text style={[styles.trailName, isArabic ? rtlText : ltrText]}>{isArabic ? selectedTrail.nameAr : selectedTrail.name}</Text>
+                    <Text style={[styles.trailRegion, isArabic ? rtlText : ltrText]}>{isArabic ? selectedTrail.regionAr : selectedTrail.region}</Text>
+                  </View>
+                  <View
+                    style={[
+                      styles.difficultyPill,
+                      { backgroundColor: `${difficultyColor[selectedTrail.difficulty] || '#7A9A3A'}22` },
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.difficultyPillText,
+                        { color: difficultyColor[selectedTrail.difficulty] || '#7A9A3A' },
+                      ]}
+                    >
+                      {selectedTrail.difficulty}
+                    </Text>
+                  </View>
+                </View>
+
+                <View style={styles.statsRow}>
+                  <View style={styles.statPill}>
+                    <Ionicons name="resize-outline" size={14} color="#D4A843" />
+                    <Text style={styles.statPillText}>{selectedTrail.distance.toFixed(1)} km</Text>
+                  </View>
+                  <View style={styles.statPill}>
+                    <Ionicons name="time-outline" size={14} color="#7DB3CC" />
+                    <Text style={styles.statPillText}>{selectedTrail.duration}</Text>
+                  </View>
+                  <View style={styles.statPill}>
+                    <Ionicons name="trending-up-outline" size={14} color="#BB2823" />
+                    <Text style={styles.statPillText}>{selectedTrail.elevationGain} m</Text>
+                  </View>
+                </View>
+
+                <Text numberOfLines={2} style={[styles.trailDescription, isArabic ? rtlText : ltrText]}>
+                  {isArabic ? selectedTrail.descriptionAr : selectedTrail.description}
+                </Text>
+
+                <View style={[styles.cardActions, isArabic ? rtlRow : ltrRow]}>
+                  <Pressable style={styles.secondaryButton} onPress={() => handleTrailPress(selectedTrail)}>
+                    <Ionicons name="locate-outline" size={16} color="#2C2418" />
+                    <Text style={styles.secondaryButtonText}>Center</Text>
+                  </Pressable>
+                  <Pressable style={styles.detailButton} onPress={handleTrailDetail}>
+                    <Ionicons name="information-circle-outline" size={16} color="#fff" />
+                    <Text style={styles.detailButtonText}>{t('viewDetails')}</Text>
+                  </Pressable>
+                </View>
+              </View>
+            ) : null}
+          </>
+        )}
       </AnimatedBlock>
     </AnimatedScreen>
   );
@@ -338,18 +548,6 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     backgroundColor: 'rgba(255,255,255,0.05)',
   },
-  fallbackStepsTitle: {
-    color: '#EAE2CC',
-    fontSize: 14,
-    fontWeight: '800',
-    marginTop: 14,
-  },
-  fallbackStep: {
-    color: 'rgba(255,255,255,0.8)',
-    fontSize: 13,
-    lineHeight: 20,
-    marginTop: 6,
-  },
   topOverlay: {
     position: 'absolute',
     top: 0,
@@ -358,37 +556,45 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     gap: 10,
   },
-  heroCard: {
+  headerControls: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    borderRadius: 22,
-    backgroundColor: 'rgba(18,4,8,0.78)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
   },
-  heroEyebrow: {
-    color: 'rgba(234,226,204,0.72)',
-    fontSize: 11,
-    textTransform: 'uppercase',
-    letterSpacing: 1.2,
+  floatingControlButton: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: 'rgba(234,226,204,0.95)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOpacity: 0.14,
+    shadowOffset: { width: 0, height: 8 },
+    shadowRadius: 16,
+    elevation: 8,
   },
-  heroTitle: {
-    color: '#FFFFFF',
-    fontSize: 24,
+  floatingControlButtonActive: {
+    backgroundColor: '#630E13',
+  },
+  floatingControlLabel: {
+    color: '#2C2418',
+    fontSize: 15,
     fontWeight: '800',
-    marginTop: 2,
   },
-  heroBadge: {
+  floatingControlLabelActive: {
+    color: '#FFFFFF',
+  },
+  headerStatusPill: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
     borderRadius: 999,
-    backgroundColor: 'rgba(234,226,204,0.12)',
+    backgroundColor: 'rgba(18,4,8,0.78)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
   },
   heroBadgeText: {
     color: '#EAE2CC',
@@ -412,6 +618,17 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 18,
   },
+  infoBanner: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 16,
+    backgroundColor: 'rgba(234,226,204,0.9)',
+  },
+  infoBannerText: {
+    color: '#2C2418',
+    fontSize: 12,
+    fontWeight: '700',
+  },
   markerOuter: {
     width: 22,
     height: 22,
@@ -434,6 +651,28 @@ const styles = StyleSheet.create({
     height: 8,
     borderRadius: 4,
   },
+  zoomControls: {
+    position: 'absolute',
+    right: 16,
+    borderRadius: 22,
+    overflow: 'hidden',
+    backgroundColor: 'rgba(234,226,204,0.95)',
+    shadowColor: '#000',
+    shadowOpacity: 0.16,
+    shadowOffset: { width: 0, height: 8 },
+    shadowRadius: 16,
+    elevation: 8,
+  },
+  zoomButton: {
+    width: 52,
+    height: 52,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  zoomDivider: {
+    height: 1,
+    backgroundColor: 'rgba(44,36,24,0.12)',
+  },
   bottomOverlay: {
     position: 'absolute',
     left: 0,
@@ -441,6 +680,22 @@ const styles = StyleSheet.create({
     bottom: 0,
     paddingHorizontal: 16,
     gap: 12,
+  },
+  stateCard: {
+    borderRadius: 24,
+    padding: 18,
+    backgroundColor: 'rgba(234,226,204,0.96)',
+  },
+  stateTitle: {
+    color: '#2C2418',
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  stateText: {
+    color: '#6B5D4E',
+    fontSize: 13,
+    lineHeight: 20,
+    marginTop: 8,
   },
   trailStrip: {
     paddingRight: 16,

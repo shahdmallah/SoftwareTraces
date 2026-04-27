@@ -222,7 +222,7 @@ const { width } = Dimensions.get('window');
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#EAE2CC',
+    backgroundColor: '#F7F7F7',
   },
   header: {
     paddingHorizontal: 16,
@@ -270,7 +270,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     paddingHorizontal: 16,
     paddingBottom: 12,
-    backgroundColor: '#EAE2CC',
+    backgroundColor: '#F7F7F7',
   },
   tabButton: {
     flex: 1,

@@ -9,3 +9,7 @@ coverage
 apps/mobile/.expo
 apps/mobile/.env
 apps/api/.env
+apps/mobile/.cxx/
+apps/mobile/.gradle-user-home/
+apps/mobile/android/
+apps/mobile/ios/

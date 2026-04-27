@@ -1,66 +1,74 @@
-import React, { useState } from 'react';
-import { View, Text, ScrollView, Pressable, StyleSheet, Image } from 'react-native';
+import React, { useMemo, useState } from 'react';
+import { Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useLanguage } from '../contexts/LanguageContext';
-import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
 import { useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
+import { LinearGradient } from 'expo-linear-gradient';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
+import { feedItems, type FeedItem } from '../data/activitySocial';
+import { useLanguage } from '../contexts/LanguageContext';
 import { RootStackParamList } from '../navigation/types';
 import { ltrRow, ltrText, rtlRow, rtlText } from '../utils/direction';
 
-const journalEntries = [
-  { id: 'j1', title: 'Sunset Trail Notes', date: 'Apr 5, 2026', snippet: 'Captured the soft golden light over Wadi Qelt, and noted the quiet flow of the spring...' },
-  { id: 'j2', title: 'Hike Reflection', date: 'Mar 28, 2026', snippet: 'The terraces at Battir felt like stepping into history. I want to return at olive harvest time.' },
-];
+type ActivityNavigationProp = StackNavigationProp<RootStackParamList>;
+type FeedTab = 'all' | 'recaps' | 'plans';
 
-const communityUpdates = [
-  { id: 'c1', user: 'Leila', message: 'Just finished the Ramallah Ridge trail - stunning views and peaceful paths!', time: '2h ago' },
-  { id: 'c2', user: 'Sami', message: 'Does anyone have tips for packing water for a Dead Sea Shore walk?', time: '5h ago' },
-];
-
-const pastHikes = [
-  {
-    id: 'h1',
-    trailId: '1',
-    name: 'Wadi Qelt Trail',
-    date: 'Apr 5, 2026',
-    distance: 14.2,
-    duration: '5h 24m',
-    elevationGain: 610,
-    image: 'https://images.unsplash.com/photo-1679940640486-967ee217bf8c?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&w=400',
-  },
-  {
-    id: 'h2',
-    trailId: '3',
-    name: 'Battir Terraces',
-    date: 'Mar 28, 2026',
-    distance: 9.8,
-    duration: '3h 52m',
-    elevationGain: 318,
-    image: 'https://images.unsplash.com/photo-1722228097356-bd0202d99367?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&w=400',
-  },
-  {
-    id: 'h3',
-    trailId: '6',
-    name: 'Ramallah Ridge',
-    date: 'Mar 25, 2026',
-    distance: 6.5,
-    duration: '2h 18m',
-    elevationGain: 185,
-    image: 'https://images.unsplash.com/photo-1726091983472-a7da2540c492?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&w=400',
-  },
-];
-
-type ActivityTab = 'history' | 'journal' | 'community';
-type ActivityNavigationProp = StackNavigationProp<RootStackParamList, 'TrailDetail'>;
+const tabLabels: Record<FeedTab, { en: string; ar: string; icon: keyof typeof Ionicons.glyphMap }> = {
+  all: { en: 'For you', ar: 'لك', icon: 'sparkles-outline' },
+  recaps: { en: 'Trail posts', ar: 'منشورات المسارات', icon: 'images-outline' },
+  plans: { en: 'Future plans', ar: 'خطط قادمة', icon: 'calendar-outline' },
+};
 
 export function ActivityScreen() {
   const navigation = useNavigation<ActivityNavigationProp>();
   const insets = useSafeAreaInsets();
   const { t, language } = useLanguage();
   const isArabic = language === 'ar';
-  const [activeTab, setActiveTab] = useState<ActivityTab>('history');
+  const [activeTab, setActiveTab] = useState<FeedTab>('all');
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+
+  const normalizedQuery = searchQuery.trim().toLowerCase();
+
+  const filteredFeed = useMemo(() => {
+    let items: FeedItem[] = feedItems;
+
+    if (activeTab === 'recaps') {
+      items = feedItems.filter((item) => item.kind === 'recap');
+    } else if (activeTab === 'plans') {
+      items = feedItems.filter((item) => item.kind === 'plan');
+    }
+
+    if (!normalizedQuery) return items;
+
+    return items.filter((item) => {
+      if (item.kind === 'recap') {
+        return [
+          item.user,
+          item.handle,
+          item.trailNameEn,
+          item.trailNameAr,
+          item.regionEn,
+          item.regionAr,
+          item.captionEn,
+          item.captionAr,
+        ].some((value) => value.toLowerCase().includes(normalizedQuery));
+      }
+
+      return [
+        item.user,
+        item.handle,
+        item.destinationEn,
+        item.destinationAr,
+        item.vibeEn,
+        item.vibeAr,
+        item.noteEn,
+        item.noteAr,
+      ].some((value) => value.toLowerCase().includes(normalizedQuery));
+    });
+  }, [activeTab, normalizedQuery]);
 
   return (
     <AnimatedScreen style={styles.container}>
@@ -68,115 +76,178 @@ export function ActivityScreen() {
         style={styles.container}
         contentContainerStyle={[
           styles.content,
-          { paddingTop: Math.max(12, insets.top + 8), paddingBottom: Math.max(24, insets.bottom + 16) },
+          { paddingTop: Math.max(12, insets.top + 8), paddingBottom: Math.max(28, insets.bottom + 22) },
         ]}
         showsVerticalScrollIndicator={false}
       >
         <AnimatedBlock delay={40}>
-          <Text style={[styles.pageTitle, isArabic ? rtlText : ltrText]}>{t('tabActivity')}</Text>
-          <Text style={[styles.pageSubtitle, isArabic ? rtlText : ltrText]}>{t('activitySubtitle')}</Text>
+          <View style={[styles.header, isArabic ? rtlRow : ltrRow]}>
+            <View style={styles.headerCopy}>
+              <Text style={[styles.pageTitle, isArabic ? rtlText : ltrText]}>{t('tabActivity')}</Text>
+            </View>
+
+            <View style={[styles.headerActions, isArabic && styles.headerActionsRtl]}>
+              <Pressable style={styles.iconButton} onPress={() => navigation.navigate('ActivityShare')}>
+                <Ionicons name="add-circle-outline" size={20} color="#2C2418" />
+              </Pressable>
+              <Pressable style={styles.iconButton} onPress={() => navigation.navigate('ActivityMessages')}>
+                <Ionicons name="chatbubble-ellipses-outline" size={20} color="#2C2418" />
+              </Pressable>
+              <Pressable style={styles.iconButton} onPress={() => setSearchOpen((value) => !value)}>
+                <Ionicons name={searchOpen ? 'close-outline' : 'search-outline'} size={20} color="#2C2418" />
+              </Pressable>
+            </View>
+          </View>
         </AnimatedBlock>
 
-        <AnimatedBlock delay={80}>
-          <View style={[styles.tabRow, isArabic ? rtlRow : ltrRow]}>
-            {[
-              { id: 'history' as const, label: t('activityHistory'), icon: 'time-outline' },
-              { id: 'journal' as const, label: t('activityJournal'), icon: 'book-outline' },
-              { id: 'community' as const, label: t('activityCommunity'), icon: 'people-outline' },
-            ].map((tab) => {
-              const active = activeTab === tab.id;
+        {searchOpen ? (
+          <AnimatedBlock delay={80}>
+            <View style={styles.searchCard}>
+              <View style={[styles.searchRow, isArabic ? rtlRow : ltrRow]}>
+                <Ionicons name="search-outline" size={18} color="#8A7A6A" />
+                <TextInput
+                  value={searchQuery}
+                  onChangeText={setSearchQuery}
+                  placeholder={isArabic ? 'ابحث عن أصدقاء أو نشاطات أو خطط' : 'Search friends, activities, or plans'}
+                  placeholderTextColor="#A18F7A"
+                  style={[styles.searchInput, isArabic ? rtlText : ltrText]}
+                />
+                {searchQuery ? (
+                  <Pressable onPress={() => setSearchQuery('')}>
+                    <Ionicons name="close-circle" size={18} color="#A18F7A" />
+                  </Pressable>
+                ) : null}
+              </View>
+            </View>
+          </AnimatedBlock>
+        ) : null}
+
+        <AnimatedBlock delay={120}>
+          <View style={[styles.tabRow, isArabic && styles.tabRowRtl]}>
+            {(Object.keys(tabLabels) as FeedTab[]).map((tab) => {
+              const active = activeTab === tab;
               return (
-                <Pressable
-                  key={tab.id}
-                  style={[styles.tabButton, active && styles.tabButtonActive]}
-                  onPress={() => setActiveTab(tab.id)}
-                >
-                  <Ionicons name={tab.icon as any} size={15} color={active ? '#fff' : '#6B5D4E'} />
-                  <Text style={[styles.tabText, active && styles.tabTextActive]}>{tab.label}</Text>
+                <Pressable key={tab} style={[styles.tabButton, active && styles.tabButtonActive]} onPress={() => setActiveTab(tab)}>
+                  <Ionicons name={tabLabels[tab].icon} size={15} color={active ? '#fff' : '#6B5D4E'} />
+                  <Text style={[styles.tabText, active && styles.tabTextActive]}>{isArabic ? tabLabels[tab].ar : tabLabels[tab].en}</Text>
                 </Pressable>
               );
             })}
           </View>
         </AnimatedBlock>
 
-        {activeTab === 'history' ? (
-          <>
-            <AnimatedBlock delay={120}>
-              <View style={[styles.summaryRow, isArabic ? rtlRow : ltrRow]}>
-                <View style={styles.summaryCard}>
-                  <Text style={styles.summaryValue}>30.5 km</Text>
-                  <Text style={[styles.summaryLabel, isArabic ? rtlText : ltrText]}>{t('historyTotalDistance')}</Text>
+        {filteredFeed.map((item, index) => (
+          <AnimatedBlock key={item.id} delay={150 + index * 45}>
+            {item.kind === 'recap' ? (
+              <View style={styles.postCard}>
+                <View style={[styles.postHeader, isArabic ? rtlRow : ltrRow]}>
+                  <View style={[styles.postUserRow, isArabic ? rtlRow : ltrRow]}>
+                    <Image source={{ uri: item.avatar }} style={styles.postAvatar} />
+                    <View style={styles.postUserCopy}>
+                      <Text style={[styles.postUserName, isArabic ? rtlText : ltrText]}>{item.user}</Text>
+                      <Text style={[styles.postHandle, isArabic ? rtlText : ltrText]}>
+                        {item.handle} · {isArabic ? item.timeAr : item.timeEn}
+                      </Text>
+                    </View>
+                  </View>
+                  <Pressable onPress={() => navigation.navigate('TrailDetail', { trailId: item.trailId })}>
+                    <Ionicons name="ellipsis-horizontal" size={18} color="#7B6D5A" />
+                  </Pressable>
                 </View>
-                <View style={styles.summaryCard}>
-                  <Text style={styles.summaryValue}>3</Text>
-                  <Text style={[styles.summaryLabel, isArabic ? rtlText : ltrText]}>{t('historyTripsCount')}</Text>
+
+                <Pressable style={styles.postMediaWrap} onPress={() => navigation.navigate('TrailDetail', { trailId: item.trailId })}>
+                  <Image source={{ uri: item.image }} style={styles.postMedia} />
+                  <LinearGradient colors={['transparent', 'rgba(0,0,0,0.55)']} style={styles.postMediaOverlay}>
+                    <View style={styles.postMediaMeta}>
+                      <View style={styles.mediaTag}>
+                        <Ionicons name="location-outline" size={13} color="#fff" />
+                        <Text style={styles.mediaTagText}>{isArabic ? item.trailNameAr : item.trailNameEn}</Text>
+                      </View>
+                      <View style={styles.mediaTag}>
+                        <Ionicons name="footsteps-outline" size={13} color="#fff" />
+                        <Text style={styles.mediaTagText}>{item.distance}</Text>
+                      </View>
+                    </View>
+                  </LinearGradient>
+                </Pressable>
+
+                <View style={[styles.postActions, isArabic && styles.postActionsRtl]}>
+                  <View style={[styles.actionCluster, isArabic && styles.actionClusterRtl]}>
+                    <Ionicons name="heart" size={20} color="#C5333A" />
+                    <Ionicons name="chatbubble-outline" size={19} color="#2C2418" />
+                    <Ionicons name="paper-plane-outline" size={19} color="#2C2418" />
+                  </View>
+                  <Ionicons name="bookmark-outline" size={19} color="#2C2418" />
                 </View>
-                <View style={styles.summaryCard}>
-                  <Text style={styles.summaryValue}>11h 34m</Text>
-                  <Text style={[styles.summaryLabel, isArabic ? rtlText : ltrText]}>{t('historyTotalTime')}</Text>
+
+                <View style={styles.postBody}>
+                  <Text style={[styles.likeCount, isArabic ? rtlText : ltrText]}>
+                    {isArabic ? `${item.likes} إعجاب` : `${item.likes} likes`}
+                  </Text>
+                  <Text style={[styles.caption, isArabic ? rtlText : ltrText]}>
+                    <Text style={styles.captionUser}>{item.user} </Text>
+                    {isArabic ? item.captionAr : item.captionEn}
+                  </Text>
+                  <Text style={[styles.commentHint, isArabic ? rtlText : ltrText]}>
+                    {isArabic ? `عرض ${item.comments} تعليقاً` : `View all ${item.comments} comments`}
+                  </Text>
+                  <Text style={[styles.locationLine, isArabic ? rtlText : ltrText]}>
+                    {isArabic ? item.regionAr : item.regionEn}
+                  </Text>
                 </View>
               </View>
-            </AnimatedBlock>
+            ) : (
+              <Pressable style={styles.planCard} onPress={() => navigation.navigate('TrailDetail', { trailId: item.trailId })}>
+                <Image source={{ uri: item.cover }} style={styles.planImage} />
+                <LinearGradient colors={['rgba(15,10,7,0.08)', 'rgba(15,10,7,0.72)']} style={styles.planOverlay}>
+                  <View style={[styles.planTopRow, isArabic ? rtlRow : ltrRow]}>
+                    <View style={[styles.postUserRow, isArabic ? rtlRow : ltrRow]}>
+                      <Image source={{ uri: item.avatar }} style={styles.postAvatar} />
+                      <View style={styles.postUserCopy}>
+                        <Text style={[styles.planUserName, isArabic ? rtlText : ltrText]}>{item.user}</Text>
+                        <Text style={[styles.planHandle, isArabic ? rtlText : ltrText]}>{item.handle}</Text>
+                      </View>
+                    </View>
+                    <View style={styles.planBadge}>
+                      <Ionicons name="calendar" size={13} color="#fff" />
+                      <Text style={styles.planBadgeText}>{isArabic ? 'خطة' : 'Plan'}</Text>
+                    </View>
+                  </View>
 
-            {pastHikes.map((hike, index) => (
-              <AnimatedBlock key={hike.id} delay={160 + index * 40}>
-                <Pressable
-                  style={[styles.historyCard, isArabic ? rtlRow : ltrRow]}
-                  onPress={() => navigation.navigate('TrailDetail', { trailId: hike.trailId })}
-                >
-                  <Image source={{ uri: hike.image }} style={styles.historyImage} />
-                  <View style={styles.historyContent}>
-                    <Text style={[styles.historyDate, isArabic ? rtlText : ltrText]}>{hike.date}</Text>
-                    <Text style={[styles.historyTitle, isArabic ? rtlText : ltrText]}>{hike.name}</Text>
-                    <Text style={[styles.historyMeta, isArabic ? rtlText : ltrText]}>
-                      {hike.distance} km | {hike.duration} | +{hike.elevationGain} m
+                  <View style={styles.planBody}>
+                    <Text style={[styles.planTitle, isArabic ? rtlText : ltrText]}>
+                      {isArabic ? item.destinationAr : item.destinationEn}
                     </Text>
-                  </View>
-                  <Ionicons name={isArabic ? 'chevron-back' : 'chevron-forward'} size={18} color="#8A7A6A" />
-                </Pressable>
-              </AnimatedBlock>
-            ))}
-          </>
-        ) : null}
+                    <Text style={[styles.planDate, isArabic ? rtlText : ltrText]}>
+                      {isArabic ? item.dateAr : item.dateEn}
+                    </Text>
+                    <Text style={[styles.planVibe, isArabic ? rtlText : ltrText]}>
+                      {isArabic ? item.vibeAr : item.vibeEn}
+                    </Text>
+                    <Text style={[styles.planNote, isArabic ? rtlText : ltrText]}>
+                      {isArabic ? item.noteAr : item.noteEn}
+                    </Text>
 
-        {activeTab === 'journal' ? (
-          <>
-            {journalEntries.map((entry, index) => (
-              <AnimatedBlock key={entry.id} delay={120 + index * 40}>
-                <Pressable style={styles.card}>
-                  <View style={[styles.cardHeader, isArabic ? rtlRow : ltrRow]}>
-                    <Ionicons name="book-outline" size={18} color="#630E13" />
-                    <Text style={[styles.cardTitle, isArabic ? rtlText : ltrText]}>{entry.title}</Text>
+                    <View style={[styles.planFooter, isArabic ? rtlRow : ltrRow]}>
+                      <View style={styles.planMetaPill}>
+                        <Ionicons name="people-outline" size={14} color="#fff" />
+                        <Text style={styles.planMetaText}>
+                          {isArabic ? `${item.peopleJoined} منضمون` : `${item.peopleJoined} joined`}
+                        </Text>
+                      </View>
+                      <View style={styles.planMetaPill}>
+                        <Ionicons name="sparkles-outline" size={14} color="#fff" />
+                        <Text style={styles.planMetaText}>
+                          {isArabic ? `${item.spotsLeft} أماكن متبقية` : `${item.spotsLeft} spots left`}
+                        </Text>
+                      </View>
+                    </View>
                   </View>
-                  <Text style={[styles.cardDate, isArabic ? rtlText : ltrText]}>{entry.date}</Text>
-                  <Text style={[styles.cardSnippet, isArabic ? rtlText : ltrText]}>{entry.snippet}</Text>
-                </Pressable>
-              </AnimatedBlock>
-            ))}
-
-            <AnimatedBlock delay={220}>
-              <Pressable style={styles.ctaButton}>
-                <Text style={styles.ctaText}>{t('activityWriteEntry')}</Text>
+                </LinearGradient>
               </Pressable>
-            </AnimatedBlock>
-          </>
-        ) : null}
-
-        {activeTab === 'community' ? (
-          <>
-            {communityUpdates.map((update, index) => (
-              <AnimatedBlock key={update.id} delay={120 + index * 40}>
-                <View style={styles.communityCard}>
-                  <View style={[styles.communityHeader, isArabic ? rtlRow : ltrRow]}>
-                    <Text style={[styles.communityUser, isArabic ? rtlText : ltrText]}>{update.user}</Text>
-                    <Text style={styles.communityTime}>{update.time}</Text>
-                  </View>
-                  <Text style={[styles.communityText, isArabic ? rtlText : ltrText]}>{update.message}</Text>
-                </View>
-              </AnimatedBlock>
-            ))}
-          </>
-        ) : null}
+            )}
+          </AnimatedBlock>
+        ))}
       </ScrollView>
     </AnimatedScreen>
   );
@@ -185,185 +256,309 @@ export function ActivityScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#EAE2CC',
+    backgroundColor: '#F3F1ED',
   },
   content: {
-    padding: 16,
-    paddingBottom: 32,
+    paddingHorizontal: 16,
+    gap: 8,
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 12,
+    marginBottom: 14,
+  },
+  headerCopy: {
+    flex: 1,
   },
   pageTitle: {
-    fontSize: 24,
-    fontWeight: '800',
+    fontSize: 26,
+    fontWeight: '900',
     color: '#2C2418',
   },
-  pageSubtitle: {
-    marginTop: 6,
+  headerActions: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  headerActionsRtl: {
+    flexDirection: 'row-reverse',
+  },
+  iconButton: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOpacity: 0.05,
+    shadowOffset: { width: 0, height: 4 },
+    shadowRadius: 10,
+    elevation: 2,
+  },
+  searchCard: {
+    backgroundColor: '#FFF8F1',
+    borderRadius: 22,
+    padding: 14,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: '#E7D8C3',
+  },
+  searchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  searchInput: {
+    flex: 1,
+    minHeight: 24,
     fontSize: 14,
-    color: '#7B6D5A',
-    lineHeight: 20,
+    color: '#2C2418',
+    paddingVertical: 0,
   },
   tabRow: {
     flexDirection: 'row',
     gap: 10,
-    marginTop: 18,
-    marginBottom: 14,
+    marginBottom: 16,
+  },
+  tabRowRtl: {
+    flexDirection: 'row-reverse',
   },
   tabButton: {
     flex: 1,
     flexDirection: 'row',
-    justifyContent: 'center',
     alignItems: 'center',
+    justifyContent: 'center',
     gap: 6,
-    paddingVertical: 11,
+    minHeight: 42,
     borderRadius: 16,
-    backgroundColor: '#fff',
+    backgroundColor: '#FFFFFF',
   },
   tabButtonActive: {
     backgroundColor: '#630E13',
   },
   tabText: {
-    color: '#6B5D4E',
     fontSize: 12,
-    fontWeight: '700',
+    fontWeight: '800',
+    color: '#6B5D4E',
   },
   tabTextActive: {
     color: '#fff',
   },
-  summaryRow: {
-    flexDirection: 'row',
-    gap: 10,
-    marginBottom: 16,
-  },
-  summaryCard: {
-    flex: 1,
+  postCard: {
     backgroundColor: '#fff',
-    borderRadius: 18,
-    padding: 14,
-    shadowColor: '#000',
-    shadowOpacity: 0.05,
-    shadowOffset: { width: 0, height: 3 },
-    shadowRadius: 10,
-    elevation: 2,
-  },
-  summaryValue: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: '#2C2418',
-  },
-  summaryLabel: {
-    marginTop: 4,
-    fontSize: 11,
-    color: '#8A7A6A',
-  },
-  historyCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#fff',
-    borderRadius: 20,
-    padding: 10,
-    marginBottom: 14,
-    shadowColor: '#000',
-    shadowOpacity: 0.06,
-    shadowOffset: { width: 0, height: 4 },
-    shadowRadius: 12,
-    elevation: 2,
-  },
-  historyImage: {
-    width: 82,
-    height: 82,
-    borderRadius: 14,
-  },
-  historyContent: {
-    flex: 1,
-    paddingHorizontal: 12,
-  },
-  historyDate: {
-    fontSize: 11,
-    color: '#8A7A6A',
-  },
-  historyTitle: {
-    marginTop: 4,
-    fontSize: 15,
-    fontWeight: '800',
-    color: '#2C2418',
-  },
-  historyMeta: {
-    marginTop: 6,
-    fontSize: 12,
-    color: '#6B5D4E',
-  },
-  card: {
-    backgroundColor: 'white',
-    borderRadius: 18,
-    padding: 16,
-    marginBottom: 14,
+    borderRadius: 26,
+    marginBottom: 24,
+    overflow: 'hidden',
     shadowColor: '#000',
     shadowOpacity: 0.08,
-    shadowOffset: { width: 0, height: 4 },
-    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 8 },
+    shadowRadius: 18,
     elevation: 3,
   },
-  cardHeader: {
+  postHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingTop: 14,
+    paddingBottom: 10,
+  },
+  postUserRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 8,
+    gap: 10,
+    flexShrink: 1,
   },
-  cardTitle: {
-    marginLeft: 8,
-    fontSize: 16,
+  postAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+  },
+  postUserCopy: {
+    flexShrink: 1,
+  },
+  postUserName: {
+    fontSize: 14,
     fontWeight: '800',
     color: '#2C2418',
   },
-  cardDate: {
+  postHandle: {
     fontSize: 12,
     color: '#8A7A6A',
-    marginBottom: 8,
+    marginTop: 2,
   },
-  cardSnippet: {
-    fontSize: 14,
-    color: '#4A4131',
-    lineHeight: 20,
+  postMediaWrap: {
+    position: 'relative',
+    height: 330,
   },
-  communityCard: {
-    backgroundColor: 'white',
-    borderRadius: 18,
-    padding: 16,
-    marginBottom: 12,
-    shadowColor: '#000',
-    shadowOpacity: 0.06,
-    shadowOffset: { width: 0, height: 3 },
-    shadowRadius: 8,
-    elevation: 2,
+  postMedia: {
+    width: '100%',
+    height: '100%',
   },
-  communityHeader: {
+  postMediaOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'flex-end',
+    padding: 14,
+  },
+  postMediaMeta: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  mediaTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+  },
+  mediaTagText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  postActions: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: 8,
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingTop: 12,
   },
-  communityUser: {
-    fontSize: 14,
-    fontWeight: '700',
+  postActionsRtl: {
+    flexDirection: 'row-reverse',
+  },
+  actionCluster: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+  },
+  actionClusterRtl: {
+    flexDirection: 'row-reverse',
+  },
+  postBody: {
+    paddingHorizontal: 14,
+    paddingTop: 10,
+    paddingBottom: 16,
+  },
+  likeCount: {
+    fontSize: 13,
+    fontWeight: '800',
     color: '#2C2418',
   },
-  communityTime: {
-    fontSize: 11,
+  caption: {
+    marginTop: 7,
+    fontSize: 14,
+    lineHeight: 21,
+    color: '#43382C',
+  },
+  captionUser: {
+    fontWeight: '800',
+    color: '#2C2418',
+  },
+  commentHint: {
+    marginTop: 7,
+    fontSize: 13,
     color: '#8A7A6A',
   },
-  communityText: {
-    fontSize: 14,
-    color: '#4A4131',
-    lineHeight: 20,
+  locationLine: {
+    marginTop: 5,
+    fontSize: 12,
+    color: '#A18F7A',
   },
-  ctaButton: {
-    marginTop: 10,
-    backgroundColor: '#630E13',
-    borderRadius: 16,
-    paddingVertical: 14,
+  planCard: {
+    height: 360,
+    borderRadius: 28,
+    overflow: 'hidden',
+    marginBottom: 24,
+    backgroundColor: '#D4C6A4',
+  },
+  planImage: {
+    width: '100%',
+    height: '100%',
+  },
+  planOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'space-between',
+    padding: 16,
+  },
+  planTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
+    gap: 12,
   },
-  ctaText: {
-    color: 'white',
-    fontSize: 15,
-    fontWeight: '700',
+  planUserName: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#fff',
+  },
+  planHandle: {
+    marginTop: 2,
+    fontSize: 12,
+    color: 'rgba(255,255,255,0.78)',
+  },
+  planBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: 999,
+    paddingHorizontal: 11,
+    paddingVertical: 8,
+    backgroundColor: 'rgba(99,14,19,0.9)',
+  },
+  planBadgeText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  planBody: {
+    marginTop: 'auto',
+  },
+  planTitle: {
+    fontSize: 24,
+    lineHeight: 29,
+    fontWeight: '900',
+    color: '#fff',
+  },
+  planDate: {
+    marginTop: 8,
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#F0DCAA',
+  },
+  planVibe: {
+    marginTop: 8,
+    fontSize: 13,
+    color: 'rgba(255,255,255,0.88)',
+  },
+  planNote: {
+    marginTop: 10,
+    fontSize: 14,
+    lineHeight: 21,
+    color: 'rgba(255,255,255,0.9)',
+  },
+  planFooter: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 16,
+    flexWrap: 'wrap',
+  },
+  planMetaPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+  },
+  planMetaText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '800',
   },
 });
