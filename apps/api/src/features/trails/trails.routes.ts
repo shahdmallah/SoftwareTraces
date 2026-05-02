@@ -7,6 +7,7 @@ import {
   createTrail,
   createTrailCondition,
   createTrailReview,
+  deleteReviewPhoto,
   deleteTrail,
   deleteTrailPhoto,
   getElevationProfile,
@@ -51,10 +52,11 @@ router.get("/:id/photos", asyncHandler(getTrailPhotos));
 router.get("/:id", asyncHandler(getTrailById));
 router.patch("/:id/publish", authenticate, asyncHandler(publishTrail));
 router.get("/:id/reviews", asyncHandler(getTrailReviews));
-router.post("/:id/reviews", authenticate, upload.single("photo"), asyncHandler(createTrailReview));
+router.post("/:id/reviews", authenticate, upload.array("photos", 10), asyncHandler(createTrailReview));
 router.get("/:id/conditions", asyncHandler(getTrailConditions));
 router.post("/:id/conditions", authenticate, validate(z.object({ condition_type: z.enum(['snow', 'ice', 'mud', 'flood', 'fallen_trees', 'wildfire', 'closure', 'good', 'fair']), severity: z.enum(['low', 'medium', 'high', 'extreme']).optional(), description: z.string().optional() })), asyncHandler(createTrailCondition));
 router.post("/:id/photos", authenticate, upload.single("photo"), asyncHandler(uploadTrailPhoto));
+router.delete("/review-photos/:id", authenticate, asyncHandler(deleteReviewPhoto));
 router.post("/:id/save", authenticate, asyncHandler(saveTrail));
 router.delete("/:id/save", authenticate, asyncHandler(unsaveTrail));
 router.get("/:id/saved-status", authenticate, asyncHandler(checkSavedStatus));

@@ -26,6 +26,7 @@ interface ProfileReviewRow {
   title: string | null;
   content: string;
   photo_url: string | null;
+  photos?: { id: string; url: string; created_at: string }[] | null;
   created_at: string;
   trail_id: string;
   trail_name: string;
@@ -114,7 +115,7 @@ export async function getProfile(req: Request, res: Response): Promise<void> {
            (
              (SELECT COUNT(*) FROM trail_photos tp WHERE tp.user_id = $1)
              +
-             (SELECT COUNT(*) FROM trail_reviews tr WHERE tr.user_id = $1 AND tr.photo_url IS NOT NULL)
+             (SELECT COUNT(*) FROM review_photos rp WHERE rp.user_id = $1)
            ) AS total_photos,
            (
              SELECT COUNT(*)
@@ -132,7 +133,13 @@ export async function getProfile(req: Request, res: Response): Promise<void> {
            tr.rating,
            tr.title,
            tr.content,
-           tr.photo_url,
+           (
+             SELECT rp.photo_url
+             FROM review_photos rp
+             WHERE rp.review_id = tr.id
+             ORDER BY rp.created_at ASC
+             LIMIT 1
+           ) AS photo_url,
            tr.created_at,
            t.id AS trail_id,
            t.name AS trail_name,
@@ -166,20 +173,21 @@ export async function getProfile(req: Request, res: Response): Promise<void> {
            JOIN trails t ON t.id = tp.trail_id
            WHERE tp.user_id = $1
 
-           UNION ALL
+            UNION ALL
 
-           SELECT
-             tr.id,
-             tr.photo_url AS url,
-             tr.title AS caption,
-             tr.created_at,
-             'review'::text AS source,
-             tr.trail_id,
-             t.name AS trail_name
-           FROM trail_reviews tr
-           JOIN trails t ON t.id = tr.trail_id
-           WHERE tr.user_id = $1 AND tr.photo_url IS NOT NULL
-         ) AS p
+            SELECT
+              rp.id,
+              rp.photo_url AS url,
+              tr.title AS caption,
+              rp.created_at,
+              'review'::text AS source,
+              tr.trail_id,
+              t.name AS trail_name
+            FROM review_photos rp
+            JOIN trail_reviews tr ON tr.id = rp.review_id
+            JOIN trails t ON t.id = tr.trail_id
+            WHERE rp.user_id = $1
+          ) AS p
          ORDER BY p.created_at DESC
          LIMIT 5`,
         [profile.user_id]
@@ -254,7 +262,28 @@ export async function getProfileReviews(req: Request, res: Response): Promise<vo
            tr.rating,
            tr.title,
            tr.content,
-           tr.photo_url,
+           (
+             SELECT rp.photo_url
+             FROM review_photos rp
+             WHERE rp.review_id = tr.id
+             ORDER BY rp.created_at ASC
+             LIMIT 1
+           ) AS photo_url,
+           COALESCE(
+             (
+               SELECT json_agg(
+                 json_build_object(
+                   'id', review_photo_list.id,
+                   'url', review_photo_list.photo_url,
+                   'created_at', review_photo_list.created_at
+                 )
+                 ORDER BY review_photo_list.created_at ASC
+               )
+               FROM review_photos review_photo_list
+               WHERE review_photo_list.review_id = tr.id
+             ),
+             '[]'::json
+           ) AS photos,
            tr.created_at,
            t.id AS trail_id,
            t.name AS trail_name,
@@ -263,10 +292,10 @@ export async function getProfileReviews(req: Request, res: Response): Promise<vo
            COUNT(DISTINCT rc.id) AS comments_count
          FROM trail_reviews tr
          JOIN trails t ON t.id = tr.trail_id
-         LEFT JOIN review_likes rl ON rl.review_id = tr.id
-         LEFT JOIN review_comments rc ON rc.review_id = tr.id
-         WHERE tr.user_id = $1
-         GROUP BY tr.id, t.id
+          LEFT JOIN review_likes rl ON rl.review_id = tr.id
+          LEFT JOIN review_comments rc ON rc.review_id = tr.id
+          WHERE tr.user_id = $1
+          GROUP BY tr.id, t.id
          ORDER BY tr.created_at DESC
          LIMIT $2 OFFSET $3`,
         [profile.user_id, limit, offset]
@@ -282,6 +311,7 @@ export async function getProfileReviews(req: Request, res: Response): Promise<vo
         title: row.title,
         content: row.content,
         photo_url: row.photo_url,
+        photos: Array.isArray(row.photos) ? row.photos : [],
         created_at: row.created_at,
         trail: {
           id: row.trail_id,
@@ -328,8 +358,8 @@ export async function getProfilePhotos(req: Request, res: Response): Promise<voi
            UNION ALL
 
            SELECT id
-           FROM trail_reviews
-           WHERE user_id = $1 AND photo_url IS NOT NULL
+           FROM review_photos
+           WHERE user_id = $1
          ) AS photos`,
         [profile.user_id]
       ),
@@ -355,20 +385,21 @@ export async function getProfilePhotos(req: Request, res: Response): Promise<voi
            JOIN trails t ON t.id = tp.trail_id
            WHERE tp.user_id = $1
 
-           UNION ALL
+            UNION ALL
 
-           SELECT
-             tr.id,
-             tr.photo_url AS url,
-             tr.title AS caption,
-             tr.created_at,
-             'review'::text AS source,
-             tr.trail_id,
-             t.name AS trail_name
-           FROM trail_reviews tr
-           JOIN trails t ON t.id = tr.trail_id
-           WHERE tr.user_id = $1 AND tr.photo_url IS NOT NULL
-         ) AS p
+            SELECT
+              rp.id,
+              rp.photo_url AS url,
+              tr.title AS caption,
+              rp.created_at,
+              'review'::text AS source,
+              tr.trail_id,
+              t.name AS trail_name
+            FROM review_photos rp
+            JOIN trail_reviews tr ON tr.id = rp.review_id
+            JOIN trails t ON t.id = tr.trail_id
+            WHERE rp.user_id = $1
+          ) AS p
          ORDER BY p.created_at DESC
          LIMIT $2 OFFSET $3`,
         [profile.user_id, limit, offset]
