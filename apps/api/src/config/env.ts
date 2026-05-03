@@ -65,7 +65,6 @@ const envSchema = z.object({
   SUPABASE_ANON_KEY: z.string().optional(),
   SUPABASE_SERVICE_ROLE_KEY: z.string().optional(),
   MAPBOX_TOKEN: z.string().optional(),
-  GOOGLE_API_KEY: z.string().optional(),
   OPENWEATHER_API_KEY: z.string().optional(),
   REDIS_URL: z.string().optional()
 });

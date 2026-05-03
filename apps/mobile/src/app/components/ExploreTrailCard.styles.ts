@@ -126,6 +126,31 @@ export const exploreTrailCardStyles = StyleSheet.create({
     fontSize: 16,
     lineHeight: 21,
   },
+  labelRow: {
+    marginTop: 12,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  trailLabel: {
+    maxWidth: '48%',
+    borderRadius: 999,
+    paddingHorizontal: 11,
+    paddingVertical: 7,
+    backgroundColor: '#F1E7D2',
+  },
+  accessLabel: {
+    backgroundColor: '#F7EBE8',
+  },
+  trailLabelText: {
+    color: '#5F594E',
+    fontSize: 11,
+    lineHeight: 14,
+    fontWeight: '800',
+  },
+  accessLabelText: {
+    color: '#630E13',
+  },
   cardMetaRow: {
     marginTop: theme.spacing.md,
     flexDirection: 'row',

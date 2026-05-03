@@ -118,6 +118,17 @@ function buildMiniRoutePreviewPath(coordinates?: [number, number][]) {
   return buildSmoothPath(previewPoints);
 }
 
+function buildTrailLabels(item: Trail, isArabic: boolean) {
+  const featureLabels = isArabic ? item.featuresAr : item.features;
+  const labels = (featureLabels?.length ? featureLabels : item.tags).filter(Boolean).slice(0, 3);
+
+  if (item.hasCheckpoint) {
+    labels.unshift(isArabic ? 'نقطة عبور' : 'Access check');
+  }
+
+  return labels.slice(0, 4);
+}
+
 export function ExploreTrailCard({
   item,
   isArabic,
@@ -153,6 +164,7 @@ export function ExploreTrailCard({
   const displayRegion = isArabic ? item.regionAr : item.region;
   const ratingLabel = `${decimalFormatter.format(item.rating)} (${integerFormatter.format(item.reviews)})`;
   const distanceLabel = `${decimalFormatter.format(item.distance)} ${t('unitKm')}`;
+  const trailLabels = React.useMemo(() => buildTrailLabels(item, isArabic), [isArabic, item]);
 
   const onPressIn = () =>
     Animated.spring(scale, { toValue: 0.98, useNativeDriver: true, speed: 30, bounciness: 6 }).start();
@@ -298,6 +310,18 @@ export function ExploreTrailCard({
               <Ionicons name="cloud-download-sharp" size={36} color="#630E13" />
             </Pressable>
           </View>
+
+          {trailLabels.length ? (
+            <View style={[styles.labelRow, isArabic ? rtlRow : ltrRow]}>
+              {trailLabels.map((label) => (
+                <View key={label} style={[styles.trailLabel, label === (isArabic ? 'نقطة عبور' : 'Access check') && styles.accessLabel]}>
+                  <Text style={[styles.trailLabelText, label === (isArabic ? 'نقطة عبور' : 'Access check') && styles.accessLabelText]} numberOfLines={1}>
+                    {label}
+                  </Text>
+                </View>
+              ))}
+            </View>
+          ) : null}
 
           <View style={[styles.cardMetaRow, isArabic ? rtlRow : ltrRow]}>
             <View style={[styles.metaItem, isArabic ? rtlRow : ltrRow]}>

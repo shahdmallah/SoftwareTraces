@@ -168,7 +168,17 @@ export function AuthScreen() {
             </View>
 
             <View style={styles.inputGroup}>
-              <Text style={[styles.label, isArabic ? rtlText : ltrText]}>{t('authPassword')}</Text>
+              <View style={styles.passwordLabelRow}>
+                <Text style={[styles.label, styles.passwordLabel, isArabic ? rtlText : ltrText]}>{t('authPassword')}</Text>
+                {mode === 'signin' ? (
+                  <Pressable
+                    onPress={() => navigation.navigate('ForgotPassword', { email: email.trim() || undefined })}
+                    hitSlop={10}
+                  >
+                    <Text style={styles.forgotPasswordText}>{isArabic ? 'نسيت كلمة المرور؟' : 'Forgot password?'}</Text>
+                  </Pressable>
+                ) : null}
+              </View>
               <View style={styles.passwordContainer}>
                 <TextInput
                   value={password}
@@ -327,6 +337,21 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#6B5D4E',
     fontWeight: '700',
+  },
+  passwordLabelRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 7,
+  },
+  passwordLabel: {
+    marginBottom: 0,
+  },
+  forgotPasswordText: {
+    color: '#630E13',
+    fontSize: 12,
+    fontWeight: '800',
   },
   textRight: {
     textAlign: 'right',

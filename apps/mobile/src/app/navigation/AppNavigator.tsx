@@ -11,18 +11,24 @@ import { RootStackParamList, AppTabParamList } from './types';
 import { OnboardingScreen } from '../screens/OnboardingScreen';
 import { Ionicons } from '@expo/vector-icons';
 import { AuthScreen } from '../screens/AuthScreen';
+import { ForgotPasswordScreen } from '../screens/ForgotPasswordScreen';
 import { ActivityScreen } from '../screens/ActivityScreen';
 import { MapScreen } from '../screens/MapScreen';
 import { ExploreScreen } from '../screens/ExploreScreen';
 import { SavedScreen } from '../screens/SavedScreen';
 import { ProfileScreen } from '../screens/ProfileScreen';
 import { TrailDetailScreen } from '../screens/TrailDetailScreen';
+import { AllReviewsScreen } from '../screens/AllReviewsScreen';
 import { TrailMediaScreen } from '../screens/TrailMediaScreen';
 import { RecordingScreen } from '../screens/RecordingScreen';
 import { CreateTrailScreen } from '../screens/CreateTrailScreen';
 import { ActivityMessagesScreen } from '../screens/ActivityMessagesScreen';
+import { ActivityThreadScreen } from '../screens/ActivityThreadScreen';
 import { ActivityShareScreen } from '../screens/ActivityShareScreen';
+import { ActivityShareComposerScreen } from '../screens/ActivityShareComposerScreen';
 import { TrailReviewScreen } from '../screens/TrailReviewScreen';
+import { HistoryScreen } from '../screens/HistoryScreen';
+import { ProfileSettingsScreen } from '../screens/ProfileSettingsScreen';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BlurView } from 'expo-blur';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
@@ -248,14 +254,20 @@ export function AppNavigator() {
         >
           <Stack.Screen name="Onboarding" component={OnboardingScreen} />
           <Stack.Screen name="Auth" component={AuthScreen} />
+          <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
           <Stack.Screen name="AppTabs" component={AppTabs} />
           <Stack.Screen name="TrailDetail" component={TrailDetailScreen} />
+          <Stack.Screen name="AllReviews" component={AllReviewsScreen} />
           <Stack.Screen name="TrailMedia" component={TrailMediaScreen} />
           <Stack.Screen name="ActivityMessages" component={ActivityMessagesScreen} />
+          <Stack.Screen name="ActivityThread" component={ActivityThreadScreen} />
           <Stack.Screen name="ActivityShare" component={ActivityShareScreen} />
+          <Stack.Screen name="ActivityShareComposer" component={ActivityShareComposerScreen} />
+          <Stack.Screen name="ProfileSettings" component={ProfileSettingsScreen} />
           <Stack.Screen name="CreateTrail" component={CreateTrailScreen} />
           <Stack.Screen name="Recording" component={RecordingScreen} />
           <Stack.Screen name="TrailReview" component={TrailReviewScreen} />
+          <Stack.Screen name="History" component={HistoryScreen} />
         </Stack.Navigator>
 
         <ActiveRecordingWidget routeName={routeName} />

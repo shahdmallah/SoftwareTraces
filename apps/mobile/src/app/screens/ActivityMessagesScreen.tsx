@@ -103,7 +103,7 @@ export function ActivityMessagesScreen() {
                 <Text numberOfLines={2} style={[styles.friendStatus, isArabic ? rtlText : ltrText]}>
                   {isArabic ? friend.statusAr : friend.statusEn}
                 </Text>
-                <Pressable style={styles.messageButton}>
+                <Pressable style={styles.messageButton} onPress={() => navigation.navigate('ActivityThread', { friendId: friend.id })}>
                   <Ionicons name="chatbubble-ellipses-outline" size={14} color="#fff" />
                   <Text style={styles.messageButtonText}>{isArabic ? 'مراسلة' : 'Message'}</Text>
                 </Pressable>
@@ -121,6 +121,7 @@ export function ActivityMessagesScreen() {
               <Pressable
                 key={thread.id}
                 style={[styles.threadRow, isArabic ? rtlRow : ltrRow, index === 0 && styles.threadRowFirst]}
+                onPress={() => navigation.navigate('ActivityThread', { threadId: thread.id, friendId: thread.friendId })}
               >
                 <Image source={{ uri: thread.avatar }} style={styles.threadAvatar} />
                 <View style={styles.threadBody}>

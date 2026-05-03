@@ -36,14 +36,10 @@ type SettingItem = {
 };
 
 const settings: SettingItem[] = [
-  { id: 's1', icon: 'globe-outline', labelKey: 'settingLanguage', subtitleKey: 'languageCurrent' },
-  { id: 's2', icon: 'heart-outline', labelKey: 'settingFavorites', subtitleKey: 'favoritesCount', badge: 3 },
-  { id: 's3', icon: 'notifications-outline', labelKey: 'settingNotifications', subtitleKey: 'notificationsOn' },
-  { id: 's4', icon: 'shield-checkmark-outline', labelKey: 'settingPrivacy' },
   { id: 's5', icon: 'settings-outline', labelKey: 'settingGeneral' },
 ];
 
-type ProfileNavigationProp = StackNavigationProp<RootStackParamList, 'Onboarding'>;
+type ProfileNavigationProp = StackNavigationProp<RootStackParamList>;
 
 export function ProfileScreen() {
   const navigation = useNavigation<ProfileNavigationProp>();
@@ -98,9 +94,9 @@ export function ProfileScreen() {
     }
   };
 
-  const handleSettingPress = (_setting: SettingItem) => {
+  const handleSettingPress = (setting: SettingItem) => {
     triggerFeedback(10);
-    // Navigate to setting screen
+    navigation.navigate('ProfileSettings', { settingId: setting.id });
   };
 
   return (
@@ -151,8 +147,9 @@ export function ProfileScreen() {
               { value: '4', unit: '', labelKey: 'profileCompletedTrips', icon: 'checkmark-circle-outline' },
               { value: '4', unit: '', labelKey: 'profileBadges', icon: 'ribbon-outline' },
             ].map((item, index) => (
-              <View
+              <Pressable
                 key={item.labelKey}
+                onPress={item.labelKey === 'profileCompletedTrips' ? () => navigation.navigate('History') : undefined}
                 style={[
                   styles.statCard,
                   index < 2 && (isArabic ? styles.statCardBorderRtl : styles.statCardBorder),
@@ -168,7 +165,7 @@ export function ProfileScreen() {
                 <Text style={[styles.statLabel, isArabic && styles.textRtl]}>
                   {t(item.labelKey as TranslationKey)}
                 </Text>
-              </View>
+              </Pressable>
             ))}
           </View>
         </AnimatedBlock>

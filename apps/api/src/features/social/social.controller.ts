@@ -11,6 +11,7 @@ interface FeedReviewRow {
   title: string | null;
   content: string;
   photo_url: string | null;
+  photos: { id: string; url: string; created_at: string }[] | null;
   created_at: string;
   user_id: string;
   full_name: string;
@@ -251,7 +252,28 @@ export async function getFeed(req: Request, res: Response): Promise<void> {
          tr.rating,
          tr.title,
          tr.content,
-         tr.photo_url,
+         (
+           SELECT rp.photo_url
+           FROM review_photos rp
+           WHERE rp.review_id = tr.id
+           ORDER BY rp.created_at ASC
+           LIMIT 1
+         ) AS photo_url,
+         COALESCE(
+           (
+             SELECT json_agg(
+               json_build_object(
+                 'id', review_photo_list.id,
+                 'url', review_photo_list.photo_url,
+                 'created_at', review_photo_list.created_at
+               )
+               ORDER BY review_photo_list.created_at ASC
+             )
+             FROM review_photos review_photo_list
+             WHERE review_photo_list.review_id = tr.id
+           ),
+           '[]'::json
+         ) AS photos,
          tr.created_at,
          p.user_id,
          p.full_name,
@@ -269,7 +291,7 @@ export async function getFeed(req: Request, res: Response): Promise<void> {
          ) AS is_liked_by_user
        FROM trail_reviews tr
        JOIN user_follows uf ON uf.following_id = tr.user_id
-       JOIN profiles p ON p.user_id = tr.user_id
+       JOIN profiles p ON p.id = tr.user_id
        JOIN trails t ON t.id = tr.trail_id
        LEFT JOIN review_likes rl ON rl.review_id = tr.id
        LEFT JOIN review_comments rc ON rc.review_id = tr.id
@@ -298,6 +320,7 @@ export async function getFeed(req: Request, res: Response): Promise<void> {
         title: row.title,
         content: row.content,
         photo_url: row.photo_url,
+        photos: Array.isArray(row.photos) ? row.photos : [],
         created_at: row.created_at,
         likes_count: Number(row.likes_count),
         comments_count: Number(row.comments_count),

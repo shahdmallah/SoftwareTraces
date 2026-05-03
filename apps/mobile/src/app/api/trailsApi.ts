@@ -113,10 +113,9 @@ type Envelope<T> = {
 
 type SavedTrailRow = {
   saved_id: string;
-  id: string;
   notes?: string | null;
   saved_at: string;
-};
+} & Trail;
 
 type SavedStatusResponse = {
   is_saved: boolean;
@@ -285,6 +284,25 @@ export async function getBookmarks(params: { type: BookmarkType; page?: number; 
       type: params.type,
       notes: item.notes,
       savedAt: item.saved_at,
+    })),
+    pagination: response.pagination,
+  };
+}
+
+export async function getSavedTrails(params: { type: BookmarkType; page?: number; limit?: number }) {
+  const response = await apiRequest<Envelope<SavedTrailRow[]>>('/api/trails/saved', {}, {
+    list_type: params.type,
+    page: params.page,
+    limit: params.limit,
+  });
+
+  return {
+    items: response.data.map((item) => ({
+      trail: normalizeTrail(item),
+      savedAt: item.saved_at,
+      notes: item.notes,
+      savedId: item.saved_id,
+      type: params.type,
     })),
     pagination: response.pagination,
   };

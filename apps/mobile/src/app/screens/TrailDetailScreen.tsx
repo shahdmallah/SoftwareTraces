@@ -28,52 +28,23 @@ import { WeatherSection } from '../components/WeatherSection';
 import { ReviewsSection } from '../components/ReviewsSection';
 import { CommunityPostsSection } from '../components/CommunityPostsSection';
 import { useTrailTracking } from '../contexts/TrailTrackingContext';
+import { feedItems } from '../data/activitySocial';
 
 type TrailDetailScreenRouteProp = RouteProp<RootStackParamList, 'TrailDetail'>;
 type TrailDetailNavigationProp = StackNavigationProp<RootStackParamList>;
-
-type Post = {
+type TrailAttribute = {
   id: string;
-  user: string;
-  timeKey: string;
-  textEn: string;
-  textAr: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  label: string;
 };
 
-const postsByTrail: Record<string, Post[]> = {
-  '1': [
-    {
-      id: 'p1',
-      user: 'Leila',
-      timeKey: 'postTimeRecent',
-      textEn: 'The canyon light right after sunrise was unreal. Bring extra water and start early.',
-      textAr: 'كان ضوء الوادي بعد الشروق مذهلاً. أحضر ماء إضافياً وابدأ مبكراً.',
-    },
-    {
-      id: 'p2',
-      user: 'Yousef',
-      timeKey: 'postTimeYesterday',
-      textEn: 'The monastery view is worth every climb. Good shoes make a big difference here.',
-      textAr: 'مشهد الدير يستحق كل صعود. الحذاء الجيد يصنع فرقاً كبيراً هنا.',
-    },
-  ],
-  '3': [
-    {
-      id: 'p3',
-      user: 'Mariam',
-      timeKey: 'postTimeRecent',
-      textEn: 'Battir is so peaceful in the late afternoon. The terraces look incredible in golden light.',
-      textAr: 'بتير هادئة جداً في آخر النهار. تبدو المدرجات رائعة في الضوء الذهبي.',
-    },
-    {
-      id: 'p4',
-      user: 'Omar',
-      timeKey: 'postTimeYesterday',
-      textEn: 'Easy to enjoy at a slow pace. I would definitely bring a camera for this one.',
-      textAr: 'من السهل الاستمتاع به على مهل. أنصح بإحضار كاميرا لهذا المسار.',
-    },
-  ],
-};
+const trailAttributes: TrailAttribute[] = [
+  { id: 'dog', icon: 'paw-outline', label: 'Dog friendly' },
+  { id: 'kid', icon: 'happy-outline', label: 'Kid friendly' },
+  { id: 'parking', icon: 'car-outline', label: 'Parking' },
+  { id: 'water', icon: 'water-outline', label: 'Water sources' },
+  { id: 'shade', icon: 'leaf-outline', label: 'Shade' },
+];
 
 export function TrailDetailScreen() {
   const route = useRoute<TrailDetailScreenRouteProp>();
@@ -211,6 +182,13 @@ export function TrailDetailScreen() {
     navigation.navigate('TrailMedia', { trailId: trail!.id });
   };
 
+  const openAllReviews = () => {
+    navigation.navigate('AllReviews', {
+      trailId: trail!.id,
+      trailName: isArabic ? trail!.nameAr || trail!.name : trail!.name,
+    });
+  };
+
   const openTrailRecording = async () => {
     if (activeSessionTrailId !== trail!.id) {
       await startTrailSession(trail!.id);
@@ -280,7 +258,7 @@ export function TrailDetailScreen() {
     );
   }
 
-  const posts = postsByTrail[trail.id] ?? postsByTrail['3'];
+  const posts = feedItems.filter((item) => item.trailId === trail.id);
   const isThisTrailActive = activeSessionTrailId === trail.id;
 
   return (
@@ -372,6 +350,23 @@ export function TrailDetailScreen() {
           </AnimatedBlock>
 
           <AnimatedBlock delay={230}>
+            <View style={styles.attributesCard}>
+              <View style={[styles.attributesGrid, isArabic && styles.attributesGridRtl]}>
+                {trailAttributes.map((attribute) => (
+                  <View key={attribute.id} style={styles.attributeTile}>
+                    <View style={styles.attributeIconWrap}>
+                      <Ionicons name={attribute.icon} size={18} color="#630E13" />
+                    </View>
+                    <Text style={styles.attributeLabel} numberOfLines={2}>
+                      {attribute.label}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            </View>
+          </AnimatedBlock>
+
+          <AnimatedBlock delay={250}>
             <WeatherSection
               weeklyForecast={weeklyForecast}
               selectedForecastDate={selectedForecastDate}
@@ -382,12 +377,23 @@ export function TrailDetailScreen() {
             />
           </AnimatedBlock>
 
-          <AnimatedBlock delay={270}>
-            <ReviewsSection reviews={reviews} isArabic={isArabic} />
+          <AnimatedBlock delay={290}>
+            <ReviewsSection
+              reviews={reviews}
+              trailId={trail.id}
+              isArabic={isArabic}
+              isAuthenticated={isAuthenticated}
+              onRequireAuth={() => navigation.navigate('Auth', { mode: 'signin' })}
+              onViewAllReviews={openAllReviews}
+              onReviewAdded={(review) => setReviews((current) => [review, ...current])}
+            />
           </AnimatedBlock>
 
-          <AnimatedBlock delay={310}>
-            <CommunityPostsSection posts={posts} />
+          <AnimatedBlock delay={330}>
+            <CommunityPostsSection
+              posts={posts}
+              onOpenActivity={() => navigation.navigate('AppTabs', { screen: 'Activity' })}
+            />
           </AnimatedBlock>
         </View>
       </ScrollView>
@@ -468,6 +474,48 @@ actionRow: {
   flexDirection: 'row',
   alignItems: 'stretch',
   gap: 10,
+},
+attributesCard: {
+  backgroundColor: '#FFFFFF',
+  borderRadius: 30,
+  padding: 12,
+  borderWidth: 1,
+  borderColor: '#EFE3D2',
+},
+attributesGrid: {
+  flexDirection: 'row',
+  flexWrap: 'wrap',
+  gap: 10,
+},
+attributesGridRtl: {
+  flexDirection: 'row-reverse',
+},
+attributeTile: {
+  flexBasis: '48%',
+  flexGrow: 1,
+  maxWidth: '48%',
+  height: 72,
+  flexDirection: 'row',
+  alignItems: 'center',
+  gap: 10,
+  borderRadius: 24,
+  paddingHorizontal: 12,
+  backgroundColor: '#F8F4EC',
+},
+attributeIconWrap: {
+  width: 36,
+  height: 36,
+  borderRadius: 18,
+  alignItems: 'center',
+  justifyContent: 'center',
+  backgroundColor: '#F7EBE8',
+},
+attributeLabel: {
+  flex: 1,
+  color: '#4A4131',
+  fontSize: 12,
+  lineHeight: 15,
+  fontWeight: '800',
 },
 recordButton: {
   flex: 1,

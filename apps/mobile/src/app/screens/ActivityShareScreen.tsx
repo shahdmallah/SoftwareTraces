@@ -86,7 +86,10 @@ export function ActivityShareScreen() {
 
         {shareOptions.map((option, index) => (
           <AnimatedBlock key={option.id} delay={80 + index * 40}>
-            <Pressable style={styles.optionCard}>
+            <Pressable
+              style={styles.optionCard}
+              onPress={() => navigation.navigate('ActivityShareComposer', { type: option.id as 'photo' | 'plan' })}
+            >
               <LinearGradient colors={[...option.accent]} style={styles.optionIcon}>
                 <Ionicons name={option.icon} size={22} color="#fff" />
               </LinearGradient>

@@ -104,3 +104,39 @@ export async function apiRequest<T>(
   return payload as T;
 }
 
+export async function apiTextRequest(
+  path: string,
+  init: RequestInit = {},
+  query?: Record<string, QueryValue>,
+): Promise<string> {
+  const token = await getAccessToken();
+  const headers = new Headers(init.headers ?? {});
+
+  if (token && !headers.has('Authorization')) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+
+  const response = await fetch(buildUrl(path, query), {
+    ...init,
+    headers,
+  });
+
+  const body = await response.text();
+
+  if (!response.ok) {
+    let payload: ApiErrorPayload = null;
+
+    try {
+      payload = JSON.parse(body) as ApiErrorPayload;
+    } catch {
+      payload = body ? { error: body } : null;
+    }
+
+    throw new ApiError(
+      getErrorMessage(payload, 'Request failed.'),
+      response.status,
+    );
+  }
+
+  return body;
+}

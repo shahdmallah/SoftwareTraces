@@ -20,6 +20,17 @@ function formatIntegerValue(value: number | string | undefined | null) {
   return Number.isFinite(parsed) ? String(Math.round(parsed)) : '0';
 }
 
+function buildTrailLabels(trail: Trail, isArabic: boolean) {
+  const featureLabels = isArabic ? trail.featuresAr : trail.features;
+  const labels = (featureLabels?.length ? featureLabels : trail.tags).filter(Boolean).slice(0, 4);
+
+  if (trail.hasCheckpoint) {
+    labels.unshift(isArabic ? 'نقطة عبور' : 'Access check');
+  }
+
+  return labels.slice(0, 5);
+}
+
 export function TrailSummaryCard({ trail, isArabic }: TrailSummaryCardProps) {
   const displayName = isArabic ? trail.nameAr : trail.name;
   const displayRegion = isArabic ? trail.regionAr : trail.region;
@@ -28,6 +39,7 @@ export function TrailSummaryCard({ trail, isArabic }: TrailSummaryCardProps) {
   const distanceText = formatNumericValue(trail.distance, 1);
   const durationText = trail.duration || 'N/A';
   const difficultyText = trail.difficulty || 'Easy';
+  const trailLabels = buildTrailLabels(trail, isArabic);
 
   return (
     <View style={styles.summaryCard}>
@@ -49,6 +61,18 @@ export function TrailSummaryCard({ trail, isArabic }: TrailSummaryCardProps) {
           </Text>
         </View>
       </View>
+
+      {trailLabels.length ? (
+        <View style={styles.labelRow}>
+          {trailLabels.map((label) => (
+            <View key={label} style={[styles.trailLabel, label === (isArabic ? 'نقطة عبور' : 'Access check') && styles.accessLabel]}>
+              <Text style={[styles.trailLabelText, label === (isArabic ? 'نقطة عبور' : 'Access check') && styles.accessLabelText]} numberOfLines={1}>
+                {label}
+              </Text>
+            </View>
+          ))}
+        </View>
+      ) : null}
 
       <View style={styles.statsRow}>
         <View style={styles.statsItem}>
@@ -138,6 +162,31 @@ const styles = StyleSheet.create({
     width: 10,
     height: 10,
     borderRadius: 3,
+  },
+  labelRow: {
+    marginTop: 14,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  trailLabel: {
+    maxWidth: '48%',
+    borderRadius: 999,
+    paddingHorizontal: 11,
+    paddingVertical: 8,
+    backgroundColor: '#F1E7D2',
+  },
+  accessLabel: {
+    backgroundColor: '#F7EBE8',
+  },
+  trailLabelText: {
+    color: '#5F594E',
+    fontSize: 12,
+    lineHeight: 15,
+    fontWeight: '800',
+  },
+  accessLabelText: {
+    color: '#630E13',
   },
   statsRow: {
     marginTop: 18,

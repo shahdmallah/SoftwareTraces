@@ -6,7 +6,7 @@ import { StackNavigationProp } from '@react-navigation/stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
-import { getBookmarks, getTrails, type Trail } from '../api/trailsApi';
+import { getSavedTrails, type Trail } from '../api/trailsApi';
 import { RootStackParamList } from '../navigation/types';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
@@ -70,20 +70,18 @@ export function SavedScreen() {
       setErrorMessage(null);
 
       try {
-        const [allTrails, bookmarks] = await Promise.all([
-          getTrails(1, 100),
-          getBookmarks({ type: activeTab === 'favorites' ? 'favorites' : 'completed', page: 1, limit: 100 }),
-        ]);
-
-        const savedMap = new Map(bookmarks.items.map((item) => [item.trailId, item]));
+        const savedResponse = await getSavedTrails({
+          type: activeTab === 'favorites' ? 'favorites' : 'completed',
+          page: 1,
+          limit: 100,
+        });
 
         if (!cancelled) {
           if (activeTab === 'favorites') {
-            setSavedTrails(allTrails.filter((trail) => savedMap.has(trail.id)));
+            setSavedTrails(savedResponse.items.map((item) => item.trail));
           } else {
-            const merged = allTrails
-              .filter((trail) => savedMap.has(trail.id))
-              .map((trail) => ({ trail, savedAt: savedMap.get(trail.id)!.savedAt }))
+            const merged = savedResponse.items
+              .map((item) => ({ trail: item.trail, savedAt: item.savedAt }))
               .sort((a, b) => new Date(b.savedAt).getTime() - new Date(a.savedAt).getTime());
 
             setCompletedTrails(merged);

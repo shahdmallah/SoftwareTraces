@@ -259,6 +259,31 @@ const reviewPhotoExtensionByMimeType: Record<(typeof validReviewPhotoMimeTypes)[
 };
 const maxReviewPhotoSizeBytes = 5 * 1024 * 1024;
 
+interface ReviewPhotoRow {
+  id: string;
+  user_id: string;
+  photo_url: string;
+  photo_storage_path: string;
+  created_at?: string;
+}
+
+interface ReviewPhotoResponse {
+  id: string;
+  url: string;
+  created_at?: string;
+}
+
+interface TrailReviewWithPhotosRow {
+  id: string;
+  trail_id: string;
+  user_id: string;
+  rating: number;
+  title: string | null;
+  content: string;
+  created_at: string;
+  photos: ReviewPhotoResponse[] | null;
+}
+
 // Helper: Get Supabase storage client
 function getSupabaseStorageClient() {
   if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) {
@@ -331,28 +356,49 @@ export async function searchTrails(req: Request, res: Response): Promise<void> {
 
   try {
     console.log("[searchTrails] Step 1: Building query...");
-    const { q = "", difficulty, minLength = 0, maxLength = 1000 } = req.query;
+    const q = String(req.query.q ?? "").trim();
+    const difficulty = req.query.difficulty ? String(req.query.difficulty) : null;
+    const minLength = req.query.minLength != null ? Number(req.query.minLength) : null;
+    const maxLength = req.query.maxLength != null ? Number(req.query.maxLength) : null;
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 20));
+    const offset = (page - 1) * limit;
     const query = `
       SELECT
         ${getTrailSelectFields()}
       FROM trails
       WHERE is_active = true
         AND deleted_at IS NULL
-        AND (name ILIKE $1 OR description ILIKE $1 OR region ILIKE $1)
+        AND (
+          name ILIKE $1
+          OR description ILIKE $1
+          OR region ILIKE $1
+          OR tags::text ILIKE $1
+        )
         AND ($2::TEXT IS NULL OR difficulty = $2)
-        AND length_meters / 1000.0 BETWEEN $3 AND $4
+        AND ($3::numeric IS NULL OR length_meters / 1000.0 >= $3)
+        AND ($4::numeric IS NULL OR length_meters / 1000.0 <= $4)
       ORDER BY created_at DESC
+      LIMIT $5 OFFSET $6
     `;
 
     console.log("[searchTrails] Step 2: Executing query...");
-    const result = await pool.query(query, [`%${String(q)}%`, difficulty ?? null, Number(minLength), Number(maxLength)]);
+    const searchTerm = `%${q}%`;
+    const result = await pool.query(query, [searchTerm, difficulty, minLength, maxLength, limit, offset]);
     console.log("[searchTrails] Step 3: Query succeeded, rows:", result.rows.length);
 
     console.log("[searchTrails] Step 4: Formatting results...");
     const formattedTrails = result.rows.map(formatTrailForApp);
 
     console.log("[searchTrails] Step 5: Sending response...");
-    res.json({ data: formattedTrails });
+    res.json({
+      data: formattedTrails,
+      pagination: {
+        page,
+        limit,
+        count: formattedTrails.length,
+      },
+    });
   } catch (error) {
     console.error("[searchTrails] CATCH BLOCK ERROR:", error);
     console.error("[searchTrails] Error message:", error instanceof Error ? error.message : String(error));
@@ -557,7 +603,7 @@ export async function createTrail(req: Request, res: Response): Promise<void> {
       is_active
     ) VALUES (
       $1, $2, $3, $4, $5, $6, $7, $8,
-      ST_GeogFromText($9),
+      ST_GeomFromText($9, 4326),
       ST_GeogFromText($10),
       $11,
       $12
@@ -611,106 +657,218 @@ export async function createTrail(req: Request, res: Response): Promise<void> {
 }
 
 export async function getTrailReviews(req: Request, res: Response): Promise<void> {
-  const result = await pool.query(
-    `SELECT id, trail_id, user_id, rating, title, content, photo_url, created_at
-     FROM trail_reviews
-     WHERE trail_id = $1
-     ORDER BY created_at DESC`,
-    [req.params.id]
+  const trailId = getRequestId(req.params.id);
+  const result = await pool.query<TrailReviewWithPhotosRow>(
+    `SELECT
+       tr.*,
+       COALESCE(
+         json_agg(
+           json_build_object(
+             'id', rp.id,
+             'url', rp.photo_url,
+             'created_at', rp.created_at
+           )
+           ORDER BY rp.created_at ASC
+         ) FILTER (WHERE rp.id IS NOT NULL),
+         '[]'::json
+       ) AS photos
+     FROM trail_reviews tr
+     LEFT JOIN review_photos rp ON rp.review_id = tr.id
+     WHERE tr.trail_id = $1
+     GROUP BY tr.id
+     ORDER BY tr.created_at DESC`,
+    [trailId]
   );
-  res.json({ data: result.rows });
+
+  res.json({
+    data: result.rows.map((row) => ({
+      id: row.id,
+      trail_id: row.trail_id,
+      user_id: row.user_id,
+      rating: row.rating,
+      title: row.title,
+      content: row.content,
+      created_at: row.created_at,
+      photos: Array.isArray(row.photos) ? row.photos : [],
+    })),
+  });
 }
 
-export async function createTrailReview(req: Request & { file?: Express.Multer.File }, res: Response): Promise<void> {
+export async function createTrailReview(req: Request, res: Response): Promise<void> {
   console.log("[createTrailReview] ========== START ==========");
   console.log("[createTrailReview] 1. Trail ID:", req.params.id);
   console.log("[createTrailReview] 2. Request body:", JSON.stringify(req.body, null, 2));
   console.log("[createTrailReview] 3. Auth user:", (req as any).auth?.sub);
   console.log("[createTrailReview] 4. Content-Type:", req.get("content-type"));
   console.log("[createTrailReview] 5. Multipart request:", req.is("multipart/form-data"));
-  console.log("[createTrailReview] 6. Photo file:", req.file?.originalname ?? "none");
+  const files = (req.files as Express.Multer.File[] | undefined) ?? [];
+  console.log("[createTrailReview] Number of files:", files.length);
+  console.log("[createTrailReview] Step 1: Files received:", files.length);
+  console.log("[createTrailReview] Photo files:", files.map((file) => file.originalname));
 
   try {
     const auth = requireAuth(req);
-    console.log("[createTrailReview] 7. Auth passed, userId:", auth.sub);
+    console.log("[createTrailReview] Auth passed, userId:", auth.sub);
 
-    const trailId = req.params.id;
+    const trailId = getRequestId(req.params.id);
     const isMultipart = Boolean(req.is("multipart/form-data"));
     const parsedBody = createTrailReviewBodySchema.parse(req.body);
     const rating = parsedBody.rating;
     const title = parsedBody.title && parsedBody.title.length > 0 ? parsedBody.title : null;
     const content = parsedBody.content;
-    console.log("[createTrailReview] 8. Parsed values:", { rating, title, content, isMultipart });
+    console.log("[createTrailReview] Parsed values:", { rating, title, content, isMultipart });
 
-    let photoUrl: string | null = null;
-    let photoStoragePath: string | null = null;
-
-    if (req.file) {
-      if (!validReviewPhotoMimeTypes.includes(req.file.mimetype as (typeof validReviewPhotoMimeTypes)[number])) {
-        console.warn("[createTrailReview] Invalid review photo MIME type:", req.file.mimetype);
+    console.log("[createTrailReview] Step 2: Validating files...");
+    for (const [index, file] of files.entries()) {
+      if (!validReviewPhotoMimeTypes.includes(file.mimetype as (typeof validReviewPhotoMimeTypes)[number])) {
+        console.warn("[createTrailReview] Invalid review photo MIME type:", {
+          index,
+          originalname: file.originalname,
+          mimetype: file.mimetype,
+        });
         res.status(400).json({
           error: "Invalid file type",
-          details: "Only JPEG, PNG, GIF, and WebP images are allowed",
+          details: `Only JPEG, PNG, GIF, and WebP images are allowed. Invalid file: ${file.originalname}`,
         });
         return;
       }
 
-      if (req.file.size > maxReviewPhotoSizeBytes) {
-        console.warn("[createTrailReview] Review photo too large:", req.file.size);
+      if (file.size > maxReviewPhotoSizeBytes) {
+        console.warn("[createTrailReview] Review photo too large:", {
+          index,
+          originalname: file.originalname,
+          size: file.size,
+        });
         res.status(400).json({
           error: "File too large",
-          details: `Maximum file size is 5MB, got ${(req.file.size / 1024 / 1024).toFixed(2)}MB`,
+          details: `Maximum file size is 5MB. ${file.originalname} is ${(file.size / 1024 / 1024).toFixed(2)}MB`,
         });
         return;
-      }
-
-      const fileExtension = reviewPhotoExtensionByMimeType[req.file.mimetype as keyof typeof reviewPhotoExtensionByMimeType];
-      const storagePath = `${trailId}/${auth.sub}/${Date.now()}.${fileExtension}`;
-
-      try {
-        console.log("[createTrailReview] 9. Uploading review photo to Supabase Storage:", storagePath);
-        const supabase = getSupabaseStorageClient();
-        const { error: uploadError } = await supabase.storage
-          .from("review-photos")
-          .upload(storagePath, req.file.buffer, {
-            contentType: req.file.mimetype,
-            upsert: false,
-          });
-
-        if (uploadError) {
-          console.error("[createTrailReview] Review photo upload failed, continuing without photo:", uploadError);
-        } else {
-          const { data: urlData } = supabase.storage.from("review-photos").getPublicUrl(storagePath);
-          photoStoragePath = storagePath;
-          photoUrl = urlData?.publicUrl || null;
-          console.log("[createTrailReview] 10. Review photo uploaded successfully:", photoUrl);
-        }
-      } catch (uploadError) {
-        console.error("[createTrailReview] Review photo upload threw, continuing without photo:", uploadError);
       }
     }
 
-    console.log("[createTrailReview] 11. About to execute INSERT...");
+    const client = await pool.connect();
+    const uploadedStoragePaths: string[] = [];
 
-    const result = await pool.query(
-      `INSERT INTO trail_reviews (
-         trail_id,
-         user_id,
-         rating,
-         title,
-         content,
-         photo_url,
-         photo_storage_path,
-         created_at
-       )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
-       RETURNING id, photo_url`,
-      [trailId, auth.sub, rating, title, content, photoUrl, photoStoragePath]
-    );
+    try {
+      console.log("[createTrailReview] Starting database transaction...");
+      await client.query("BEGIN");
 
-    console.log("[createTrailReview] 12. INSERT successful, review ID:", result.rows[0].id);
+      console.log("[createTrailReview] Step 3: Inserting or updating review...");
+      const result = await client.query<{
+        id: string;
+        trail_id: string;
+        user_id: string;
+        rating: number;
+        title: string | null;
+        content: string;
+        created_at: string;
+        updated_at: string;
+      }>(
+        `INSERT INTO trail_reviews (
+           trail_id,
+           user_id,
+           rating,
+           title,
+           content,
+           created_at,
+           updated_at
+         )
+         VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+         ON CONFLICT (trail_id, user_id)
+         DO UPDATE SET
+           rating = EXCLUDED.rating,
+           title = EXCLUDED.title,
+           content = EXCLUDED.content,
+           updated_at = NOW()
+         RETURNING id, trail_id, user_id, rating, title, content, created_at, updated_at`,
+        [trailId, auth.sub, rating, title, content]
+      );
 
-    res.status(201).json({ data: { id: result.rows[0].id, photo_url: result.rows[0].photo_url } });
+      const review = result.rows[0];
+      const reviewId = review.id;
+      const uploadedPhotos: ReviewPhotoResponse[] = [];
+      console.log("[createTrailReview] Step 4: Review upserted with ID:", reviewId);
+
+      if (files.length > 0) {
+        const supabase = getSupabaseStorageClient();
+
+        for (const [index, file] of files.entries()) {
+          const fileExtension = reviewPhotoExtensionByMimeType[file.mimetype as keyof typeof reviewPhotoExtensionByMimeType];
+          const storagePath = `${trailId}/${reviewId}/${Date.now()}-${index}.${fileExtension}`;
+
+          console.log("[createTrailReview] Step 5: Uploading photo", index + 1, "of", files.length, "to:", storagePath);
+          const { error: uploadError } = await supabase.storage
+            .from("review-photos")
+            .upload(storagePath, file.buffer, {
+              contentType: file.mimetype,
+              upsert: false,
+            });
+
+          if (uploadError) {
+            console.error("[createTrailReview] Photo upload failed:", uploadError);
+            throw new Error(`Failed to upload review photo ${file.originalname}: ${uploadError.message}`);
+          }
+
+          uploadedStoragePaths.push(storagePath);
+          console.log("[createTrailReview] Step 6: Photo uploaded successfully:", storagePath);
+
+          const { data: urlData } = supabase.storage.from("review-photos").getPublicUrl(storagePath);
+          const photoResult = await client.query<ReviewPhotoRow>(
+            `INSERT INTO review_photos (
+               review_id,
+               user_id,
+               photo_url,
+               photo_storage_path
+             )
+             VALUES ($1, $2, $3, $4)
+             RETURNING id, user_id, photo_url, photo_storage_path, created_at`,
+            [reviewId, auth.sub, urlData?.publicUrl ?? "", storagePath]
+          );
+
+          const photo = photoResult.rows[0];
+          uploadedPhotos.push({
+            id: photo.id,
+            url: photo.photo_url,
+            created_at: photo.created_at,
+          });
+          console.log("[createTrailReview] Photo record inserted with ID:", photo.id);
+        }
+      }
+
+      console.log("[createTrailReview] Step 7: All photos uploaded, committing transaction");
+      await client.query("COMMIT");
+      console.log("[createTrailReview] Transaction committed successfully");
+
+      res.status(201).json({
+        data: {
+          ...review,
+          photos: uploadedPhotos,
+        },
+      });
+    } catch (transactionError) {
+      console.error("[createTrailReview] Transaction failed, rolling back:", transactionError);
+      await client.query("ROLLBACK");
+      console.log("[createTrailReview] Transaction rolled back");
+
+      if (uploadedStoragePaths.length > 0) {
+        console.log("[createTrailReview] Deleting uploaded storage objects after rollback:", uploadedStoragePaths);
+        const supabase = getSupabaseStorageClient();
+        const { error: cleanupError } = await supabase.storage
+          .from("review-photos")
+          .remove(uploadedStoragePaths);
+
+        if (cleanupError) {
+          console.error("[createTrailReview] Failed to clean up uploaded photos:", cleanupError);
+        } else {
+          console.log("[createTrailReview] Uploaded storage objects deleted after rollback");
+        }
+      }
+
+      throw transactionError;
+    } finally {
+      client.release();
+    }
   } catch (error) {
     console.error("[createTrailReview] ❌ ERROR CAUGHT:");
     console.error("[createTrailReview] Error object:", error);
@@ -730,6 +888,108 @@ export async function createTrailReview(req: Request & { file?: Express.Multer.F
     res.status(500).json({
       error: "Internal server error",
       details: error instanceof Error ? error.message : String(error)
+    });
+  }
+}
+
+export async function deleteReviewPhoto(req: Request, res: Response): Promise<void> {
+  console.log("[deleteReviewPhoto] ========== START ==========");
+  console.log("[deleteReviewPhoto] Photo ID:", req.params.id);
+
+  try {
+    const auth = requireAuth(req);
+    const photoId = getRequestId(req.params.id);
+    const authenticatedUserId = String(auth.sub).trim().toLowerCase();
+    console.log("[deleteReviewPhoto] Authenticated user ID:", authenticatedUserId);
+    console.log("[deleteReviewPhoto] Normalized photo ID:", photoId);
+
+    const photoResult = await pool.query<{
+      id: string;
+      photo_storage_path: string;
+      photo_user_id: string | null;
+      review_user_id: string;
+      trail_user_id: string | null;
+    }>(
+      `SELECT
+         rp.id,
+         rp.user_id AS photo_user_id,
+         rp.photo_storage_path,
+         tr.user_id AS review_user_id,
+         t.user_id AS trail_user_id
+       FROM review_photos rp
+       JOIN trail_reviews tr ON tr.id = rp.review_id
+       JOIN trails t ON t.id = tr.trail_id
+       WHERE rp.id = $1`,
+      [photoId]
+    );
+    console.log("[deleteReviewPhoto] Photo query row count:", photoResult.rows.length);
+
+    if (photoResult.rows.length === 0) {
+      console.warn("[deleteReviewPhoto] Review photo not found:", photoId);
+      res.status(404).json({ error: "Review photo not found" });
+      return;
+    }
+
+    const photo = photoResult.rows[0];
+    const photoUserId = photo.photo_user_id ? String(photo.photo_user_id).trim().toLowerCase() : null;
+    const reviewUserId = String(photo.review_user_id).trim().toLowerCase();
+    const trailUserId = photo.trail_user_id ? String(photo.trail_user_id).trim().toLowerCase() : null;
+
+    console.log("[deleteReviewPhoto] Authorization IDs:", {
+      authenticatedUserId,
+      photoUserId,
+      reviewUserId,
+      trailUserId,
+      rawPhotoUserId: photo.photo_user_id,
+      rawReviewUserId: photo.review_user_id,
+      rawTrailUserId: photo.trail_user_id,
+    });
+
+    const isPhotoOwner = photoUserId === authenticatedUserId;
+    const isReviewOwner = reviewUserId === authenticatedUserId;
+    const isTrailOwner = trailUserId === authenticatedUserId;
+    console.log("[deleteReviewPhoto] Authorization checks:", {
+      isPhotoOwner,
+      isReviewOwner,
+      isTrailOwner,
+    });
+
+    if (!isPhotoOwner && !isReviewOwner && !isTrailOwner) {
+      console.warn("[deleteReviewPhoto] Unauthorized delete attempt:", {
+        authenticatedUserId,
+        photoId,
+        photoUserId,
+        reviewUserId,
+        trailUserId,
+      });
+      res.status(403).json({ error: "Not authorized to delete this review photo" });
+      return;
+    }
+
+    console.log("[deleteReviewPhoto] Authorization passed. Deleting storage path:", photo.photo_storage_path);
+    const supabase = getSupabaseStorageClient();
+    const { error: storageError } = await supabase.storage
+      .from("review-photos")
+      .remove([photo.photo_storage_path]);
+
+    if (storageError) {
+      console.error("[deleteReviewPhoto] Storage deletion failed:", storageError);
+      res.status(500).json({ error: "Failed to delete review photo from storage", details: storageError.message });
+      return;
+    }
+
+    console.log("[deleteReviewPhoto] Storage object deleted. Deleting database row...");
+    await pool.query("DELETE FROM review_photos WHERE id = $1", [photoId]);
+
+    console.log("[deleteReviewPhoto] Review photo deleted successfully:", photoId);
+    res.json({ message: "Review photo deleted successfully" });
+  } catch (error) {
+    console.error("[deleteReviewPhoto] ERROR CAUGHT:", error);
+    console.error("[deleteReviewPhoto] Error message:", error instanceof Error ? error.message : String(error));
+    console.error("[deleteReviewPhoto] Error stack:", error instanceof Error ? error.stack : "No stack");
+    res.status(500).json({
+      error: "Internal server error",
+      details: error instanceof Error ? error.message : String(error),
     });
   }
 }
@@ -1382,30 +1642,31 @@ export async function getTrailPhotos(req: Request, res: Response): Promise<void>
     console.log("[getTrailPhotos] 1. Querying direct and review photos for trail...");
     const result = await pool.query(
       `SELECT 
-        tp.id,
-        tp.storage_path,
-        tp.caption,
-        tp.is_primary,
-        tp.created_at,
-        p.full_name as uploaded_by,
-        'direct' as source
-       FROM trail_photos tp
-       LEFT JOIN profiles p ON tp.user_id = p.user_id
-       WHERE tp.trail_id = $1
+         rp.id,
+         rp.photo_storage_path AS storage_path,
+         tr.title AS caption,
+         false AS is_primary,
+         rp.created_at,
+         p.full_name AS uploaded_by,
+         'review' AS source
+       FROM review_photos rp
+       JOIN trail_reviews tr ON tr.id = rp.review_id
+       LEFT JOIN profiles p ON rp.user_id = p.id
+       WHERE tr.trail_id = $1
 
        UNION ALL
 
        SELECT 
-        tr.id,
-        tr.photo_storage_path as storage_path,
-        tr.title as caption,
-        false as is_primary,
-        tr.created_at,
-        p.full_name as uploaded_by,
-        'review' as source
-       FROM trail_reviews tr
-       LEFT JOIN profiles p ON tr.user_id = p.user_id
-       WHERE tr.trail_id = $1 AND tr.photo_url IS NOT NULL
+         tp.id,
+         tp.storage_path,
+         tp.caption,
+         tp.is_primary,
+         tp.created_at,
+         p.full_name AS uploaded_by,
+         'direct' AS source
+       FROM trail_photos tp
+       LEFT JOIN profiles p ON tp.user_id = p.id
+       WHERE tp.trail_id = $1
 
        ORDER BY is_primary DESC, created_at DESC`,
       [trailId]
@@ -1416,7 +1677,8 @@ export async function getTrailPhotos(req: Request, res: Response): Promise<void>
     // Generate public URLs for each photo
     const supabase = getSupabaseStorageClient();
     const photosWithUrls = result.rows.map((photo) => {
-      const { data: urlData } = supabase.storage.from("trail-photos").getPublicUrl(photo.storage_path);
+      const bucket = photo.source === "review" ? "review-photos" : "trail-photos";
+      const { data: urlData } = supabase.storage.from(bucket).getPublicUrl(photo.storage_path);
       return {
         id: photo.id,
         url: urlData?.publicUrl || "",
