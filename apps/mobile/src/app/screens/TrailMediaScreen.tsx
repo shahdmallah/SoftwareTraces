@@ -16,7 +16,7 @@ import { Ionicons } from '@expo/vector-icons';
 import Svg, { Circle, Path } from 'react-native-svg';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { RootStackParamList } from '../navigation/types';
-import { getTrailById, type Trail } from '../api/trailsApi';
+import { getTrailById, getTrailPhotos, type Trail, type TrailPhoto } from '../api/trailsApi';
 import { buildGalleryImages } from '../utils/trailUtils';
 import { theme } from '../theme';
 
@@ -151,6 +151,7 @@ export function TrailMediaScreen() {
   const insets = useSafeAreaInsets();
   const { trailId } = route.params;
   const [trail, setTrail] = useState<Trail | null>(null);
+  const [trailPhotos, setTrailPhotos] = useState<TrailPhoto[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<MediaTab>('latest');
@@ -163,15 +164,20 @@ export function TrailMediaScreen() {
       setError(null);
 
       try {
-        const nextTrail = await getTrailById(trailId);
+        const [nextTrail, nextPhotos] = await Promise.all([
+          getTrailById(trailId),
+          getTrailPhotos(trailId).catch(() => []),
+        ]);
 
         if (!cancelled) {
           setTrail(nextTrail);
+          setTrailPhotos(nextPhotos);
         }
       } catch (nextError) {
         if (!cancelled) {
           setError(nextError instanceof Error ? nextError.message : 'Unable to load trail media.');
           setTrail(null);
+          setTrailPhotos([]);
         }
       } finally {
         if (!cancelled) {
@@ -188,12 +194,18 @@ export function TrailMediaScreen() {
   }, [trailId]);
 
   const galleryImages = useMemo(() => {
+    const endpointImages = trailPhotos.map((photo) => photo.url).filter(Boolean);
+
+    if (endpointImages.length) {
+      return endpointImages;
+    }
+
     if (!trail) {
       return [];
     }
 
     return buildGalleryImages(trail.images, trail.image);
-  }, [trail]);
+  }, [trail, trailPhotos]);
 
   const chartSeries = useMemo(() => buildProfileSeries(trail), [trail]);
   const fullChartPath = useMemo(() => buildChartPath(chartSeries, PROFILE_WIDTH, PROFILE_HEIGHT), [chartSeries]);

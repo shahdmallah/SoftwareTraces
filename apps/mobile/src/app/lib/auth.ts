@@ -249,6 +249,28 @@ export async function login(payload: LoginPayload): Promise<AuthSession> {
   });
 }
 
+export async function refresh(refreshToken: string): Promise<{ token: string }> {
+  return request<{ token: string }>('/api/auth/refresh', {
+    method: 'POST',
+    body: JSON.stringify({ refreshToken }),
+  });
+}
+
+export async function logout(): Promise<void> {
+  await request<void>('/api/auth/logout', {
+    method: 'POST',
+  });
+}
+
+export async function me(): Promise<{ user: AuthUser }> {
+  const token = await getAccessToken();
+
+  return request<{ user: AuthUser }>('/api/auth/me', {
+    method: 'GET',
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+  });
+}
+
 export function getApiBaseUrl() {
   return API_BASE_URL;
 }

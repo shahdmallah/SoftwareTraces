@@ -53,6 +53,23 @@ export type TrailReview = {
   title?: string | null;
   content: string;
   created_at: string;
+  photos?: Array<{ id: string; url: string; created_at?: string }>;
+};
+
+export type TrailPhoto = {
+  id: string;
+  url: string;
+  caption?: string | null;
+  is_primary?: boolean;
+  created_at?: string;
+  uploaded_by?: string | null;
+  source?: 'direct' | 'review';
+};
+
+export type ReactNativeFile = {
+  uri: string;
+  name: string;
+  type: string;
 };
 
 export type TrailCondition = {
@@ -90,6 +107,18 @@ export type TrailStatsResponse = {
   elevation_gain_meters: number;
   estimated_duration_minutes: number;
   difficulty: TrailDifficultyApi;
+};
+
+export type ElevationProfile = {
+  elevations: number[];
+  distances: number[];
+  total_gain: number;
+  total_loss: number;
+  min_elevation: number;
+  max_elevation: number;
+  start_elevation: number;
+  end_elevation: number;
+  warnings?: string[];
 };
 
 export type TrailBookmark = {
@@ -167,6 +196,10 @@ export async function createTrail(payload: {
   });
 }
 
+export async function pingTrails() {
+  return apiRequest<{ ok: boolean; message?: string }>('/api/trails/ping');
+}
+
 export async function getTrails(page?: number, limit?: number) {
   const response = await apiRequest<Envelope<Trail[]>>('/api/trails', {}, { page, limit });
   return response.data.map(normalizeTrail);
@@ -175,6 +208,11 @@ export async function getTrails(page?: number, limit?: number) {
 export async function getTrailById(id: string) {
   const response = await apiRequest<Envelope<Trail>>(`/api/trails/${id}`);
   return normalizeTrail(response.data);
+}
+
+export async function getTrailElevationProfile(id: string, params: { points?: number; simplify?: boolean } = {}) {
+  const response = await apiRequest<Envelope<ElevationProfile>>(`/api/trails/${id}/elevation-profile`, {}, params);
+  return response.data;
 }
 
 export async function updateTrail(id: string, payload: Partial<{
@@ -229,16 +267,72 @@ export async function getNearbyTrails(params: { lat: number; lng: number; radius
   return response.data.map(normalizeTrail);
 }
 
-export async function addTrailReview(id: string, payload: { rating: number; content: string }) {
+export async function addTrailReview(id: string, payload: { rating: number; content: string; title?: string; photos?: ReactNativeFile[] }) {
+  if (payload.photos?.length) {
+    const formData = new FormData();
+    formData.append('rating', String(payload.rating));
+    formData.append('content', payload.content);
+
+    if (payload.title) {
+      formData.append('title', payload.title);
+    }
+
+    payload.photos.forEach((photo) => {
+      formData.append('photos', photo as unknown as Blob);
+    });
+
+    return apiRequest<Envelope<{ id: string; photos?: TrailReview['photos'] }>>(`/api/trails/${id}/reviews`, {
+      method: 'POST',
+      body: formData,
+    });
+  }
+
   return apiRequest<Envelope<{ id: string }>>(`/api/trails/${id}/reviews`, {
     method: 'POST',
-    body: JSON.stringify(payload),
+    body: JSON.stringify({
+      rating: payload.rating,
+      content: payload.content,
+      ...(payload.title ? { title: payload.title } : {}),
+    }),
   });
 }
 
 export async function getTrailReviews(id: string) {
   const response = await apiRequest<Envelope<TrailReview[]>>(`/api/trails/${id}/reviews`);
   return response.data;
+}
+
+export async function getTrailPhotos(id: string) {
+  const response = await apiRequest<Envelope<TrailPhoto[]>>(`/api/trails/${id}/photos`);
+  return response.data;
+}
+
+export async function uploadTrailPhoto(id: string, payload: { photo: ReactNativeFile; caption?: string }) {
+  const formData = new FormData();
+  formData.append('photo', payload.photo as unknown as Blob);
+
+  if (payload.caption) {
+    formData.append('caption', payload.caption);
+  }
+
+  const response = await apiRequest<Envelope<{ id: string; url: string }>>(`/api/trails/${id}/photos`, {
+    method: 'POST',
+    body: formData,
+  });
+
+  return response.data;
+}
+
+export async function deleteReviewPhoto(photoId: string) {
+  return apiRequest<{ message: string }>(`/api/trails/review-photos/${photoId}`, { method: 'DELETE' });
+}
+
+export async function deleteTrailPhoto(photoId: string) {
+  return apiRequest<{ message: string }>(`/api/trails/photos/${photoId}`, { method: 'DELETE' });
+}
+
+export async function setPrimaryTrailPhoto(photoId: string) {
+  return apiRequest<{ message: string }>(`/api/trails/photos/${photoId}/primary`, { method: 'PATCH' });
 }
 
 export async function addTrailCondition(
