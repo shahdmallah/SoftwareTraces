@@ -52,8 +52,33 @@ function getPagination(query: Request["query"]) {
   return { page, limit, offset };
 }
 
+function logSocialError(functionName: string, error: unknown): void {
+  console.error(`[${functionName}] ERROR CAUGHT:`, error);
+  console.error(`[${functionName}] Error message:`, error instanceof Error ? error.message : String(error));
+  console.error(`[${functionName}] Error stack:`, error instanceof Error ? error.stack : "No stack");
+}
+
+function sendSocialError(functionName: string, res: Response, error: unknown): void {
+  logSocialError(functionName, error);
+
+  if (error instanceof HttpError) {
+    res.status(error.statusCode).json({
+      error: error.message,
+      details: `${functionName} failed: ${error.message}`,
+    });
+    return;
+  }
+
+  res.status(500).json({
+    error: `${functionName} failed`,
+    details: error instanceof Error ? error.message : String(error),
+  });
+}
+
 async function ensureProfileExists(userId: string): Promise<void> {
-  const result = await pool.query("SELECT user_id FROM profiles WHERE user_id = $1 OR id::text = $1", [userId]);
+  console.log("[ensureProfileExists] Checking userId:", userId);
+  const result = await pool.query("SELECT user_id FROM profiles WHERE user_id = $1::uuid OR id = $1::uuid", [userId]);
+  console.log("[ensureProfileExists] Rows found:", result.rows.length);
 
   if (result.rows.length === 0) {
     throw new HttpError(404, "User not found");
@@ -61,7 +86,9 @@ async function ensureProfileExists(userId: string): Promise<void> {
 }
 
 async function ensureReviewExists(reviewId: string): Promise<void> {
-  const result = await pool.query("SELECT id FROM trail_reviews WHERE id = $1", [reviewId]);
+  console.log("[ensureReviewExists] Checking reviewId:", reviewId);
+  const result = await pool.query("SELECT id FROM trail_reviews WHERE id = $1::uuid", [reviewId]);
+  console.log("[ensureReviewExists] Rows found:", result.rows.length);
 
   if (result.rows.length === 0) {
     throw new HttpError(404, "Review not found");
@@ -69,32 +96,41 @@ async function ensureReviewExists(reviewId: string): Promise<void> {
 }
 
 export async function getFollowers(req: Request, res: Response): Promise<void> {
-  try {
-    const targetUserId = getRequestId(req.params.id);
-    const { page, limit, offset } = getPagination(req.query);
+  const functionName = "getFollowers";
+  const targetUserId = getRequestId(req.params.id);
+  const { page, limit, offset } = getPagination(req.query);
+  console.log(`[social] getFollowers START - userId: ${targetUserId}`);
+  console.log("[getFollowers] Params:", { targetUserId, page, limit, offset, query: req.query });
 
+  try {
+    console.log("[getFollowers] Step 1: Checking profile exists...");
     await ensureProfileExists(targetUserId);
 
+    console.log("[getFollowers] Step 2: Counting followers...");
     const countResult = await pool.query<{ count: string }>(
-      "SELECT COUNT(*) AS count FROM user_follows WHERE following_id = $1",
+      "SELECT COUNT(*) AS count FROM user_follows WHERE following_id = $1::uuid",
       [targetUserId]
     );
     const total = parseInt(countResult.rows[0]?.count ?? "0", 10);
+    console.log("[getFollowers] Step 3: Followers count:", total);
 
+    console.log("[getFollowers] Step 4: Querying followers page...");
     const result = await pool.query<FollowProfileRow>(
       `SELECT
          p.user_id AS id,
          p.full_name,
          p.avatar_url
        FROM user_follows uf
-       JOIN profiles p ON p.user_id = uf.follower_id
-       WHERE uf.following_id = $1
+       JOIN profiles p ON p.id = uf.follower_id
+       WHERE uf.following_id = $1::uuid
        ORDER BY uf.created_at DESC
        LIMIT $2 OFFSET $3`,
       [targetUserId, limit, offset]
     );
+    console.log("[getFollowers] Step 5: Followers rows returned:", result.rows.length);
 
     res.json({
+      count: result.rows.length,
       data: result.rows,
       pagination: {
         page,
@@ -104,110 +140,108 @@ export async function getFollowers(req: Request, res: Response): Promise<void> {
       },
     });
   } catch (error) {
-    if (error instanceof HttpError) {
-      res.status(error.statusCode).json({ error: error.message });
-      return;
-    }
-
-    res.status(500).json({
-      error: "Internal server error",
-      details: error instanceof Error ? error.message : String(error),
-    });
+    sendSocialError(functionName, res, error);
   }
 }
 
 export async function followUser(req: Request, res: Response): Promise<void> {
+  const functionName = "followUser";
   try {
     const auth = requireAuth(req);
     const currentUserId = auth.sub;
     const targetUserId = getRequestId(req.params.id);
+    console.log(`[social] followUser START - targetUserId: ${targetUserId}, authUserId: ${currentUserId}`);
+    console.log("[followUser] Params:", { currentUserId, targetUserId, body: req.body });
 
     if (currentUserId === targetUserId) {
+      console.warn("[followUser] User attempted to follow themselves:", currentUserId);
       res.status(400).json({ error: "Users cannot follow themselves" });
       return;
     }
 
+    console.log("[followUser] Step 1: Checking target profile exists...");
     await ensureProfileExists(targetUserId);
 
+    console.log("[followUser] Step 2: Inserting follow row...");
     const result = await pool.query(
       `INSERT INTO user_follows (follower_id, following_id)
-       VALUES ($1, $2)
+       VALUES ($1::uuid, $2::uuid)
        ON CONFLICT DO NOTHING
        RETURNING follower_id`,
       [currentUserId, targetUserId]
     );
+    console.log("[followUser] Step 3: Insert rows returned:", result.rows.length);
 
     if (result.rows.length === 0) {
+      console.warn("[followUser] Already following:", { currentUserId, targetUserId });
       res.status(409).json({ error: "Already following this user" });
       return;
     }
 
-    res.status(201).json({ message: "User followed successfully" });
+    res.status(201).json({ message: "User followed successfully", data: { follower_id: currentUserId, following_id: targetUserId } });
   } catch (error) {
-    if (error instanceof HttpError) {
-      res.status(error.statusCode).json({ error: error.message });
-      return;
-    }
-
-    res.status(500).json({
-      error: "Internal server error",
-      details: error instanceof Error ? error.message : String(error),
-    });
+    sendSocialError(functionName, res, error);
   }
 }
 
 export async function unfollowUser(req: Request, res: Response): Promise<void> {
+  const functionName = "unfollowUser";
   try {
     const auth = requireAuth(req);
     const currentUserId = auth.sub;
     const targetUserId = getRequestId(req.params.id);
+    console.log(`[social] unfollowUser START - targetUserId: ${targetUserId}, authUserId: ${currentUserId}`);
+    console.log("[unfollowUser] Params:", { currentUserId, targetUserId });
 
-    await pool.query(
-      "DELETE FROM user_follows WHERE follower_id = $1 AND following_id = $2",
+    console.log("[unfollowUser] Step 1: Deleting follow row...");
+    const result = await pool.query(
+      "DELETE FROM user_follows WHERE follower_id = $1::uuid AND following_id = $2::uuid",
       [currentUserId, targetUserId]
     );
+    console.log("[unfollowUser] Step 2: Rows deleted:", result.rowCount);
 
-    res.json({ message: "User unfollowed successfully" });
+    res.json({ message: "User unfollowed successfully", deleted: result.rowCount ?? 0 });
   } catch (error) {
-    if (error instanceof HttpError) {
-      res.status(error.statusCode).json({ error: error.message });
-      return;
-    }
-
-    res.status(500).json({
-      error: "Internal server error",
-      details: error instanceof Error ? error.message : String(error),
-    });
+    sendSocialError(functionName, res, error);
   }
 }
 
 export async function getFollowing(req: Request, res: Response): Promise<void> {
-  try {
-    const targetUserId = getRequestId(req.params.id);
-    const { page, limit, offset } = getPagination(req.query);
+  const functionName = "getFollowing";
+  const targetUserId = getRequestId(req.params.id);
+  const { page, limit, offset } = getPagination(req.query);
+  console.log(`[social] getFollowing START - userId: ${targetUserId}`);
+  console.log("[getFollowing] Params:", { targetUserId, page, limit, offset, query: req.query });
 
+  try {
+    console.log("[getFollowing] Step 1: Checking profile exists...");
     await ensureProfileExists(targetUserId);
 
+    console.log("[getFollowing] Step 2: Counting following rows...");
     const countResult = await pool.query<{ count: string }>(
-      "SELECT COUNT(*) AS count FROM user_follows WHERE follower_id = $1",
+      "SELECT COUNT(*) AS count FROM user_follows WHERE follower_id = $1::uuid",
       [targetUserId]
     );
     const total = parseInt(countResult.rows[0]?.count ?? "0", 10);
+    console.log("[getFollowing] Step 3: Following count:", total);
 
+    console.log("[getFollowing] Step 4: Querying following page...");
     const result = await pool.query<FollowProfileRow>(
       `SELECT
          p.user_id AS id,
          p.full_name,
          p.avatar_url
        FROM user_follows uf
-       JOIN profiles p ON p.user_id = uf.following_id
-       WHERE uf.follower_id = $1
+       JOIN profiles p ON p.id = uf.following_id
+       WHERE uf.follower_id = $1::uuid
        ORDER BY uf.created_at DESC
        LIMIT $2 OFFSET $3`,
       [targetUserId, limit, offset]
     );
+    console.log("[getFollowing] Step 5: Following rows returned:", result.rows.length);
 
     res.json({
+      count: result.rows.length,
       data: result.rows,
       pagination: {
         page,
@@ -217,34 +251,32 @@ export async function getFollowing(req: Request, res: Response): Promise<void> {
       },
     });
   } catch (error) {
-    if (error instanceof HttpError) {
-      res.status(error.statusCode).json({ error: error.message });
-      return;
-    }
-
-    res.status(500).json({
-      error: "Internal server error",
-      details: error instanceof Error ? error.message : String(error),
-    });
+    sendSocialError(functionName, res, error);
   }
 }
 
 export async function getFeed(req: Request, res: Response): Promise<void> {
+  const functionName = "getFeed";
   try {
     const auth = requireAuth(req);
     const userId = auth.sub;
     const { page, limit, offset } = getPagination(req.query);
+    console.log(`[social] getFeed START - userId: ${userId}, page: ${page}, limit: ${limit}`);
+    console.log("[getFeed] Params:", { userId, page, limit, offset, query: req.query });
 
+    console.log("[getFeed] Step 1: Counting feed reviews from followed users...");
     const countResult = await pool.query<{ count: string }>(
       `SELECT COUNT(*) AS count
        FROM trail_reviews tr
        JOIN user_follows uf ON uf.following_id = tr.user_id
-       WHERE uf.follower_id = $1`,
+       WHERE uf.follower_id = $1::uuid`,
       [userId]
     );
 
     const total = parseInt(countResult.rows[0]?.count ?? "0", 10);
+    console.log("[getFeed] Step 2: Feed total count:", total);
 
+    console.log("[getFeed] Step 3: Querying feed rows...");
     const result = await pool.query<FeedReviewRow>(
       `SELECT
          tr.id,
@@ -287,7 +319,7 @@ export async function getFeed(req: Request, res: Response): Promise<void> {
            SELECT 1
            FROM review_likes review_like_lookup
            WHERE review_like_lookup.review_id = tr.id
-             AND review_like_lookup.user_id = $4
+             AND review_like_lookup.user_id = $4::uuid
          ) AS is_liked_by_user
        FROM trail_reviews tr
        JOIN user_follows uf ON uf.following_id = tr.user_id
@@ -295,13 +327,15 @@ export async function getFeed(req: Request, res: Response): Promise<void> {
        JOIN trails t ON t.id = tr.trail_id
        LEFT JOIN review_likes rl ON rl.review_id = tr.id
        LEFT JOIN review_comments rc ON rc.review_id = tr.id
-       WHERE uf.follower_id = $1
+       WHERE uf.follower_id = $1::uuid
        GROUP BY tr.id, p.user_id, p.full_name, p.avatar_url, t.id, t.name, t.image
        ORDER BY tr.created_at DESC
        LIMIT $2 OFFSET $3`,
       [userId, limit, offset, userId]
     );
+    console.log("[getFeed] Step 4: Feed rows returned:", result.rows.length);
 
+    console.log("[getFeed] Step 5: Formatting feed response...");
     res.json({
       data: result.rows.map((row) => ({
         id: row.id,
@@ -333,37 +367,36 @@ export async function getFeed(req: Request, res: Response): Promise<void> {
         pages: total === 0 ? 0 : Math.ceil(total / limit),
       },
     });
+    console.log("[getFeed] Step 6: Response sent");
   } catch (error) {
-    if (error instanceof HttpError) {
-      res.status(error.statusCode).json({ error: error.message });
-      return;
-    }
-
-    res.status(500).json({
-      error: "Internal server error",
-      details: error instanceof Error ? error.message : String(error),
-    });
+    sendSocialError(functionName, res, error);
   }
 }
 
 export async function addReviewComment(req: Request, res: Response): Promise<void> {
+  const functionName = "addReviewComment";
   try {
     const auth = requireAuth(req);
     const userId = auth.sub;
     const reviewId = getRequestId(req.params.id);
     const content = String(req.body.content ?? "").trim();
+    console.log(`[social] addReviewComment START - reviewId: ${reviewId}, userId: ${userId}, content: ${content}`);
+    console.log("[addReviewComment] Params:", { reviewId, userId, contentLength: content.length, body: req.body });
 
     if (content.length < 1 || content.length > 1000) {
+      console.warn("[addReviewComment] Invalid content length:", content.length);
       res.status(400).json({ error: "Content must be between 1 and 1000 characters" });
       return;
     }
 
+    console.log("[addReviewComment] Step 1: Checking review exists...");
     await ensureReviewExists(reviewId);
 
+    console.log("[addReviewComment] Step 2: Inserting comment and fetching profile...");
     const [commentResult, profileResult] = await Promise.all([
       pool.query<{ id: string; content: string; created_at: string }>(
         `INSERT INTO review_comments (review_id, user_id, content)
-         VALUES ($1, $2, $3)
+         VALUES ($1::uuid, $2::uuid, $3)
          RETURNING id, content, created_at`,
         [reviewId, userId, content]
       ),
@@ -373,10 +406,11 @@ export async function addReviewComment(req: Request, res: Response): Promise<voi
            full_name,
            avatar_url
          FROM profiles
-         WHERE user_id = $1`,
+         WHERE id = $1::uuid`,
         [userId]
       ),
     ]);
+    console.log("[addReviewComment] Step 3: Insert rows:", commentResult.rows.length, "Profile rows:", profileResult.rows.length);
 
     if (profileResult.rows.length === 0) {
       throw new HttpError(404, "User not found");
@@ -394,29 +428,27 @@ export async function addReviewComment(req: Request, res: Response): Promise<voi
         },
       },
     });
+    console.log("[addReviewComment] Step 4: Response sent for comment:", commentResult.rows[0].id);
   } catch (error) {
-    if (error instanceof HttpError) {
-      res.status(error.statusCode).json({ error: error.message });
-      return;
-    }
-
-    res.status(500).json({
-      error: "Internal server error",
-      details: error instanceof Error ? error.message : String(error),
-    });
+    sendSocialError(functionName, res, error);
   }
 }
 
 export async function getReviewComments(req: Request, res: Response): Promise<void> {
-  try {
-    const reviewId = getRequestId(req.params.id);
-    const { page, limit, offset } = getPagination(req.query);
+  const functionName = "getReviewComments";
+  const reviewId = getRequestId(req.params.id);
+  const { page, limit, offset } = getPagination(req.query);
+  console.log(`[social] getReviewComments START - reviewId: ${reviewId}`);
+  console.log("[getReviewComments] Params:", { reviewId, page, limit, offset, query: req.query });
 
+  try {
+    console.log("[getReviewComments] Step 1: Checking review exists...");
     await ensureReviewExists(reviewId);
 
+    console.log("[getReviewComments] Step 2: Counting and querying comments...");
     const [countResult, result] = await Promise.all([
       pool.query<{ count: string }>(
-        "SELECT COUNT(*) AS count FROM review_comments WHERE review_id = $1",
+        "SELECT COUNT(*) AS count FROM review_comments WHERE review_id = $1::uuid",
         [reviewId]
       ),
       pool.query<ReviewCommentRow>(
@@ -428,8 +460,8 @@ export async function getReviewComments(req: Request, res: Response): Promise<vo
            p.full_name,
            p.avatar_url
          FROM review_comments rc
-         JOIN profiles p ON p.user_id = rc.user_id
-         WHERE rc.review_id = $1
+         JOIN profiles p ON p.id = rc.user_id
+         WHERE rc.review_id = $1::uuid
          ORDER BY rc.created_at ASC
          LIMIT $2 OFFSET $3`,
         [reviewId, limit, offset]
@@ -437,8 +469,10 @@ export async function getReviewComments(req: Request, res: Response): Promise<vo
     ]);
 
     const total = parseInt(countResult.rows[0]?.count ?? "0", 10);
+    console.log("[getReviewComments] Step 3: Total:", total, "Rows returned:", result.rows.length);
 
     res.json({
+      count: result.rows.length,
       data: result.rows.map((row) => ({
         id: row.id,
         content: row.content,
@@ -457,137 +491,122 @@ export async function getReviewComments(req: Request, res: Response): Promise<vo
       },
     });
   } catch (error) {
-    if (error instanceof HttpError) {
-      res.status(error.statusCode).json({ error: error.message });
-      return;
-    }
-
-    res.status(500).json({
-      error: "Internal server error",
-      details: error instanceof Error ? error.message : String(error),
-    });
+    sendSocialError(functionName, res, error);
   }
 }
 
 export async function deleteReviewComment(req: Request, res: Response): Promise<void> {
+  const functionName = "deleteReviewComment";
   try {
     const auth = requireAuth(req);
     const userId = auth.sub;
     const commentId = getRequestId(req.params.id);
+    console.log(`[social] deleteReviewComment START - commentId: ${commentId}, userId: ${userId}`);
+    console.log("[deleteReviewComment] Params:", { commentId, userId });
 
-    const commentResult = await pool.query<{
-      id: string;
-      user_id: string;
-      review_owner_id: string;
-    }>(
-      `SELECT
-         rc.id,
-         rc.user_id,
-         tr.user_id AS review_owner_id
-       FROM review_comments rc
-       JOIN trail_reviews tr ON tr.id = rc.review_id
-       WHERE rc.id = $1`,
-      [commentId]
+    console.log("[deleteReviewComment] Step 1: Deleting comment owned by user...");
+    const deleteResult = await pool.query<{ id: string }>(
+      "DELETE FROM review_comments WHERE id = $1::uuid AND user_id = $2::uuid RETURNING id",
+      [commentId, userId]
     );
+    console.log("[deleteReviewComment] Step 2: Rows deleted:", deleteResult.rowCount);
 
-    if (commentResult.rows.length === 0) {
+    if ((deleteResult.rowCount ?? 0) > 0) {
+      res.json({ message: "Comment deleted successfully", deleted: deleteResult.rowCount });
+      return;
+    }
+
+    console.log("[deleteReviewComment] Step 3: Delete returned no rows, checking if comment exists...");
+    const existsResult = await pool.query("SELECT id, user_id FROM review_comments WHERE id = $1::uuid", [commentId]);
+    console.log("[deleteReviewComment] Step 4: Existing comment rows:", existsResult.rows.length);
+
+    if (existsResult.rows.length === 0) {
       res.status(404).json({ error: "Comment not found" });
       return;
     }
 
-    const comment = commentResult.rows[0];
-
-    if (comment.user_id !== userId && comment.review_owner_id !== userId) {
-      res.status(403).json({ error: "Not authorized to delete this comment" });
-      return;
-    }
-
-    await pool.query("DELETE FROM review_comments WHERE id = $1", [commentId]);
-
-    res.json({ message: "Comment deleted successfully" });
-  } catch (error) {
-    if (error instanceof HttpError) {
-      res.status(error.statusCode).json({ error: error.message });
-      return;
-    }
-
-    res.status(500).json({
-      error: "Internal server error",
-      details: error instanceof Error ? error.message : String(error),
+    console.warn("[deleteReviewComment] User is not comment owner:", {
+      commentId,
+      authUserId: userId,
+      commentUserId: existsResult.rows[0].user_id,
     });
+    res.status(403).json({ error: "Not authorized to delete this comment", details: "Only the comment author can delete this comment." });
+  } catch (error) {
+    sendSocialError(functionName, res, error);
   }
 }
 
 export async function likeReview(req: Request, res: Response): Promise<void> {
+  const functionName = "likeReview";
   try {
     const auth = requireAuth(req);
     const userId = auth.sub;
     const reviewId = getRequestId(req.params.id);
+    console.log(`[social] likeReview START - reviewId: ${reviewId}, userId: ${userId}`);
+    console.log("[likeReview] Params:", { reviewId, userId });
 
+    console.log("[likeReview] Step 1: Checking review exists...");
     await ensureReviewExists(reviewId);
 
+    console.log("[likeReview] Step 2: Inserting like...");
     const result = await pool.query(
       `INSERT INTO review_likes (review_id, user_id)
-       VALUES ($1, $2)
+       VALUES ($1::uuid, $2::uuid)
        ON CONFLICT DO NOTHING
        RETURNING id`,
       [reviewId, userId]
     );
+    console.log("[likeReview] Step 3: Insert rows returned:", result.rows.length);
 
     if (result.rows.length === 0) {
+      console.warn("[likeReview] Review already liked:", { reviewId, userId });
       res.status(409).json({ error: "Review already liked" });
       return;
     }
 
-    res.status(201).json({ message: "Review liked successfully" });
+    res.status(201).json({ message: "Review liked successfully", data: { review_id: reviewId, user_id: userId } });
   } catch (error) {
-    if (error instanceof HttpError) {
-      res.status(error.statusCode).json({ error: error.message });
-      return;
-    }
-
-    res.status(500).json({
-      error: "Internal server error",
-      details: error instanceof Error ? error.message : String(error),
-    });
+    sendSocialError(functionName, res, error);
   }
 }
 
 export async function unlikeReview(req: Request, res: Response): Promise<void> {
+  const functionName = "unlikeReview";
   try {
     const auth = requireAuth(req);
     const userId = auth.sub;
     const reviewId = getRequestId(req.params.id);
+    console.log(`[social] unlikeReview START - reviewId: ${reviewId}, userId: ${userId}`);
+    console.log("[unlikeReview] Params:", { reviewId, userId });
 
-    await pool.query(
-      "DELETE FROM review_likes WHERE review_id = $1 AND user_id = $2",
+    console.log("[unlikeReview] Step 1: Deleting like...");
+    const result = await pool.query(
+      "DELETE FROM review_likes WHERE review_id = $1::uuid AND user_id = $2::uuid",
       [reviewId, userId]
     );
+    console.log("[unlikeReview] Step 2: Rows deleted:", result.rowCount);
 
-    res.json({ message: "Review unliked successfully" });
+    res.json({ message: "Review unliked successfully", deleted: result.rowCount ?? 0 });
   } catch (error) {
-    if (error instanceof HttpError) {
-      res.status(error.statusCode).json({ error: error.message });
-      return;
-    }
-
-    res.status(500).json({
-      error: "Internal server error",
-      details: error instanceof Error ? error.message : String(error),
-    });
+    sendSocialError(functionName, res, error);
   }
 }
 
 export async function getReviewLikes(req: Request, res: Response): Promise<void> {
-  try {
-    const reviewId = getRequestId(req.params.id);
-    const { page, limit, offset } = getPagination(req.query);
+  const functionName = "getReviewLikes";
+  const reviewId = getRequestId(req.params.id);
+  const { page, limit, offset } = getPagination(req.query);
+  console.log(`[social] getReviewLikes START - reviewId: ${reviewId}`);
+  console.log("[getReviewLikes] Params:", { reviewId, page, limit, offset, query: req.query });
 
+  try {
+    console.log("[getReviewLikes] Step 1: Checking review exists...");
     await ensureReviewExists(reviewId);
 
+    console.log("[getReviewLikes] Step 2: Counting and querying likes...");
     const [countResult, result] = await Promise.all([
       pool.query<{ count: string }>(
-        "SELECT COUNT(*) AS count FROM review_likes WHERE review_id = $1",
+        "SELECT COUNT(*) AS count FROM review_likes WHERE review_id = $1::uuid",
         [reviewId]
       ),
       pool.query<FollowProfileRow>(
@@ -596,8 +615,8 @@ export async function getReviewLikes(req: Request, res: Response): Promise<void>
            p.full_name,
            p.avatar_url
          FROM review_likes rl
-         JOIN profiles p ON p.user_id = rl.user_id
-         WHERE rl.review_id = $1
+         JOIN profiles p ON p.id = rl.user_id
+         WHERE rl.review_id = $1::uuid
          ORDER BY rl.created_at DESC
          LIMIT $2 OFFSET $3`,
         [reviewId, limit, offset]
@@ -605,8 +624,10 @@ export async function getReviewLikes(req: Request, res: Response): Promise<void>
     ]);
 
     const total = parseInt(countResult.rows[0]?.count ?? "0", 10);
+    console.log("[getReviewLikes] Step 3: Total:", total, "Rows returned:", result.rows.length);
 
     res.json({
+      count: result.rows.length,
       data: result.rows,
       pagination: {
         page,
@@ -616,15 +637,7 @@ export async function getReviewLikes(req: Request, res: Response): Promise<void>
       },
     });
   } catch (error) {
-    if (error instanceof HttpError) {
-      res.status(error.statusCode).json({ error: error.message });
-      return;
-    }
-
-    res.status(500).json({
-      error: "Internal server error",
-      details: error instanceof Error ? error.message : String(error),
-    });
+    sendSocialError(functionName, res, error);
   }
 }
 
