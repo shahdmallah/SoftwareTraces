@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
@@ -6,7 +6,8 @@ import { StackNavigationProp } from '@react-navigation/stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
-import { friends, messageThreads } from '../data/activitySocial';
+import { getFollowers, getFollowing, type SocialProfile } from '../api/socialApi';
+import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { RootStackParamList } from '../navigation/types';
 import { ltrRow, ltrText, rtlRow, rtlText } from '../utils/direction';
@@ -19,30 +20,50 @@ export function ActivityThreadScreen() {
   const navigation = useNavigation<ThreadNavigationProp>();
   const insets = useSafeAreaInsets();
   const { language } = useLanguage();
+  const { user } = useAuth();
   const isArabic = language === 'ar';
   const [draft, setDraft] = useState('');
+  const [contacts, setContacts] = useState<SocialProfile[]>([]);
 
-  const thread = messageThreads.find((item) => item.id === route.params.threadId);
-  const friend = friends.find((item) => item.id === (route.params.friendId ?? thread?.friendId)) ?? friends[0];
+  useEffect(() => {
+    let cancelled = false;
+    if (!user?.id) {
+      setContacts([]);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const loadContacts = async () => {
+      try {
+        const [followingResponse, followersResponse] = await Promise.all([
+          getFollowing(user.id, { page: 1, limit: 40 }).catch(() => ({ data: [] as SocialProfile[] })),
+          getFollowers(user.id, { page: 1, limit: 40 }).catch(() => ({ data: [] as SocialProfile[] })),
+        ]);
+        if (!cancelled) {
+          const merged = [...followingResponse.data, ...followersResponse.data];
+          const unique = Array.from(new Map(merged.map((profile) => [profile.id, profile])).values());
+          setContacts(unique);
+        }
+      } catch {
+        if (!cancelled) setContacts([]);
+      }
+    };
+
+    void loadContacts();
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id]);
+
+  const friend = useMemo(
+    () => contacts.find((item) => item.id === route.params.friendId) ?? contacts[0],
+    [contacts, route.params.friendId],
+  );
 
   const messages = useMemo(
-    () => [
-      {
-        id: 'm1',
-        mine: false,
-        bodyEn: thread?.previewEn ?? friend.statusEn,
-        bodyAr: thread?.previewAr ?? friend.statusAr,
-        time: thread?.time ?? 'Now',
-      },
-      {
-        id: 'm2',
-        mine: true,
-        bodyEn: 'That sounds perfect. Send me the trail and best meeting point.',
-        bodyAr: 'ممتاز. أرسل لي المسار وأفضل نقطة لقاء.',
-        time: 'Now',
-      },
-    ],
-    [friend.statusAr, friend.statusEn, thread?.previewAr, thread?.previewEn, thread?.time],
+    () => [],
+    [],
   );
 
   return (
@@ -51,18 +72,27 @@ export function ActivityThreadScreen() {
         <Pressable style={styles.iconButton} onPress={() => navigation.goBack()}>
           <Ionicons name={isArabic ? 'chevron-forward' : 'chevron-back'} size={20} color="#2C2418" />
         </Pressable>
-        <Image source={{ uri: friend.avatar }} style={styles.avatar} />
+        <Image source={{ uri: friend?.avatar_url ?? '' }} style={styles.avatar} />
         <View style={styles.headerCopy}>
           <Text style={[styles.title, isArabic ? rtlText : ltrText]} numberOfLines={1}>
-            {friend.name}
+            {friend?.full_name ?? (isArabic ? 'محادثة' : 'Conversation')}
           </Text>
           <Text style={[styles.subtitle, isArabic ? rtlText : ltrText]} numberOfLines={1}>
-            {friend.handle}
+            {friend ? `@${friend.full_name.toLowerCase().replace(/\s+/g, '.')}` : ''}
           </Text>
         </View>
       </View>
 
       <ScrollView contentContainerStyle={styles.messages} showsVerticalScrollIndicator={false}>
+        {!messages.length ? (
+          <AnimatedBlock delay={80}>
+            <View style={styles.theirBubble}>
+              <Text style={[styles.bubbleText, isArabic ? rtlText : ltrText]}>
+                {isArabic ? 'لا توجد رسائل بعد. ابدأ المحادثة.' : 'No messages yet. Start the conversation.'}
+              </Text>
+            </View>
+          </AnimatedBlock>
+        ) : null}
         {messages.map((message, index) => (
           <AnimatedBlock key={message.id} delay={70 + index * 45}>
             <View style={[styles.bubble, message.mine ? styles.myBubble : styles.theirBubble]}>

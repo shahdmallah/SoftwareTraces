@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -15,17 +15,8 @@ import { useLanguage, TranslationKey } from '../contexts/LanguageContext';
 import { useAuth } from '../contexts/AuthContext';
 import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-
-const achievements = [
-  { id: 'a1', emoji: '🦅', nameAr: 'صقر الجبال', nameEn: 'Mountain Hawk', earned: true, points: 100, description: 'Completed 5 mountain trails' },
-  { id: 'a2', emoji: '🫒', nameAr: 'حارس الزيتون', nameEn: 'Olive Guardian', earned: true, points: 150, description: 'Protected 10 olive trees' },
-  { id: 'a3', emoji: '🌊', nameAr: 'ابن البحر الميت', nameEn: 'Dead Sea Explorer', earned: true, points: 200, description: 'Explored Dead Sea region' },
-  { id: 'a4', emoji: '⭐', nameAr: 'نجم الفجر', nameEn: 'Dawn Star', earned: true, points: 120, description: 'Started 10 hikes at dawn' },
-  { id: 'a5', emoji: '🗺️', nameAr: 'المستكشف', nameEn: 'Trail Seeker', earned: false, points: 80, description: 'Discover 15 different trails', progress: 8, target: 15 },
-  { id: 'a6', emoji: '🏆', nameAr: 'بطل المسارات', nameEn: 'Trail Champion', earned: false, points: 300, description: 'Complete all major trails', progress: 3, target: 10 },
-  { id: 'a7', emoji: '🌙', nameAr: 'محارب رمضان', nameEn: 'Ramadan Warrior', earned: false, points: 100, description: 'Complete Ramadan challenge', progress: 15, target: 30 },
-  { id: 'a8', emoji: '🤝', nameAr: 'الجماعة', nameEn: 'Community Builder', earned: false, points: 250, description: 'Join 5 community events', progress: 2, target: 5 },
-];
+import { getUserAchievements, type UserAchievement } from '../api/achievementsApi';
+import { getUserActivities, type Activity } from '../api/activitiesApi';
 
 type SettingItem = {
   id: string;
@@ -38,6 +29,17 @@ type SettingItem = {
 const settings: SettingItem[] = [
   { id: 's5', icon: 'settings-outline', labelKey: 'settingGeneral' },
 ];
+
+const achievementEmojis = ['🏆', '🗺️', '🥾', '🌿', '⛰️', '⭐', '🔥', '🎯'];
+
+type ProfileAchievement = {
+  id: string;
+  name: string;
+  earned: boolean;
+  progress?: number;
+  points: number;
+  emoji: string;
+};
 
 type ProfileNavigationProp = StackNavigationProp<RootStackParamList>;
 
@@ -54,6 +56,8 @@ export function ProfileScreen() {
     .slice(0, 2)
     .map((part) => part[0]?.toUpperCase() ?? '')
     .join('') || 'TR';
+  const [achievements, setAchievements] = useState<ProfileAchievement[]>([]);
+  const [activities, setActivities] = useState<Activity[]>([]);
 
   if (!isAuthenticated || !user) {
     return (
@@ -77,15 +81,72 @@ export function ProfileScreen() {
     );
   }
 
-  const earnedCount = achievements.filter(a => a.earned).length;
-  const progress = (earnedCount / achievements.length) * 100;
-  const nextAchievement = achievements.find(a => !a.earned);
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!user?.id) {
+      setAchievements([]);
+      setActivities([]);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const loadProfileData = async () => {
+      try {
+        const [userAchievements, userActivities] = await Promise.all([
+          getUserAchievements(user.id).catch(() => [] as UserAchievement[]),
+          getUserActivities(user.id).catch(() => [] as Activity[]),
+        ]);
+
+        if (!cancelled) {
+          setAchievements(
+            userAchievements.map((achievement, index) => ({
+              id: achievement.id,
+              name: achievement.title || achievement.name || 'Achievement',
+              earned: Boolean(achievement.earned_at),
+              progress: typeof achievement.progress === 'number' ? achievement.progress : undefined,
+              points: achievement.points ?? 0,
+              emoji: achievementEmojis[index % achievementEmojis.length],
+            })),
+          );
+          setActivities(userActivities);
+        }
+      } catch {
+        if (!cancelled) {
+          setAchievements([]);
+          setActivities([]);
+        }
+      }
+    };
+
+    void loadProfileData();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id]);
+
+  const earnedCount = achievements.filter((a) => a.earned).length;
+  const progress = achievements.length ? (earnedCount / achievements.length) * 100 : 0;
+  const nextAchievement = achievements.find((a) => !a.earned);
+  const totalDistance = activities.reduce((sum, activity) => sum + (activity.distance_km ?? 0), 0);
+  const completedTrips = activities.filter((activity) => activity.status === 'completed').length;
+  const totalDurationHours = useMemo(() => {
+    return activities.reduce((sum, activity) => {
+      if (!activity.started_at || !activity.ended_at) return sum;
+      const started = new Date(activity.started_at).getTime();
+      const ended = new Date(activity.ended_at).getTime();
+      if (!Number.isFinite(started) || !Number.isFinite(ended) || ended <= started) return sum;
+      return sum + (ended - started) / 3600000;
+    }, 0);
+  }, [activities]);
 
   const triggerFeedback = (pattern?: number | number[]) => {
     Vibration.vibrate(pattern ?? 10);
   };
 
-  const handleAchievementPress = (achievement: typeof achievements[0]) => {
+  const handleAchievementPress = (achievement: ProfileAchievement) => {
     if (achievement.earned) {
       triggerFeedback(10);
       // Show achievement details modal
@@ -135,17 +196,17 @@ export function ProfileScreen() {
                 </Text>
               </View>
             </View>
-            <Pressable style={[styles.editButton, isArabic && styles.editButtonRtl]}>
+            <Pressable style={[styles.editButton, isArabic && styles.editButtonRtl]} onPress={() => navigation.navigate('EditProfile')}>
               <Text style={styles.editButtonText}>{t('edit')}</Text>
             </Pressable>
           </View>
           
           {/* Enhanced Stats Cards */}
           <View style={[styles.profileStatsRow, isArabic && styles.rowReverse]}>
-            {[
-              { value: '36.0', unit: 'km', labelKey: 'profileTotalDistance', icon: 'map-outline' },
-              { value: '4', unit: '', labelKey: 'profileCompletedTrips', icon: 'checkmark-circle-outline' },
-              { value: '4', unit: '', labelKey: 'profileBadges', icon: 'ribbon-outline' },
+              {[
+              { value: totalDistance.toFixed(1), unit: 'km', labelKey: 'profileTotalDistance', icon: 'map-outline' },
+              { value: String(completedTrips), unit: '', labelKey: 'profileCompletedTrips', icon: 'checkmark-circle-outline' },
+              { value: String(earnedCount), unit: '', labelKey: 'profileBadges', icon: 'ribbon-outline' },
             ].map((item, index) => (
               <Pressable
                 key={item.labelKey}
@@ -232,9 +293,7 @@ export function ProfileScreen() {
                           ]} 
                         />
                       </View>
-                      <Text style={styles.achievementProgressText}>
-                        {achievement.progress}/{achievement.target}
-                      </Text>
+                      <Text style={styles.achievementProgressText}>{Math.max(0, Math.min(100, Math.round(achievement.progress)))}%</Text>
                     </View>
                   )}
                 </View>
@@ -254,19 +313,19 @@ export function ProfileScreen() {
                 <Text style={styles.featuredEmoji}>{nextAchievement.emoji}</Text>
                 <View style={styles.featuredInfo}>
                   <Text style={[styles.featuredName, isArabic && styles.textRtl]}>
-                    {isArabic ? nextAchievement.nameAr : nextAchievement.nameEn}
+                    {nextAchievement.name}
                   </Text>
                   <View style={styles.featuredProgressContainer}>
                     <View style={styles.featuredProgressBar}>
                       <View
                         style={[
                           styles.featuredProgressFill,
-                          { width: `${((nextAchievement.progress || 0) / (nextAchievement.target || 1)) * 100}%` }
+                          { width: `${Math.max(0, Math.min(100, nextAchievement.progress || 0))}%` }
                         ]}
                       />
                     </View>
                     <Text style={styles.featuredProgressText}>
-                      {nextAchievement.progress || 0}/{nextAchievement.target}
+                      {Math.max(0, Math.min(100, Math.round(nextAchievement.progress || 0)))}%
                     </Text>
                   </View>
                 </View>
@@ -359,7 +418,7 @@ export function ProfileScreen() {
         </AnimatedBlock>
 
         {/* Version Info */}
-        <Text style={styles.versionText}>Version 2.0.0</Text>
+        <Text style={styles.versionText}>Hike time: {totalDurationHours.toFixed(1)}h</Text>
       </ScrollView>
     </AnimatedScreen>
   );

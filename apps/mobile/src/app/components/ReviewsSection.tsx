@@ -1,10 +1,22 @@
 import React, { useMemo, useState } from 'react';
-import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Image, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
 import { ltrRow, ltrText, rtlRow, rtlText } from '../utils/direction';
-import { addTrailReview, type TrailReview } from '../api/trailsApi';
+import { addTrailReview, type ReactNativeFile, type TrailReview } from '../api/trailsApi';
+import { ReviewPhotoStrip } from './ReviewPhotoStrip';
 
 type ReviewSort = 'recent' | 'helpful' | 'highest';
+type ReviewDraftPhoto = ReactNativeFile & { id: string };
+
+const reviewLabelOptions = [
+  { id: 'great-views', label: 'Great views', icon: 'sunny-outline' as const },
+  { id: 'family-friendly', label: 'Family friendly', icon: 'people-outline' as const },
+  { id: 'muddy', label: 'Muddy', icon: 'water-outline' as const },
+  { id: 'steep', label: 'Steep', icon: 'trending-up-outline' as const },
+  { id: 'well-marked', label: 'Well marked', icon: 'trail-sign-outline' as const },
+  { id: 'quiet', label: 'Quiet', icon: 'leaf-outline' as const },
+];
 
 interface ReviewsSectionProps {
   reviews: TrailReview[];
@@ -38,6 +50,26 @@ function getHelpfulSeed(review: TrailReview) {
   return (base % 9) + Math.max(0, Math.round(Number(review.rating) || 0) - 3);
 }
 
+function buildReviewPhoto(asset: ImagePicker.ImagePickerAsset): ReviewDraftPhoto {
+  const extension = asset.uri.split('.').pop()?.split('?')[0]?.toLowerCase() || 'jpg';
+  const mimeExtension = extension === 'jpg' ? 'jpeg' : extension;
+
+  return {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    uri: asset.uri,
+    name: asset.fileName ?? `review-photo-${Date.now()}.${extension}`,
+    type: asset.mimeType ?? `image/${mimeExtension}`,
+  };
+}
+
+function addLabelsToContent(content: string, labels: string[]) {
+  if (!labels.length) {
+    return content;
+  }
+
+  return `${content}\n\nLabels: ${labels.join(', ')}`;
+}
+
 export function ReviewsSection({
   reviews,
   trailId,
@@ -54,6 +86,8 @@ export function ReviewsSection({
   const [isReviewModalOpen, setIsReviewModalOpen] = useState(false);
   const [draftRating, setDraftRating] = useState(5);
   const [draftReview, setDraftReview] = useState('');
+  const [draftPhotos, setDraftPhotos] = useState<ReviewDraftPhoto[]>([]);
+  const [draftLabels, setDraftLabels] = useState<string[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
 
@@ -92,6 +126,67 @@ export function ReviewsSection({
     setIsReviewModalOpen(true);
   };
 
+  const handleCloseReviewModal = () => {
+    if (isSubmitting) {
+      return;
+    }
+
+    setIsReviewModalOpen(false);
+    setErrorMessage('');
+  };
+
+  const handlePickReviewPhotos = async (source: 'camera' | 'library') => {
+    const remainingSlots = Math.max(0, 4 - draftPhotos.length);
+
+    if (!remainingSlots) {
+      setErrorMessage(isArabic ? 'يمكنك إضافة 4 صور كحد أقصى.' : 'You can add up to 4 photos.');
+      return;
+    }
+
+    try {
+      const permission = source === 'camera'
+        ? await ImagePicker.requestCameraPermissionsAsync()
+        : await ImagePicker.requestMediaLibraryPermissionsAsync();
+
+      if (!permission.granted) {
+        setErrorMessage(
+          source === 'camera'
+            ? isArabic
+              ? 'نحتاج إذن الكاميرا لإضافة صورة.'
+              : 'Camera permission is needed to add a photo.'
+            : isArabic
+            ? 'نحتاج إذن مكتبة الصور لإضافة صورة.'
+            : 'Photo library permission is needed to add a photo.',
+        );
+        return;
+      }
+
+      const result = source === 'camera'
+        ? await ImagePicker.launchCameraAsync({
+            allowsEditing: false,
+            quality: 0.75,
+            mediaTypes: ['images'],
+          })
+        : await ImagePicker.launchImageLibraryAsync({
+            allowsEditing: false,
+            allowsMultipleSelection: true,
+            selectionLimit: remainingSlots,
+            quality: 0.75,
+            mediaTypes: ['images'],
+          });
+
+      if (result.canceled) {
+        return;
+      }
+
+      const nextPhotos = result.assets.slice(0, remainingSlots).map(buildReviewPhoto);
+      setDraftPhotos((current) => [...current, ...nextPhotos].slice(0, 4));
+      setErrorMessage('');
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : isArabic ? 'تعذر اختيار الصورة الآن.' : 'Unable to choose a photo right now.');
+    }
+  };
+
   const handleSubmitReview = async () => {
     const content = draftReview.trim();
     if (!content) {
@@ -105,19 +200,26 @@ export function ReviewsSection({
     try {
       const response = await addTrailReview(trailId, {
         rating: draftRating,
-        content,
+        content: addLabelsToContent(content, draftLabels),
+        photos: draftPhotos,
       });
+      const createdAt = new Date().toISOString();
 
       onReviewAdded?.({
         id: response.data.id,
         trail_id: trailId,
         user_id: 'me',
         rating: draftRating,
-        content,
-        created_at: new Date().toISOString(),
+        content: addLabelsToContent(content, draftLabels),
+        created_at: createdAt,
+        photos: response.data.photos?.length
+          ? response.data.photos
+          : draftPhotos.map((photo) => ({ id: photo.id, url: photo.uri, created_at: createdAt })),
       });
       setDraftRating(5);
       setDraftReview('');
+      setDraftPhotos([]);
+      setDraftLabels([]);
       setIsReviewModalOpen(false);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : isArabic ? 'تعذر إرسال المراجعة الآن.' : 'Unable to post review right now.');
@@ -223,6 +325,9 @@ export function ReviewsSection({
               <Text style={[styles.reviewText, isArabic ? rtlText : ltrText]} numberOfLines={isExpanded ? undefined : 3}>
                 {review.content}
               </Text>
+              <View style={styles.reviewPhotos}>
+                <ReviewPhotoStrip photos={review.photos} />
+              </View>
               {isLong ? (
                 <Text style={[styles.expandHint, isArabic ? rtlText : ltrText]}>
                   {isExpanded ? (isArabic ? 'عرض أقل' : 'Show less') : isArabic ? 'اضغط لقراءة المزيد' : 'Tap to read more'}
@@ -247,12 +352,12 @@ export function ReviewsSection({
         </Text>
       )}
 
-      <Modal visible={isReviewModalOpen} transparent animationType="fade" onRequestClose={() => setIsReviewModalOpen(false)}>
+      <Modal visible={isReviewModalOpen} transparent animationType="fade" onRequestClose={handleCloseReviewModal}>
         <View style={styles.modalScrim}>
           <View style={styles.reviewModal}>
             <View style={[styles.modalHeader, isArabic ? rtlRow : ltrRow]}>
               <Text style={[styles.modalTitle, isArabic ? rtlText : ltrText]}>{isArabic ? 'اكتب مراجعة' : 'Write a Review'}</Text>
-              <Pressable style={styles.modalCloseButton} onPress={() => setIsReviewModalOpen(false)}>
+              <Pressable style={styles.modalCloseButton} onPress={handleCloseReviewModal}>
                 <Ionicons name="close" size={18} color="#2C2418" />
               </Pressable>
             </View>
@@ -276,6 +381,33 @@ export function ReviewsSection({
               placeholderTextColor="#A18F7A"
               style={[styles.reviewInput, isArabic ? rtlText : ltrText]}
             />
+
+            <View style={[styles.photoActionsRow, isArabic ? rtlRow : ltrRow]}>
+              <Pressable style={styles.photoActionButton} onPress={() => handlePickReviewPhotos('library')}>
+                <Ionicons name="images-outline" size={16} color="#630E13" />
+                <Text style={styles.photoActionText}>{isArabic ? 'اختيار صور' : 'Add photos'}</Text>
+              </Pressable>
+              <Pressable style={styles.photoActionButton} onPress={() => handlePickReviewPhotos('camera')}>
+                <Ionicons name="camera-outline" size={16} color="#630E13" />
+                <Text style={styles.photoActionText}>{isArabic ? 'الكاميرا' : 'Camera'}</Text>
+              </Pressable>
+            </View>
+
+            {draftPhotos.length ? (
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.draftPhotoRow}>
+                {draftPhotos.map((photo) => (
+                  <View key={photo.id} style={styles.draftPhotoFrame}>
+                    <Image source={{ uri: photo.uri }} style={styles.draftPhoto} resizeMode="cover" />
+                    <Pressable
+                      style={styles.removePhotoButton}
+                      onPress={() => setDraftPhotos((current) => current.filter((item) => item.id !== photo.id))}
+                    >
+                      <Ionicons name="close" size={13} color="#fff" />
+                    </Pressable>
+                  </View>
+                ))}
+              </ScrollView>
+            ) : null}
 
             {errorMessage ? (
               <Text style={[styles.modalError, isArabic ? rtlText : ltrText]}>{errorMessage}</Text>
@@ -474,6 +606,9 @@ const styles = StyleSheet.create({
     color: '#4A4131',
     fontSize: 14,
     lineHeight: 20,
+  },
+  reviewPhotos: {
+    marginTop: 10,
   },
   expandHint: {
     marginTop: 7,

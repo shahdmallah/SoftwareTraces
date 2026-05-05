@@ -1,7 +1,10 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Animated,
   Dimensions,
+  Easing,
+  GestureResponderEvent,
   Image,
   Pressable,
   ScrollView,
@@ -13,10 +16,11 @@ import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { BlurView } from 'expo-blur';
 import { Ionicons } from '@expo/vector-icons';
-import Svg, { Circle, Path } from 'react-native-svg';
+import Svg, { Circle, Defs, LinearGradient, Path, Stop } from 'react-native-svg';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { RootStackParamList } from '../navigation/types';
-import { getTrailById, getTrailPhotos, type Trail, type TrailPhoto } from '../api/trailsApi';
+import { getTrailById, getTrailElevationProfile, type ElevationProfile, type Trail } from '../api/trailsApi';
+import { getTrailPhotos, type TrailPhoto } from '../api/mediaApi';
 import { buildGalleryImages } from '../utils/trailUtils';
 import { theme } from '../theme';
 
@@ -36,7 +40,8 @@ const SCREEN_PADDING = 8;
 const PANEL_SIDE_PADDING = 20;
 const COLUMN_WIDTH = (width - SCREEN_PADDING * 2 - GRID_GAP) / 2;
 const PROFILE_WIDTH = width - 72;
-const PROFILE_HEIGHT = 86;
+const PROFILE_HEIGHT = 104;
+const ELEVATION_CHART_POINTS = 128;
 
 const TAB_LABELS: Record<MediaTab, string> = {
   latest: 'Latest',
@@ -74,53 +79,106 @@ function formatElevation(elevationGain: number) {
   return `${Math.round(elevationGain)} m`;
 }
 
-function buildProfileSeries(trail: Trail | null) {
-  const source = trail?.routeCoordinates;
+type ChartPoint = { x: number; y: number; distM: number; elevM: number };
 
-  if (!source?.length) {
-    return [28, 48, 34, 54, 36, 44, 30, 62, 40, 38, 56, 42, 35, 47, 33, 50];
+function buildChartPointsFromProfile(profile: ElevationProfile, chartWidth: number, chartHeight: number): ChartPoint[] {
+  const n = Math.min(profile.elevations.length, profile.distances.length);
+  if (n < 2) {
+    return [];
   }
 
-  const sampleSize = 42;
-  const total = source.length;
+  const elevations = profile.elevations.slice(0, n);
+  const distances = profile.distances.slice(0, n);
+  const dMax = distances[n - 1] ?? 0;
+  if (dMax <= 0) {
+    return [];
+  }
 
-  return Array.from({ length: sampleSize }, (_, index) => {
-    const sourceIndex = Math.min(total - 1, Math.round((index / Math.max(1, sampleSize - 1)) * (total - 1)));
-    const [lng, lat] = source[sourceIndex];
-    const prev = source[Math.max(0, sourceIndex - 1)];
-    const next = source[Math.min(total - 1, sourceIndex + 1)];
-    const slope = Math.abs((next?.[1] ?? lat) - (prev?.[1] ?? lat));
-    const base = ((lat * 10000) % 1) * 38;
-    const variation = ((lng * 10000) % 1) * 16;
-    const spike = slope * 22000;
-    return 22 + base + variation + spike;
+  const eMin = Math.min(...elevations);
+  const eMax = Math.max(...elevations);
+  const eRange = Math.max(35, eMax - eMin);
+  const padY = chartHeight * 0.12;
+  const plotH = chartHeight - padY * 2;
+
+  return distances.map((d, i) => {
+    const e = elevations[i];
+    const x = (d / dMax) * chartWidth;
+    const yNorm = (e - eMin) / eRange;
+    const y = chartHeight - padY - yNorm * plotH;
+    return { x, y, distM: d, elevM: e };
   });
 }
 
-function buildChartPath(values: number[], chartWidth: number, chartHeight: number) {
-  if (!values.length) {
-    return '';
-  }
-
-  const maxValue = Math.max(...values);
-  const minValue = Math.min(...values);
-  const range = Math.max(1, maxValue - minValue);
-
-  return values.reduce((path, value, index) => {
-    const x = values.length === 1 ? 0 : (index / (values.length - 1)) * chartWidth;
-    const y = chartHeight - ((value - minValue) / range) * chartHeight;
-    return `${path}${index === 0 ? 'M' : ' L'} ${x.toFixed(2)} ${y.toFixed(2)}`;
+function polylinePath(points: Pick<ChartPoint, 'x' | 'y'>[]): string {
+  if (!points.length) return '';
+  return points.reduce((path, pt, index) => {
+    const cmd = index === 0 ? 'M' : 'L';
+    return `${path}${cmd} ${pt.x.toFixed(2)} ${pt.y.toFixed(2)}`;
   }, '');
 }
 
-function buildVisiblePath(values: number[], progress: number, chartWidth: number, chartHeight: number) {
-  const visibleCount = Math.max(2, Math.round(values.length * progress));
-  return buildChartPath(values.slice(0, visibleCount), chartWidth, chartHeight);
+function buildAreaFillPath(points: ChartPoint[], chartHeight: number): string {
+  if (!points.length) return '';
+  const stroke = polylinePath(points);
+  const first = points[0];
+  const last = points[points.length - 1];
+  return `${stroke} L ${last.x.toFixed(2)} ${chartHeight} L ${first.x.toFixed(2)} ${chartHeight} Z`;
 }
 
-function buildAxisLabels(distance: number) {
-  const safeDistance = Number.isFinite(distance) && distance > 0 ? distance : 0;
-  return ['0 km', `${(safeDistance / 2).toFixed(1)} km`, `${safeDistance.toFixed(1)} km`];
+function getPlayheadState(points: ChartPoint[], progress: number): { x: number; y: number; distKm: number; elevM: number } | null {
+  if (!points.length) return null;
+  const dEnd = points[points.length - 1].distM;
+  if (dEnd <= 0) return null;
+
+  const targetM = Math.max(0, Math.min(1, progress)) * dEnd;
+  let i = 0;
+  while (i < points.length - 1 && points[i + 1].distM < targetM) {
+    i += 1;
+  }
+
+  if (i >= points.length - 1) {
+    const p = points[points.length - 1];
+    return { x: p.x, y: p.y, distKm: p.distM / 1000, elevM: p.elevM };
+  }
+
+  const a = points[i];
+  const b = points[i + 1];
+  const span = Math.max(1e-6, b.distM - a.distM);
+  const t = (targetM - a.distM) / span;
+  const x = a.x + t * (b.x - a.x);
+  const y = a.y + t * (b.y - a.y);
+  const elevM = a.elevM + t * (b.elevM - a.elevM);
+  return { x, y, distKm: targetM / 1000, elevM };
+}
+
+function buildTraveledPath(points: ChartPoint[], progress: number): string {
+  if (!points.length || progress <= 0) return '';
+  const playhead = getPlayheadState(points, progress);
+  if (!playhead) return '';
+
+  const dEnd = points[points.length - 1].distM;
+  const targetM = Math.max(0, Math.min(1, progress)) * dEnd;
+  const included: { x: number; y: number }[] = [];
+
+  for (const p of points) {
+    if (p.distM < targetM - 1e-6) {
+      included.push({ x: p.x, y: p.y });
+    } else {
+      break;
+    }
+  }
+
+  included.push({ x: playhead.x, y: playhead.y });
+  return polylinePath(included);
+}
+
+function buildAxisLabelsFromProfile(profile: ElevationProfile | null, trailDistanceKm: number) {
+  const km =
+    profile?.distances?.length && profile.distances[profile.distances.length - 1] > 0
+      ? profile.distances[profile.distances.length - 1] / 1000
+      : trailDistanceKm;
+  const safe = Number.isFinite(km) && km > 0 ? km : 0;
+  return ['0 km', `${(safe / 2).toFixed(1)} km`, `${safe.toFixed(1)} km`];
 }
 
 function buildGalleryItems(tab: MediaTab, trail: Trail | null, images: string[]): GalleryItem[] {
@@ -152,9 +210,15 @@ export function TrailMediaScreen() {
   const { trailId } = route.params;
   const [trail, setTrail] = useState<Trail | null>(null);
   const [trailPhotos, setTrailPhotos] = useState<TrailPhoto[]>([]);
+  const [elevationProfile, setElevationProfile] = useState<ElevationProfile | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<MediaTab>('latest');
+  const [tourProgress, setTourProgress] = useState(0);
+  const [tourPlaying, setTourPlaying] = useState(false);
+
+  const imageFade = useRef(new Animated.Value(1)).current;
+  const prevPhotoIndexRef = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -164,20 +228,23 @@ export function TrailMediaScreen() {
       setError(null);
 
       try {
-        const [nextTrail, nextPhotos] = await Promise.all([
+        const [nextTrail, nextPhotos, profile] = await Promise.all([
           getTrailById(trailId),
           getTrailPhotos(trailId).catch(() => []),
+          getTrailElevationProfile(trailId, { points: ELEVATION_CHART_POINTS, simplify: true }).catch(() => null),
         ]);
 
         if (!cancelled) {
           setTrail(nextTrail);
           setTrailPhotos(nextPhotos);
+          setElevationProfile(profile);
         }
       } catch (nextError) {
         if (!cancelled) {
           setError(nextError instanceof Error ? nextError.message : 'Unable to load trail media.');
           setTrail(null);
           setTrailPhotos([]);
+          setElevationProfile(null);
         }
       } finally {
         if (!cancelled) {
@@ -193,6 +260,63 @@ export function TrailMediaScreen() {
     };
   }, [trailId]);
 
+  useEffect(() => {
+    setTourProgress(0);
+    setTourPlaying(false);
+    prevPhotoIndexRef.current = 0;
+  }, [trailId]);
+
+  useEffect(() => {
+    if (activeTab !== 'tour') {
+      setTourPlaying(false);
+    }
+  }, [activeTab]);
+
+  const tourDurationMs = useMemo(() => {
+    const lastM =
+      elevationProfile?.distances?.length && elevationProfile.distances.length > 0
+        ? elevationProfile.distances[elevationProfile.distances.length - 1]
+        : 0;
+    const kmFromProfile = lastM > 0 ? lastM / 1000 : 0;
+    const km = kmFromProfile > 0 ? kmFromProfile : trail?.distance ?? 5;
+    return Math.min(95_000, Math.max(28_000, km * 12_000));
+  }, [elevationProfile, trail?.distance]);
+
+  useEffect(() => {
+    if (!tourPlaying || activeTab !== 'tour') {
+      return;
+    }
+
+    let raf = 0;
+    let last = performance.now();
+
+    const tick = (now: number) => {
+      const dt = now - last;
+      last = now;
+      setTourProgress((previous) => {
+        const next = previous + dt / tourDurationMs;
+        if (next >= 1) {
+          setTourPlaying(false);
+          return 1;
+        }
+        return next;
+      });
+      raf = requestAnimationFrame(tick);
+    };
+
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [tourPlaying, activeTab, tourDurationMs]);
+
+  const toggleTourPlayback = useCallback(() => {
+    if (tourProgress >= 0.998) {
+      setTourProgress(0);
+      setTourPlaying(true);
+      return;
+    }
+    setTourPlaying((value) => !value);
+  }, [tourProgress]);
+
   const galleryImages = useMemo(() => {
     const endpointImages = trailPhotos.map((photo) => photo.url).filter(Boolean);
 
@@ -207,15 +331,58 @@ export function TrailMediaScreen() {
     return buildGalleryImages(trail.images, trail.image);
   }, [trail, trailPhotos]);
 
-  const chartSeries = useMemo(() => buildProfileSeries(trail), [trail]);
-  const fullChartPath = useMemo(() => buildChartPath(chartSeries, PROFILE_WIDTH, PROFILE_HEIGHT), [chartSeries]);
-  const visibleChartPath = useMemo(() => buildVisiblePath(chartSeries, 0.28, PROFILE_WIDTH, PROFILE_HEIGHT), [chartSeries]);
-  const markerIndex = Math.max(1, Math.round((chartSeries.length - 1) * 0.28));
-  const markerX = chartSeries.length <= 1 ? 0 : (markerIndex / (chartSeries.length - 1)) * PROFILE_WIDTH;
-  const axisLabels = buildAxisLabels(trail?.distance ?? 0);
+  const tourGallery = useMemo(() => {
+    if (galleryImages.length) {
+      return galleryImages;
+    }
+    return trail?.image ? [trail.image] : [];
+  }, [galleryImages, trail?.image]);
+
+  const tourPhotoIndex = useMemo(() => {
+    if (tourGallery.length <= 1) {
+      return 0;
+    }
+    const idx = Math.floor(tourProgress * tourGallery.length);
+    return Math.min(tourGallery.length - 1, Math.max(0, idx));
+  }, [tourProgress, tourGallery.length]);
+
+  useEffect(() => {
+    if (prevPhotoIndexRef.current === tourPhotoIndex) {
+      return;
+    }
+    prevPhotoIndexRef.current = tourPhotoIndex;
+    imageFade.setValue(0.45);
+    Animated.timing(imageFade, {
+      toValue: 1,
+      duration: 320,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [tourPhotoIndex, imageFade]);
+
+  const chartPoints = useMemo(() => {
+    if (!elevationProfile) {
+      return [];
+    }
+    return buildChartPointsFromProfile(elevationProfile, PROFILE_WIDTH, PROFILE_HEIGHT);
+  }, [elevationProfile]);
+
+  const fullStrokePath = useMemo(() => polylinePath(chartPoints), [chartPoints]);
+  const fillPath = useMemo(() => buildAreaFillPath(chartPoints, PROFILE_HEIGHT), [chartPoints]);
+  const traveledPath = useMemo(() => buildTraveledPath(chartPoints, tourProgress), [chartPoints, tourProgress]);
+  const playhead = useMemo(() => getPlayheadState(chartPoints, tourProgress), [chartPoints, tourProgress]);
+  const axisLabels = useMemo(() => buildAxisLabelsFromProfile(elevationProfile, trail?.distance ?? 0), [elevationProfile, trail?.distance]);
+
+  const onChartSeek = useCallback((event: GestureResponderEvent) => {
+    const x = event.nativeEvent.locationX;
+    const next = Math.max(0, Math.min(1, x / PROFILE_WIDTH));
+    setTourProgress(next);
+  }, []);
+
   const galleryItems = useMemo(() => buildGalleryItems(activeTab, trail, galleryImages), [activeTab, galleryImages, trail]);
   const isTour = activeTab === 'tour';
   const activeColor = theme.colors.buttonPrimary;
+  const tourHeroUri = tourGallery[tourPhotoIndex] ?? trail?.image ?? '';
 
   if (isLoading) {
     return (
@@ -254,70 +421,95 @@ export function TrailMediaScreen() {
 
       {isTour ? (
         <View style={styles.tourScreen}>
-          <Image
-            source={{ uri: galleryImages[0] ?? trail.image }}
-            style={styles.tourHeroImage}
-            resizeMode="cover"
-          />
+          <Animated.View style={[styles.tourHeroImage, { opacity: imageFade }]}>
+            <Image source={{ uri: tourHeroUri }} style={StyleSheet.absoluteFillObject} resizeMode="cover" />
+          </Animated.View>
           <View style={styles.tourOverlay} />
+
+          <View style={[styles.tourPhotoBadge, { top: Math.max(insets.top + 72, 96) }]}>
+            <Text style={styles.tourPhotoBadgeText}>
+              {tourGallery.length > 1 ? `${tourPhotoIndex + 1} / ${tourGallery.length}` : '1 / 1'}
+            </Text>
+          </View>
 
           <View style={[styles.tourPanelWrap, { bottom: Math.max(insets.bottom + 96, 108) }]}>
             <BlurView intensity={85} tint="light" style={styles.tourPanel}>
               <View style={styles.metricRow}>
-                <Text style={styles.metricText}>
-                  {formatDistance(trail.distance)}
-                  <Text style={styles.metricDivider}>  |  </Text>
-                  {formatElevation(trail.elevationGain)}
-                </Text>
-                <Ionicons name="pause" size={28} color={theme.colors.textPrimary} />
+                <View style={styles.metricCopy}>
+                  <Text style={styles.metricText}>
+                    {formatDistance(trail.distance)}
+                    <Text style={styles.metricDivider}>  |  </Text>
+                    {formatElevation(trail.elevationGain)}
+                  </Text>
+                  <Text style={styles.playheadMetrics}>
+                    {playhead
+                      ? `${playhead.distKm.toFixed(2)} km · ${Math.round(playhead.elevM)} m`
+                      : chartPoints.length >= 2
+                      ? '…'
+                      : elevationProfile
+                      ? 'Along-route profile unavailable'
+                      : '—'}
+                  </Text>
+                </View>
+                <Pressable
+                  onPress={toggleTourPlayback}
+                  style={styles.tourPlayButton}
+                  accessibilityRole="button"
+                  accessibilityLabel={tourProgress >= 0.998 ? 'Restart tour' : tourPlaying ? 'Pause tour' : 'Play tour'}
+                >
+                  <Ionicons
+                    name={tourProgress >= 0.998 ? 'play' : tourPlaying ? 'pause' : 'play'}
+                    size={26}
+                    color={theme.colors.textPrimary}
+                  />
+                </Pressable>
               </View>
 
-              <View style={styles.chartBlock}>
-                <Svg width={PROFILE_WIDTH} height={PROFILE_HEIGHT} viewBox={`0 0 ${PROFILE_WIDTH} ${PROFILE_HEIGHT}`}>
-                  <Path
-                    d={fullChartPath}
-                    fill="none"
-                    stroke="rgba(110,117,112,0.32)"
-                    strokeWidth={4}
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                  <Path
-                    d={visibleChartPath}
-                    fill="none"
-                    stroke="#1C2117"
-                    strokeWidth={4.2}
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-
-                  {chartSeries.map((value, index) => {
-                    const x = chartSeries.length <= 1 ? 0 : (index / (chartSeries.length - 1)) * PROFILE_WIDTH;
-                    const maxValue = Math.max(...chartSeries);
-                    const minValue = Math.min(...chartSeries);
-                    const range = Math.max(1, maxValue - minValue);
-                    const y = PROFILE_HEIGHT - ((value - minValue) / range) * PROFILE_HEIGHT;
-                    const isVisible = index <= markerIndex;
-                    return (
-                      <Circle
-                        key={`${index}-${value}`}
-                        cx={x}
-                        cy={y}
-                        r={index % 5 === 0 ? 3.4 : 0}
-                        fill={isVisible ? '#AEB5AE' : '#C7CBC8'}
-                        stroke="#F6F8F5"
-                        strokeWidth={1.8}
-                      />
-                    );
-                  })}
-
-                  <Path
-                    d={`M ${markerX.toFixed(2)} 0 L ${markerX.toFixed(2)} ${PROFILE_HEIGHT}`}
-                    stroke="#11180F"
-                    strokeWidth={2.2}
-                    strokeLinecap="round"
-                  />
-                </Svg>
+              <Pressable style={styles.chartBlock} onPress={onChartSeek}>
+                {chartPoints.length >= 2 ? (
+                  <Svg width={PROFILE_WIDTH} height={PROFILE_HEIGHT} viewBox={`0 0 ${PROFILE_WIDTH} ${PROFILE_HEIGHT}`}>
+                    <Defs>
+                      <LinearGradient id="tourElevFill" x1="0" y1="0" x2="0" y2="1">
+                        <Stop offset="0" stopColor="#630E13" stopOpacity="0.14" />
+                        <Stop offset="1" stopColor="#630E13" stopOpacity="0.02" />
+                      </LinearGradient>
+                    </Defs>
+                    <Path d={fillPath} fill="url(#tourElevFill)" stroke="none" />
+                    <Path
+                      d={fullStrokePath}
+                      fill="none"
+                      stroke="rgba(110,117,112,0.35)"
+                      strokeWidth={3.5}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                    <Path
+                      d={traveledPath}
+                      fill="none"
+                      stroke="#1C2117"
+                      strokeWidth={4}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                    {playhead ? (
+                      <>
+                        <Path
+                          d={`M ${playhead.x.toFixed(2)} 0 L ${playhead.x.toFixed(2)} ${PROFILE_HEIGHT}`}
+                          stroke="rgba(17,24,15,0.35)"
+                          strokeWidth={1.5}
+                          strokeDasharray="4 4"
+                        />
+                        <Circle cx={playhead.x} cy={playhead.y} r={6} fill="#630E13" stroke="#F6F8F5" strokeWidth={2.5} />
+                      </>
+                    ) : null}
+                  </Svg>
+                ) : (
+                  <View style={styles.chartFallback}>
+                    <Text style={styles.chartFallbackText}>
+                      {elevationProfile ? 'Not enough elevation samples for this trail.' : 'Could not load elevation profile.'}
+                    </Text>
+                  </View>
+                )}
 
                 <View style={styles.axisLabels}>
                   {axisLabels.map((label) => (
@@ -326,7 +518,8 @@ export function TrailMediaScreen() {
                     </Text>
                   ))}
                 </View>
-              </View>
+                <Text style={styles.chartHint}>Tap the chart to move along the route</Text>
+              </Pressable>
 
             </BlurView>
           </View>
@@ -515,10 +708,30 @@ const styles = StyleSheet.create({
     marginBottom: 14,
     paddingHorizontal: 6,
   },
+  metricCopy: {
+    flex: 1,
+    paddingRight: 10,
+    gap: 4,
+  },
   metricText: {
     color: '#10170E',
     fontSize: 18,
     fontWeight: '700',
+  },
+  playheadMetrics: {
+    color: 'rgba(16,23,14,0.62)',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  tourPlayButton: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.92)',
+    borderWidth: 1,
+    borderColor: 'rgba(215,216,206,0.95)',
   },
   metricDivider: {
     color: 'rgba(16,23,14,0.18)',
@@ -526,6 +739,46 @@ const styles = StyleSheet.create({
   },
   chartBlock: {
     paddingHorizontal: 6,
+  },
+  chartFallback: {
+    height: PROFILE_HEIGHT,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+    backgroundColor: 'rgba(255,255,255,0.55)',
+    borderWidth: 1,
+    borderColor: 'rgba(215,216,206,0.7)',
+  },
+  chartFallbackText: {
+    textAlign: 'center',
+    color: 'rgba(57,65,57,0.85)',
+    fontSize: 13,
+    fontWeight: '600',
+    lineHeight: 18,
+  },
+  chartHint: {
+    marginTop: 6,
+    textAlign: 'center',
+    color: 'rgba(57,65,57,0.55)',
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  tourPhotoBadge: {
+    position: 'absolute',
+    right: 20,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: 'rgba(19, 27, 18, 0.55)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+  },
+  tourPhotoBadgeText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0.3,
   },
   axisLabels: {
     flexDirection: 'row',

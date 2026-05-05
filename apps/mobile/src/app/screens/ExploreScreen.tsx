@@ -346,6 +346,8 @@ export function ExploreScreen() {
                     placeholderTextColor={theme.colors.textMuted}
                     value={search}
                     onChangeText={setSearch}
+                    onSubmitEditing={() => navigation.navigate('SearchResults', { query: search.trim() || undefined })}
+                    returnKeyType="search"
                   />
                 </View>
 
@@ -356,6 +358,7 @@ export function ExploreScreen() {
                     pressed && styles.headerActionPressed,
                   ]}
                   onPress={() => setShowFilters((value) => !value)}
+                  onLongPress={() => navigation.navigate('AdvancedFilters')}
                 >
                   <Ionicons
                     name={showFilters ? 'options' : 'options-outline'}

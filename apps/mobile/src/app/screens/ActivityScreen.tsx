@@ -8,7 +8,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
 import { getSocialFeed, type SocialFeedReview } from '../api/socialApi';
-import { feedItems, type FeedItem } from '../data/activitySocial';
+import { type FeedItem } from '../data/activitySocial';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { RootStackParamList } from '../navigation/types';
@@ -30,9 +30,6 @@ type CommunityStat = {
   labelEn: string;
   labelAr: string;
 };
-
-const fallbackAvatar = 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?crop=faces&fit=crop&w=240&h=240';
-const fallbackTrailImage = 'https://images.unsplash.com/photo-1511497584788-876760111969?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&w=1200';
 
 function normalize(value: string): string {
   return value.trim().toLocaleLowerCase();
@@ -76,7 +73,7 @@ function formatRelativeTime(value: string) {
 }
 
 function mapSocialReviewToFeedItem(item: SocialFeedReview): FeedItem {
-  const photo = item.photo_url || item.photos[0]?.url || item.trail.image || fallbackTrailImage;
+  const photo = item.photo_url || item.photos[0]?.url || item.trail.image || '';
   const userName = item.user.full_name || 'Trail friend';
 
   return {
@@ -85,7 +82,7 @@ function mapSocialReviewToFeedItem(item: SocialFeedReview): FeedItem {
     trailId: item.trail.id,
     user: userName,
     handle: `@${userName.toLowerCase().replace(/[^a-z0-9]+/g, '.').replace(/^\.+|\.+$/g, '') || 'traces'}`,
-    avatar: item.user.avatar_url || fallbackAvatar,
+    avatar: item.user.avatar_url || '',
     image: photo,
     trailNameEn: item.trail.name,
     trailNameAr: item.trail.name,
@@ -278,10 +275,9 @@ export function ActivityScreen() {
   const normalizedQuery = useMemo(() => normalize(searchQuery), [searchQuery]);
   const feedData = useMemo(() => {
     if (!isAuthenticated || !hasLoadedRemoteFeed) {
-      return feedItems;
+      return [] as FeedItem[];
     }
-
-    return [...remoteRecaps, ...feedItems.filter((item) => item.kind === 'plan')];
+    return remoteRecaps;
   }, [hasLoadedRemoteFeed, isAuthenticated, remoteRecaps]);
 
   useEffect(() => {

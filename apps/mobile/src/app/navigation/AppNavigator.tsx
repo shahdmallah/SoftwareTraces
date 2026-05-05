@@ -29,6 +29,16 @@ import { ActivityShareComposerScreen } from '../screens/ActivityShareComposerScr
 import { TrailReviewScreen } from '../screens/TrailReviewScreen';
 import { HistoryScreen } from '../screens/HistoryScreen';
 import { ProfileSettingsScreen } from '../screens/ProfileSettingsScreen';
+import { NotificationsScreen } from '../screens/NotificationsScreen';
+import { SearchResultsScreen } from '../screens/SearchResultsScreen';
+import { AdvancedFiltersScreen } from '../screens/AdvancedFiltersScreen';
+import { EditProfileScreen } from '../screens/EditProfileScreen';
+import { TrailDraftsScreen } from '../screens/TrailDraftsScreen';
+import { MyTrailsScreen } from '../screens/MyTrailsScreen';
+import { SupportHelpScreen } from '../screens/SupportHelpScreen';
+import { ReportIssueScreen } from '../screens/ReportIssueScreen';
+import { LegalScreen } from '../screens/LegalScreen';
+import { OfflineDownloadsScreen } from '../screens/OfflineDownloadsScreen';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BlurView } from 'expo-blur';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
@@ -268,6 +278,16 @@ export function AppNavigator() {
           <Stack.Screen name="Recording" component={RecordingScreen} />
           <Stack.Screen name="TrailReview" component={TrailReviewScreen} />
           <Stack.Screen name="History" component={HistoryScreen} />
+          <Stack.Screen name="Notifications" component={NotificationsScreen} />
+          <Stack.Screen name="SearchResults" component={SearchResultsScreen} />
+          <Stack.Screen name="AdvancedFilters" component={AdvancedFiltersScreen} />
+          <Stack.Screen name="EditProfile" component={EditProfileScreen} />
+          <Stack.Screen name="TrailDrafts" component={TrailDraftsScreen} />
+          <Stack.Screen name="MyTrails" component={MyTrailsScreen} />
+          <Stack.Screen name="SupportHelp" component={SupportHelpScreen} />
+          <Stack.Screen name="ReportIssue" component={ReportIssueScreen} />
+          <Stack.Screen name="Legal" component={LegalScreen} />
+          <Stack.Screen name="OfflineDownloads" component={OfflineDownloadsScreen} />
         </Stack.Navigator>
 
         <ActiveRecordingWidget routeName={routeName} />

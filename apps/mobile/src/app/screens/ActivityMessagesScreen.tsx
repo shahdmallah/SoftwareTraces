@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
@@ -6,7 +6,8 @@ import { StackNavigationProp } from '@react-navigation/stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
-import { friends, messageThreads } from '../data/activitySocial';
+import { getFollowers, getFollowing, type SocialProfile } from '../api/socialApi';
+import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { RootStackParamList } from '../navigation/types';
 import { ltrRow, ltrText, rtlRow, rtlText } from '../utils/direction';
@@ -17,28 +18,56 @@ export function ActivityMessagesScreen() {
   const navigation = useNavigation<MessagesNavigationProp>();
   const insets = useSafeAreaInsets();
   const { language } = useLanguage();
+  const { user } = useAuth();
   const isArabic = language === 'ar';
   const [searchQuery, setSearchQuery] = useState('');
+  const [contacts, setContacts] = useState<SocialProfile[]>([]);
 
   const normalizedQuery = searchQuery.trim().toLowerCase();
 
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!user?.id) {
+      setContacts([]);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const loadContacts = async () => {
+      try {
+        const [followingResponse, followersResponse] = await Promise.all([
+          getFollowing(user.id, { page: 1, limit: 40 }).catch(() => ({ data: [] as SocialProfile[] })),
+          getFollowers(user.id, { page: 1, limit: 40 }).catch(() => ({ data: [] as SocialProfile[] })),
+        ]);
+        if (!cancelled) {
+          const merged = [...followingResponse.data, ...followersResponse.data];
+          const unique = Array.from(new Map(merged.map((profile) => [profile.id, profile])).values());
+          setContacts(unique);
+        }
+      } catch {
+        if (!cancelled) {
+          setContacts([]);
+        }
+      }
+    };
+
+    void loadContacts();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id]);
+
   const filteredFriends = useMemo(() => {
-    if (!normalizedQuery) return friends;
-    return friends.filter((friend) =>
-      [friend.name, friend.handle, friend.statusEn, friend.statusAr].some((value) =>
-        value.toLowerCase().includes(normalizedQuery),
-      ),
-    );
+    if (!normalizedQuery) return contacts;
+    return contacts.filter((friend) => [friend.full_name].some((value) => value.toLowerCase().includes(normalizedQuery)));
   }, [normalizedQuery]);
 
   const filteredThreads = useMemo(() => {
-    if (!normalizedQuery) return messageThreads;
-    return messageThreads.filter((thread) =>
-      [thread.name, thread.previewEn, thread.previewAr].some((value) =>
-        value.toLowerCase().includes(normalizedQuery),
-      ),
-    );
-  }, [normalizedQuery]);
+    return filteredFriends;
+  }, [filteredFriends]);
 
   return (
     <AnimatedScreen style={styles.container}>
@@ -97,11 +126,11 @@ export function ActivityMessagesScreen() {
           >
             {filteredFriends.map((friend) => (
               <View key={friend.id} style={styles.friendCard}>
-                <Image source={{ uri: friend.avatar }} style={styles.friendAvatar} />
-                <Text numberOfLines={1} style={[styles.friendName, isArabic ? rtlText : ltrText]}>{friend.name}</Text>
-                <Text numberOfLines={1} style={[styles.friendHandle, isArabic ? rtlText : ltrText]}>{friend.handle}</Text>
+                <Image source={{ uri: friend.avatar_url ?? '' }} style={styles.friendAvatar} />
+                <Text numberOfLines={1} style={[styles.friendName, isArabic ? rtlText : ltrText]}>{friend.full_name}</Text>
+                <Text numberOfLines={1} style={[styles.friendHandle, isArabic ? rtlText : ltrText]}>@{friend.full_name.toLowerCase().replace(/\s+/g, '.')}</Text>
                 <Text numberOfLines={2} style={[styles.friendStatus, isArabic ? rtlText : ltrText]}>
-                  {isArabic ? friend.statusAr : friend.statusEn}
+                  {isArabic ? 'متاح للمراسلة' : 'Available to message'}
                 </Text>
                 <Pressable style={styles.messageButton} onPress={() => navigation.navigate('ActivityThread', { friendId: friend.id })}>
                   <Ionicons name="chatbubble-ellipses-outline" size={14} color="#fff" />
@@ -121,23 +150,18 @@ export function ActivityMessagesScreen() {
               <Pressable
                 key={thread.id}
                 style={[styles.threadRow, isArabic ? rtlRow : ltrRow, index === 0 && styles.threadRowFirst]}
-                onPress={() => navigation.navigate('ActivityThread', { threadId: thread.id, friendId: thread.friendId })}
+                onPress={() => navigation.navigate('ActivityThread', { friendId: thread.id })}
               >
-                <Image source={{ uri: thread.avatar }} style={styles.threadAvatar} />
+                <Image source={{ uri: thread.avatar_url ?? '' }} style={styles.threadAvatar} />
                 <View style={styles.threadBody}>
                   <View style={[styles.threadTopRow, isArabic ? rtlRow : ltrRow]}>
-                    <Text style={[styles.threadName, isArabic ? rtlText : ltrText]}>{thread.name}</Text>
-                    <Text style={styles.threadTime}>{thread.time}</Text>
+                    <Text style={[styles.threadName, isArabic ? rtlText : ltrText]}>{thread.full_name}</Text>
+                    <Text style={styles.threadTime}>{isArabic ? 'الآن' : 'Now'}</Text>
                   </View>
                   <Text numberOfLines={1} style={[styles.threadPreview, isArabic ? rtlText : ltrText]}>
-                    {isArabic ? thread.previewAr : thread.previewEn}
+                    {isArabic ? 'ابدأ محادثة جديدة' : 'Start a new conversation'}
                   </Text>
                 </View>
-                {thread.unread > 0 ? (
-                  <View style={styles.unreadBadge}>
-                    <Text style={styles.unreadBadgeText}>{thread.unread}</Text>
-                  </View>
-                ) : null}
               </Pressable>
             ))}
           </View>

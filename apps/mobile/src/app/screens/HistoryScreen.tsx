@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -15,70 +15,9 @@ import { RootStackParamList } from '../navigation/types';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLanguage } from '../contexts/LanguageContext';
 import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
-
-const pastHikes = [
-  {
-    id: 'h1',
-    trailId: '1',
-    nameAr: 'مسار وادي القلط',
-    name: 'Wadi Qelt Trail',
-    dateAr: 'السبت، ٥ أبريل ٢٠٢٦',
-    distance: 14.2,
-    duration: '5h 24m',
-    elevationGain: 610,
-    image: 'https://images.unsplash.com/photo-1679940640486-967ee217bf8c?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&w=400',
-    rating: 5,
-  },
-  {
-    id: 'h2',
-    trailId: '3',
-    nameAr: 'مدرجات بتير',
-    name: 'Battir Terraces',
-    dateAr: 'السبت، ٢٨ مارس ٢٠٢٦',
-    distance: 9.8,
-    duration: '3h 52m',
-    elevationGain: 318,
-    image: 'https://images.unsplash.com/photo-1722228097356-bd0202d99367?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&w=400',
-    rating: 5,
-  },
-  {
-    id: 'h3',
-    trailId: '6',
-    nameAr: 'نجف رام الله',
-    name: 'Ramallah Ridge',
-    dateAr: 'السبت، ٢١ مارس ٢٠٢٦',
-    distance: 6.5,
-    duration: '2h 18m',
-    elevationGain: 185,
-    image: 'https://images.unsplash.com/photo-1726091983472-a7da2540c492?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&w=400',
-    rating: 4,
-  },
-  {
-    id: 'h4',
-    trailId: '5',
-    nameAr: 'شاطئ البحر الميت',
-    name: 'Dead Sea Shore',
-    dateAr: 'السبت، ١٤ مارس ٢٠٢٦',
-    distance: 5.5,
-    duration: '1h 58m',
-    elevationGain: 10,
-    image: 'https://images.unsplash.com/photo-1715273504630-7c42124bc0ec?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&w=400',
-    rating: 5,
-  },
-];
-
-const calendarDays = [
-  { d: 1, hasHike: false }, { d: 2, hasHike: false }, { d: 3, hasHike: false },
-  { d: 4, hasHike: false }, { d: 5, hasHike: true }, { d: 6, hasHike: false },
-  { d: 7, hasHike: false }, { d: 8, hasHike: false }, { d: 9, hasHike: false },
-  { d: 10, hasHike: false }, { d: 11, hasHike: false }, { d: 12, hasHike: false },
-  { d: 13, hasHike: false }, { d: 14, hasHike: false }, { d: 15, hasHike: false },
-  { d: 16, hasHike: false }, { d: 17, hasHike: false }, { d: 18, hasHike: false },
-  { d: 19, hasHike: false }, { d: 20, hasHike: false }, { d: 21, hasHike: false },
-  { d: 22, hasHike: false }, { d: 23, hasHike: false }, { d: 24, hasHike: false },
-  { d: 25, hasHike: false }, { d: 26, hasHike: false }, { d: 27, hasHike: false },
-  { d: 28, hasHike: true }, { d: 29, hasHike: false }, { d: 30, hasHike: false },
-];
+import { useAuth } from '../contexts/AuthContext';
+import { getUserActivities, type Activity } from '../api/activitiesApi';
+import { getTrailById, type Trail } from '../api/trailsApi';
 
 const dayNamesAr = ['أح', 'إث', 'ثل', 'أر', 'خم', 'جم', 'سب'];
 const dayNamesEn = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
@@ -90,11 +29,93 @@ export function HistoryScreen() {
   const [activeTab, setActiveTab] = useState<'list' | 'calendar'>('list');
   const insets = useSafeAreaInsets();
   const { t, language } = useLanguage();
+  const { user } = useAuth();
   const isArabic = language === 'ar';
+  const [activities, setActivities] = useState<Activity[]>([]);
+  const [trailMap, setTrailMap] = useState<Record<string, Trail>>({});
 
-  const totalDistance = pastHikes.reduce((sum, hike) => sum + hike.distance, 0);
-  const totalDuration = '13h 32m';
-  const totalHikes = pastHikes.length;
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!user?.id) {
+      setActivities([]);
+      setTrailMap({});
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const loadHistory = async () => {
+      try {
+        const userActivities = await getUserActivities(user.id);
+        if (cancelled) return;
+        setActivities(userActivities);
+
+        const trailIds = Array.from(new Set(userActivities.map((item) => item.trail_id).filter((id): id is string => Boolean(id))));
+        const trails = await Promise.all(
+          trailIds.map(async (trailId) => {
+            try {
+              return await getTrailById(trailId);
+            } catch {
+              return null;
+            }
+          }),
+        );
+
+        if (!cancelled) {
+          const nextMap: Record<string, Trail> = {};
+          trails.forEach((trail) => {
+            if (trail) nextMap[trail.id] = trail;
+          });
+          setTrailMap(nextMap);
+        }
+      } catch {
+        if (!cancelled) {
+          setActivities([]);
+          setTrailMap({});
+        }
+      }
+    };
+
+    void loadHistory();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id]);
+
+  const completedActivities = useMemo(
+    () => activities.filter((item) => item.status === 'completed').sort((a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime()),
+    [activities],
+  );
+
+  const calendarDays = useMemo(() => {
+    const now = new Date();
+    const month = now.getMonth();
+    const year = now.getFullYear();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const activeDays = new Set(
+      completedActivities
+        .map((activity) => new Date(activity.started_at))
+        .filter((date) => date.getMonth() === month && date.getFullYear() === year)
+        .map((date) => date.getDate()),
+    );
+
+    return Array.from({ length: daysInMonth }, (_, index) => ({
+      d: index + 1,
+      hasHike: activeDays.has(index + 1),
+    }));
+  }, [completedActivities]);
+
+  const totalDistance = completedActivities.reduce((sum, hike) => sum + (hike.distance_km ?? 0), 0);
+  const totalHikes = completedActivities.length;
+  const totalDurationHours = completedActivities.reduce((sum, hike) => {
+    if (!hike.started_at || !hike.ended_at) return sum;
+    const started = new Date(hike.started_at).getTime();
+    const ended = new Date(hike.ended_at).getTime();
+    if (!Number.isFinite(started) || !Number.isFinite(ended) || ended <= started) return sum;
+    return sum + (ended - started) / 3600000;
+  }, 0);
 
   return (
     <AnimatedScreen style={styles.container}>
@@ -117,7 +138,7 @@ export function HistoryScreen() {
           </View>
           <View style={styles.statTile}>
             <Ionicons name="time-outline" size={18} color="#80DEEA" />
-            <Text style={styles.statValue}>{totalDuration}</Text>
+            <Text style={styles.statValue}>{totalDurationHours.toFixed(1)}h</Text>
             <Text style={styles.statLabel}>{t('historyTotalTime')}</Text>
           </View>
         </View>
@@ -142,25 +163,31 @@ export function HistoryScreen() {
 
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         {activeTab === 'list' ? (
-          pastHikes.map((hike, index) => (
+          completedActivities.map((hike, index) => (
             <AnimatedBlock key={hike.id} delay={160 + index * 40}>
             <Pressable
               style={styles.hikeCard}
-              onPress={() => navigation.navigate('TrailDetail', { trailId: hike.trailId })}
+              onPress={() => {
+                if (hike.trail_id) {
+                  navigation.navigate('TrailDetail', { trailId: hike.trail_id });
+                }
+              }}
             >
               <View style={styles.timelineMarker}>
                 <View style={styles.timelineDot} />
-                {index < pastHikes.length - 1 && <View style={styles.timelineLine} />}
+                {index < completedActivities.length - 1 && <View style={styles.timelineLine} />}
               </View>
               <View style={styles.hikeContent}>
-                <Image source={{ uri: hike.image }} style={styles.hikeImage} />
+                <Image source={{ uri: trailMap[hike.trail_id ?? '']?.image ?? '' }} style={styles.hikeImage} />
                 <View style={styles.hikeInfo}>
-                  <Text style={styles.hikeDate}>{hike.dateAr}</Text>
-                  <Text style={styles.hikeName}>{hike.nameAr}</Text>
+                  <Text style={styles.hikeDate}>
+                    {new Intl.DateTimeFormat(isArabic ? 'ar' : 'en-US', { dateStyle: 'medium' }).format(new Date(hike.started_at))}
+                  </Text>
+                  <Text style={styles.hikeName}>{trailMap[hike.trail_id ?? '']?.name ?? 'Trail'}</Text>
                   <View style={styles.hikeMetaRow}>
-                    <Text style={styles.hikeMetaText}>{hike.distance}km</Text>
-                    <Text style={styles.hikeMetaText}>• {hike.duration}</Text>
-                    <Text style={styles.hikeMetaText}>• ↑{hike.elevationGain}m</Text>
+                    <Text style={styles.hikeMetaText}>{(hike.distance_km ?? 0).toFixed(1)}km</Text>
+                    <Text style={styles.hikeMetaText}>• {(hike.avg_speed_kph ?? 0).toFixed(1)} km/h</Text>
+                    <Text style={styles.hikeMetaText}>• ↑{Math.round(hike.elevation_gain_m ?? 0)}m</Text>
                   </View>
                 </View>
                 <Ionicons name="chevron-forward" size={18} color="#8A7A6A" />
@@ -198,10 +225,10 @@ export function HistoryScreen() {
             </View>
             <View style={styles.monthSummaryGrid}>
               {[
-                { label: t('historyThisMonthHikes'), value: '2', color: '#630E13' },
-                { label: t('historyTotalKm'), value: '24km', color: '#D4A843' },
-                { label: t('historyHighestElevation'), value: '630m', color: '#7DB3CC' },
-                { label: t('historyAvgDuration'), value: '4.7h', color: '#BB2823' },
+                { label: t('historyThisMonthHikes'), value: String(calendarDays.filter((d) => d.hasHike).length), color: '#630E13' },
+                { label: t('historyTotalKm'), value: `${totalDistance.toFixed(1)}km`, color: '#D4A843' },
+                { label: t('historyHighestElevation'), value: `${Math.round(Math.max(...completedActivities.map((item) => item.elevation_gain_m ?? 0), 0))}m`, color: '#7DB3CC' },
+                { label: t('historyAvgDuration'), value: `${(totalDurationHours / Math.max(1, totalHikes)).toFixed(1)}h`, color: '#BB2823' },
               ].map((item) => (
                 <View key={item.label} style={styles.summaryCard}>
                   <Text style={[styles.summaryValue, { color: item.color }]}>{item.value}</Text>

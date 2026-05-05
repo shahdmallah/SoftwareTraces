@@ -28,23 +28,46 @@ import { WeatherSection } from '../components/WeatherSection';
 import { ReviewsSection } from '../components/ReviewsSection';
 import { CommunityPostsSection } from '../components/CommunityPostsSection';
 import { useTrailTracking } from '../contexts/TrailTrackingContext';
-import { feedItems } from '../data/activitySocial';
+import { getSocialFeed, type SocialFeedReview } from '../api/socialApi';
+import { type FeedItem } from '../data/activitySocial';
 
 type TrailDetailScreenRouteProp = RouteProp<RootStackParamList, 'TrailDetail'>;
 type TrailDetailNavigationProp = StackNavigationProp<RootStackParamList>;
-type TrailAttribute = {
-  id: string;
-  icon: keyof typeof Ionicons.glyphMap;
-  label: string;
-};
 
-const trailAttributes: TrailAttribute[] = [
-  { id: 'dog', icon: 'paw-outline', label: 'Dog friendly' },
-  { id: 'kid', icon: 'happy-outline', label: 'Kid friendly' },
-  { id: 'parking', icon: 'car-outline', label: 'Parking' },
-  { id: 'water', icon: 'water-outline', label: 'Water sources' },
-  { id: 'shade', icon: 'leaf-outline', label: 'Shade' },
-];
+function formatRelativeTime(value: string) {
+  const timestamp = new Date(value).getTime();
+  if (!Number.isFinite(timestamp)) return 'recently';
+  const diffMinutes = Math.floor(Math.max(0, Date.now() - timestamp) / 60000);
+  if (diffMinutes < 1) return 'just now';
+  if (diffMinutes < 60) return `${diffMinutes}m ago`;
+  const diffHours = Math.floor(diffMinutes / 60);
+  if (diffHours < 24) return `${diffHours}h ago`;
+  return `${Math.floor(diffHours / 24)}d ago`;
+}
+
+function mapSocialReviewToFeedItem(item: SocialFeedReview): FeedItem {
+  const userName = item.user.full_name || 'Trail friend';
+  return {
+    id: item.id,
+    kind: 'recap',
+    trailId: item.trail.id,
+    user: userName,
+    handle: `@${userName.toLowerCase().replace(/[^a-z0-9]+/g, '.').replace(/^\.+|\.+$/g, '') || 'traces'}`,
+    avatar: item.user.avatar_url || '',
+    image: item.photo_url || item.photos[0]?.url || item.trail.image || '',
+    trailNameEn: item.trail.name,
+    trailNameAr: item.trail.name,
+    regionEn: 'Trail review',
+    regionAr: 'Trail review',
+    captionEn: item.content,
+    captionAr: item.content,
+    timeEn: formatRelativeTime(item.created_at),
+    timeAr: formatRelativeTime(item.created_at),
+    likes: item.likes_count,
+    comments: item.comments_count,
+    distance: `${item.rating}/5`,
+  };
+}
 
 export function TrailDetailScreen() {
   const route = useRoute<TrailDetailScreenRouteProp>();
@@ -68,6 +91,7 @@ export function TrailDetailScreen() {
   const [weatherError, setWeatherError] = useState<string | null>(null);
   const [isWeatherLoading, setIsWeatherLoading] = useState(true);
   const [selectedForecastDate, setSelectedForecastDate] = useState<string | null>(null);
+  const [communityPosts, setCommunityPosts] = useState<FeedItem[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -125,6 +149,32 @@ export function TrailDetailScreen() {
       cancelled = true;
     };
   }, [isAuthenticated, trailId]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadCommunityPosts = async () => {
+      try {
+        const response = await getSocialFeed({ page: 1, limit: 50 });
+        if (!cancelled) {
+          const posts = response.data
+            .filter((item) => item.trail.id === trailId)
+            .map(mapSocialReviewToFeedItem);
+          setCommunityPosts(posts);
+        }
+      } catch {
+        if (!cancelled) {
+          setCommunityPosts([]);
+        }
+      }
+    };
+
+    void loadCommunityPosts();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [trailId]);
 
   const weeklyForecast = useMemo(() => buildForecast(trail, language), [language, trail]);
   const trailImages = useMemo(() => {
@@ -258,7 +308,7 @@ export function TrailDetailScreen() {
     );
   }
 
-  const posts = feedItems.filter((item) => item.trailId === trail.id);
+  const posts = communityPosts;
   const isThisTrailActive = activeSessionTrailId === trail.id;
 
   return (
@@ -347,23 +397,6 @@ export function TrailDetailScreen() {
               mapImageUri={mapImageUri}
               onPress={openMapPreview}
             />
-          </AnimatedBlock>
-
-          <AnimatedBlock delay={230}>
-            <View style={styles.attributesCard}>
-              <View style={[styles.attributesGrid, isArabic && styles.attributesGridRtl]}>
-                {trailAttributes.map((attribute) => (
-                  <View key={attribute.id} style={styles.attributeTile}>
-                    <View style={styles.attributeIconWrap}>
-                      <Ionicons name={attribute.icon} size={18} color="#630E13" />
-                    </View>
-                    <Text style={styles.attributeLabel} numberOfLines={2}>
-                      {attribute.label}
-                    </Text>
-                  </View>
-                ))}
-              </View>
-            </View>
           </AnimatedBlock>
 
           <AnimatedBlock delay={250}>
@@ -474,48 +507,6 @@ actionRow: {
   flexDirection: 'row',
   alignItems: 'stretch',
   gap: 10,
-},
-attributesCard: {
-  backgroundColor: '#FFFFFF',
-  borderRadius: 30,
-  padding: 12,
-  borderWidth: 1,
-  borderColor: '#EFE3D2',
-},
-attributesGrid: {
-  flexDirection: 'row',
-  flexWrap: 'wrap',
-  gap: 10,
-},
-attributesGridRtl: {
-  flexDirection: 'row-reverse',
-},
-attributeTile: {
-  flexBasis: '48%',
-  flexGrow: 1,
-  maxWidth: '48%',
-  height: 72,
-  flexDirection: 'row',
-  alignItems: 'center',
-  gap: 10,
-  borderRadius: 24,
-  paddingHorizontal: 12,
-  backgroundColor: '#F8F4EC',
-},
-attributeIconWrap: {
-  width: 36,
-  height: 36,
-  borderRadius: 18,
-  alignItems: 'center',
-  justifyContent: 'center',
-  backgroundColor: '#F7EBE8',
-},
-attributeLabel: {
-  flex: 1,
-  color: '#4A4131',
-  fontSize: 12,
-  lineHeight: 15,
-  fontWeight: '800',
 },
 recordButton: {
   flex: 1,

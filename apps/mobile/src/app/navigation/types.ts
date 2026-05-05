@@ -26,6 +26,16 @@ export type RootStackParamList = {
   Recording: { trailId: string };
   TrailReview: undefined;
   History: undefined;
+  Notifications: undefined;
+  SearchResults: { query?: string } | undefined;
+  AdvancedFilters: undefined;
+  EditProfile: undefined;
+  TrailDrafts: undefined;
+  MyTrails: undefined;
+  SupportHelp: undefined;
+  ReportIssue: undefined;
+  Legal: undefined;
+  OfflineDownloads: undefined;
 };
 
 export type AppTabParamList = {

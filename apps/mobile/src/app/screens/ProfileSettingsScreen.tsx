@@ -45,6 +45,17 @@ export function ProfileSettingsScreen() {
         { id: 'history', labelEn: 'Completed trails', labelAr: 'المسارات المكتملة', active: false, onPress: () => navigation.navigate('History') },
       ];
     }
+    if (route.params.settingId === 's5') {
+      return [
+        { id: 'notifications', labelEn: 'Notifications', labelAr: 'الإشعارات', active: false, onPress: () => navigation.navigate('Notifications') },
+        { id: 'myTrails', labelEn: 'My trails', labelAr: 'مساراتي', active: false, onPress: () => navigation.navigate('MyTrails') },
+        { id: 'trailDrafts', labelEn: 'Trail drafts', labelAr: 'مسودات المسارات', active: false, onPress: () => navigation.navigate('TrailDrafts') },
+        { id: 'offlineDownloads', labelEn: 'Offline downloads', labelAr: 'تنزيلات بلا إنترنت', active: false, onPress: () => navigation.navigate('OfflineDownloads') },
+        { id: 'support', labelEn: 'Support & help', labelAr: 'الدعم والمساعدة', active: false, onPress: () => navigation.navigate('SupportHelp') },
+        { id: 'reportIssue', labelEn: 'Report issue', labelAr: 'الإبلاغ عن مشكلة', active: false, onPress: () => navigation.navigate('ReportIssue') },
+        { id: 'legal', labelEn: 'Legal', labelAr: 'الشروط والخصوصية', active: false, onPress: () => navigation.navigate('Legal') },
+      ];
+    }
     return [];
   }, [language, navigation, route.params.settingId, setLanguage]);
 

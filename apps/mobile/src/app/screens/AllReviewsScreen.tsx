@@ -6,6 +6,7 @@ import { StackNavigationProp } from '@react-navigation/stack';
 
 import { getTrailReviews, type TrailReview } from '../api/trailsApi';
 import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
+import { ReviewPhotoStrip } from '../components/ReviewPhotoStrip';
 import { useLanguage } from '../contexts/LanguageContext';
 import { RootStackParamList } from '../navigation/types';
 import { ltrRow, ltrText, rtlRow, rtlText } from '../utils/direction';
@@ -124,6 +125,9 @@ export function AllReviewsScreen() {
                   </Text>
                 </View>
                 <Text style={[styles.reviewContent, isArabic ? rtlText : ltrText]}>{review.content}</Text>
+                <View style={styles.reviewPhotos}>
+                  <ReviewPhotoStrip photos={review.photos} />
+                </View>
               </View>
             </AnimatedBlock>
           ))
@@ -255,6 +259,9 @@ const styles = StyleSheet.create({
     color: '#4A4131',
     fontSize: 14,
     lineHeight: 21,
+  },
+  reviewPhotos: {
+    marginTop: 12,
   },
   emptyText: {
     marginTop: 12,
