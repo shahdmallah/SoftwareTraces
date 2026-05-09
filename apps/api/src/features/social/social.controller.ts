@@ -6,19 +6,25 @@ import { sendSocialNotification } from "../../services/notificationService";
 
 interface FeedReviewRow {
   id: string;
-  type: "review";
-  rating: number;
+  type: "review" | "activity";
+  rating: number | null;
   title: string | null;
-  content: string;
+  content: string | null;
+  caption: string | null;
+  visibility: string | null;
   photo_url: string | null;
   photos: { id: string; url: string; created_at: string }[] | null;
   created_at: string;
   user_id: string;
   full_name: string;
   avatar_url: string | null;
-  trail_id: string;
-  trail_name: string;
+  trail_id: string | null;
+  trail_name: string | null;
   trail_image: string | null;
+  activity_id: string | null;
+  distance_meters: number | null;
+  elapsed_time_seconds: number | null;
+  elevation_gain_meters: number | null;
   likes_count: string;
   is_liked_by_user: boolean;
   comments_count: string;
@@ -264,73 +270,127 @@ export async function getFeed(req: Request, res: Response): Promise<void> {
     console.log(`[social] getFeed START - userId: ${userId}, page: ${page}, limit: ${limit}`);
     console.log("[getFeed] Params:", { userId, page, limit, offset, query: req.query });
 
-    console.log("[getFeed] Step 1: Counting feed reviews from followed users...");
+    console.log("[getFeed] Step 1: Counting combined feed rows...");
     const countResult = await pool.query<{ count: string }>(
-      `SELECT COUNT(*) AS count
-       FROM trail_reviews tr
-       JOIN user_follows uf ON uf.following_id = tr.user_id
-       WHERE uf.follower_id = $1::uuid`,
+      `
+      WITH feed_rows AS (
+        SELECT tr.id
+        FROM trail_reviews tr
+        JOIN user_follows uf ON uf.following_id = tr.user_id
+        WHERE uf.follower_id = $1::uuid
+        UNION ALL
+        SELECT ap.id
+        FROM activity_posts ap
+        WHERE ap.visibility = 'public'
+      )
+      SELECT COUNT(*) AS count
+      FROM feed_rows
+      `,
       [userId]
     );
 
     const total = parseInt(countResult.rows[0]?.count ?? "0", 10);
-    console.log("[getFeed] Step 2: Feed total count:", total);
+    console.log("[getFeed] Step 2: Combined feed total count:", total);
 
-    console.log("[getFeed] Step 3: Querying feed rows...");
+    console.log("[getFeed] Step 3: Querying combined feed rows...");
     const result = await pool.query<FeedReviewRow>(
-      `SELECT
-         tr.id,
-         'review'::text AS type,
-         tr.rating,
-         tr.title,
-         tr.content,
-         (
-           SELECT rp.photo_url
-           FROM review_photos rp
-           WHERE rp.review_id = tr.id
-           ORDER BY rp.created_at ASC
-           LIMIT 1
-         ) AS photo_url,
-         COALESCE(
-           (
-             SELECT json_agg(
-               json_build_object(
-                 'id', review_photo_list.id,
-                 'url', review_photo_list.photo_url,
-                 'created_at', review_photo_list.created_at
-               )
-               ORDER BY review_photo_list.created_at ASC
-             )
-             FROM review_photos review_photo_list
-             WHERE review_photo_list.review_id = tr.id
-           ),
-           '[]'::json
-         ) AS photos,
-         tr.created_at,
-         p.user_id,
-         p.full_name,
-         p.avatar_url,
-         t.id AS trail_id,
-         t.name AS trail_name,
-         t.image AS trail_image,
-         COUNT(DISTINCT rl.id) AS likes_count,
-         COUNT(DISTINCT rc.id) AS comments_count,
-         EXISTS(
-           SELECT 1
-           FROM review_likes review_like_lookup
-           WHERE review_like_lookup.review_id = tr.id
-             AND review_like_lookup.user_id = $4::uuid
-         ) AS is_liked_by_user
-       FROM trail_reviews tr
-       JOIN user_follows uf ON uf.following_id = tr.user_id
-       JOIN profiles p ON p.id = tr.user_id
-       JOIN trails t ON t.id = tr.trail_id
-       LEFT JOIN review_likes rl ON rl.review_id = tr.id
-       LEFT JOIN review_comments rc ON rc.review_id = tr.id
-       WHERE uf.follower_id = $1::uuid
-       GROUP BY tr.id, p.user_id, p.full_name, p.avatar_url, t.id, t.name, t.image
-       ORDER BY tr.created_at DESC
-       LIMIT $2 OFFSET $3`,
+      `
+      WITH feed_rows AS (
+        SELECT
+          tr.id,
+          tr.created_at,
+          'review'::text AS type,
+          tr.rating,
+          tr.title,
+          tr.content,
+          NULL::text AS caption,
+          NULL::text AS visibility,
+          (
+            SELECT rp.photo_url
+            FROM review_photos rp
+            WHERE rp.review_id = tr.id
+            ORDER BY rp.created_at ASC
+            LIMIT 1
+          ) AS photo_url,
+          COALESCE(
+            (
+              SELECT json_agg(
+                json_build_object(
+                  'id', review_photo_list.id,
+                  'url', review_photo_list.photo_url,
+                  'created_at', review_photo_list.created_at
+                )
+                ORDER BY review_photo_list.created_at ASC
+              )
+              FROM review_photos review_photo_list
+              WHERE review_photo_list.review_id = tr.id
+            ),
+            '[]'::json
+          ) AS photos,
+          p.user_id,
+          p.full_name,
+          p.avatar_url,
+          t.id AS trail_id,
+          t.name AS trail_name,
+          t.image AS trail_image,
+          NULL::uuid AS activity_id,
+          NULL::numeric AS distance_meters,
+          NULL::integer AS elapsed_time_seconds,
+          NULL::numeric AS elevation_gain_meters,
+          COUNT(DISTINCT rl.id)::text AS likes_count,
+          COUNT(DISTINCT rc.id)::text AS comments_count,
+          EXISTS(
+            SELECT 1
+            FROM review_likes review_like_lookup
+            WHERE review_like_lookup.review_id = tr.id
+              AND review_like_lookup.user_id = $4::uuid
+          ) AS is_liked_by_user
+        FROM trail_reviews tr
+        JOIN user_follows uf ON uf.following_id = tr.user_id
+        JOIN profiles p ON p.id = tr.user_id
+        JOIN trails t ON t.id = tr.trail_id
+        LEFT JOIN review_likes rl ON rl.review_id = tr.id
+        LEFT JOIN review_comments rc ON rc.review_id = tr.id
+        WHERE uf.follower_id = $1::uuid
+        GROUP BY tr.id, p.user_id, p.full_name, p.avatar_url, t.id, t.name, t.image
+
+        UNION ALL
+
+        SELECT
+          ap.id,
+          ap.created_at,
+          'activity'::text AS type,
+          NULL::integer AS rating,
+          NULL::text AS title,
+          NULL::text AS content,
+          ap.caption,
+          ap.visibility,
+          NULL::text AS photo_url,
+          '[]'::json AS photos,
+          p.user_id,
+          p.full_name,
+          p.avatar_url,
+          a.trail_id,
+          t.name AS trail_name,
+          t.image AS trail_image,
+          a.id AS activity_id,
+          a.distance_meters,
+          a.elapsed_time_seconds,
+          a.elevation_gain_meters,
+          '0'::text AS likes_count,
+          '0'::text AS comments_count,
+          false AS is_liked_by_user
+        FROM activity_posts ap
+        JOIN activities a ON a.id = ap.activity_id
+        JOIN profiles p ON p.id = ap.user_id
+        LEFT JOIN trails t ON t.id = a.trail_id
+        WHERE ap.visibility = 'public'
+      )
+      SELECT *
+      FROM feed_rows
+      ORDER BY created_at DESC
+      LIMIT $2 OFFSET $3
+      `,
       [userId, limit, offset, userId]
     );
     console.log("[getFeed] Step 4: Feed rows returned:", result.rows.length);
@@ -353,8 +413,19 @@ export async function getFeed(req: Request, res: Response): Promise<void> {
         rating: row.rating,
         title: row.title,
         content: row.content,
+        caption: row.caption,
+        visibility: row.visibility,
         photo_url: row.photo_url,
         photos: Array.isArray(row.photos) ? row.photos : [],
+        activity:
+          row.type === "activity"
+            ? {
+                id: row.activity_id,
+                distance_meters: row.distance_meters,
+                elapsed_time_seconds: row.elapsed_time_seconds,
+                elevation_gain_meters: row.elevation_gain_meters,
+              }
+            : null,
         created_at: row.created_at,
         likes_count: Number(row.likes_count),
         comments_count: Number(row.comments_count),
