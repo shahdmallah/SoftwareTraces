@@ -60,6 +60,75 @@ function formatElapsed(ms: number) {
   return [hours, minutes, seconds].map((value) => String(value).padStart(2, '0')).join(':');
 }
 
+function getDistanceMeters(from: [number, number], to: [number, number]) {
+  const earthRadius = 6371000;
+  const toRadians = (value: number) => (value * Math.PI) / 180;
+  const latDelta = toRadians(to[1] - from[1]);
+  const lngDelta = toRadians(to[0] - from[0]);
+  const lat1 = toRadians(from[1]);
+  const lat2 = toRadians(to[1]);
+
+  const a =
+    Math.sin(latDelta / 2) * Math.sin(latDelta / 2) +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(lngDelta / 2) * Math.sin(lngDelta / 2);
+
+  return earthRadius * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function getBearingDegrees(from: [number, number], to: [number, number]) {
+  const toRadians = (value: number) => (value * Math.PI) / 180;
+  const toDegrees = (value: number) => (value * 180) / Math.PI;
+  const [fromLng, fromLat] = from;
+  const [toLng, toLat] = to;
+  const fromLatRad = toRadians(fromLat);
+  const toLatRad = toRadians(toLat);
+  const deltaLng = toRadians(toLng - fromLng);
+  const y = Math.sin(deltaLng) * Math.cos(toLatRad);
+  const x =
+    Math.cos(fromLatRad) * Math.sin(toLatRad) -
+    Math.sin(fromLatRad) * Math.cos(toLatRad) * Math.cos(deltaLng);
+  const initialBearing = toDegrees(Math.atan2(y, x));
+  return (initialBearing + 360) % 360;
+}
+
+function toCompassDirection(degrees: number) {
+  const directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+  return directions[Math.round(degrees / 45) % 8];
+}
+
+function buildNavigationHint(
+  currentLocation: [number, number] | null,
+  routeCoordinates: [number, number][],
+  nearestDistance: number | null,
+) {
+  if (!currentLocation || routeCoordinates.length < 2) {
+    return null;
+  }
+
+  let nearestIndex = 0;
+  let nearestPointDistance = Number.POSITIVE_INFINITY;
+
+  routeCoordinates.forEach((point, index) => {
+    const distance = getDistanceMeters(currentLocation, point);
+    if (distance < nearestPointDistance) {
+      nearestPointDistance = distance;
+      nearestIndex = index;
+    }
+  });
+
+  const targetIndex = Math.min(nearestIndex + 4, routeCoordinates.length - 1);
+  const targetPoint = routeCoordinates[targetIndex];
+  const distanceToTarget = Math.round(getDistanceMeters(currentLocation, targetPoint));
+  const heading = toCompassDirection(getBearingDegrees(currentLocation, targetPoint));
+  const offRoute = nearestDistance != null && nearestDistance > 120;
+
+  if (offRoute) {
+    return `Navigation: Head ${heading} for about ${Math.max(distanceToTarget, 20)} m to rejoin the trail line.`;
+  }
+
+  return `Navigation: Continue ${heading} for about ${Math.max(distanceToTarget, 20)} m along the next trail segment.`;
+}
+
 export function RecordingScreen() {
   const navigation = useNavigation<RecordingNavigationProp>();
   const route = useRoute<RecordingRouteProp>();
@@ -81,6 +150,13 @@ export function RecordingScreen() {
   const [isPanelExpanded, setIsPanelExpanded] = useState(false);
   const [isPhotosExpanded, setIsPhotosExpanded] = useState(false);
 
+  const [zoomLevel, setZoomLevel] = useState(12.2);
+  const [pitch, setPitch] = useState(0); // 0 for 2D, 45 for 3D
+
+  const zoomIn = () => setZoomLevel(prev => Math.min(prev + 1, 20));
+  const zoomOut = () => setZoomLevel(prev => Math.max(prev - 1, 0));
+  const toggle3D = () => setPitch(prev => prev === 0 ? 45 : 0);
+
   const canRenderMapbox = Boolean(Mapbox && !mapboxLoadError);
   const session = activeSession?.trailId === trailId ? activeSession : null;
   const trail = session?.trail ?? null;
@@ -99,6 +175,11 @@ export function RecordingScreen() {
   const plannedRouteFeature = useMemo(() => toLineFeature(plannedRoute), [plannedRoute]);
   const recordedRouteFeature = useMemo(() => toLineFeature(recordedPath), [recordedPath]);
   const nearestDistance = session?.nearestDistance ?? null;
+  const routeCoordinates = trail?.routeCoordinates?.length ? trail.routeCoordinates : [];
+  const navigationHint = useMemo(
+    () => buildNavigationHint(currentLocation, routeCoordinates, nearestDistance),
+    [currentLocation, nearestDistance, routeCoordinates],
+  );
 
   useEffect(() => {
     hasStartedSessionRef.current = false;
@@ -250,6 +331,7 @@ export function RecordingScreen() {
   return (
     <View style={styles.recordingContainer}>
       {canRenderMapbox && Mapbox ? (
+        <>
         <Mapbox.MapView
           style={styles.map}
           styleURL={MAPBOX_STYLE_URL || Mapbox.StyleURL.Outdoors}
@@ -260,10 +342,9 @@ export function RecordingScreen() {
         >
           <Mapbox.Camera
             ref={cameraRef}
-            defaultSettings={{
-              centerCoordinate: trail ? [trail.coordinates[1], trail.coordinates[0]] : fallbackCenter,
-              zoomLevel: 12.2,
-            }}
+            centerCoordinate={trail ? [trail.coordinates[1], trail.coordinates[0]] : fallbackCenter}
+            zoomLevel={zoomLevel}
+            pitch={pitch}
           />
 
           {plannedRoute.length >= 2 ? (
@@ -312,6 +393,19 @@ export function RecordingScreen() {
             </Mapbox.PointAnnotation>
           ))}
         </Mapbox.MapView>
+
+        <View style={styles.mapControls}>
+          <Pressable style={styles.controlButton} onPress={zoomIn}>
+            <Ionicons name="add" size={24} color="#2C2418" />
+          </Pressable>
+          <Pressable style={styles.controlButton} onPress={zoomOut}>
+            <Ionicons name="remove" size={24} color="#2C2418" />
+          </Pressable>
+          <Pressable style={[styles.controlButton, pitch > 0 && styles.controlButtonActive]} onPress={toggle3D}>
+            <Ionicons name="cube-outline" size={20} color={pitch > 0 ? "#fff" : "#2C2418"} />
+          </Pressable>
+        </View>
+      </>
       ) : (
         <View style={styles.fallbackMap}>
           <View style={styles.fallbackCard}>
@@ -416,6 +510,7 @@ export function RecordingScreen() {
                     <Text style={styles.statusText}>
                       {locationMessage ?? stepMessage ?? trailError ?? 'Your GPS path overlays the trail map in real time.'}
                     </Text>
+                    {navigationHint ? <Text style={styles.navigationHintText}>{navigationHint}</Text> : null}
                   </View>
 
                   <View style={[styles.guideCard, nearestDistance != null && nearestDistance > 120 && styles.guideCardWarning]}>
@@ -500,6 +595,32 @@ const styles = StyleSheet.create({
   },
   map: {
     ...StyleSheet.absoluteFillObject,
+  },
+  mapControls: {
+    position: 'absolute',
+    right: 12,
+    bottom: 120,
+    flexDirection: 'column',
+    gap: 8,
+  },
+  controlButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(234,226,204,0.96)',
+    borderWidth: 1,
+    borderColor: 'rgba(44,36,24,0.10)',
+    shadowColor: '#000',
+    shadowOpacity: 0.08,
+    shadowOffset: { width: 0, height: 4 },
+    shadowRadius: 12,
+    elevation: 6,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  controlButtonActive: {
+    backgroundColor: '#1D9E75',
+    borderColor: 'rgba(29,158,117,0.3)',
   },
   topOverlay: {
     position: 'absolute',
@@ -615,6 +736,13 @@ const styles = StyleSheet.create({
     color: '#705F4D',
     fontSize: 12,
     lineHeight: 18,
+  },
+  navigationHintText: {
+    marginTop: 8,
+    color: '#2C2418',
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: '700',
   },
   guideCard: {
     flexDirection: 'row',

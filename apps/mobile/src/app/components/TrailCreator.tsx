@@ -1,11 +1,12 @@
 // Updated to support staged trail creation with start, optional middle waypoints, end, and loop routes.
-import React, { useMemo, useRef, useState } from 'react';
-import { View, Text, TextInput, Pressable, StyleSheet, ActivityIndicator, Alert } from 'react-native';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Image, View, Text, TextInput, Pressable, StyleSheet, ActivityIndicator, Alert } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 import Mapbox from '@rnmapbox/maps';
 import type { Feature, FeatureCollection, LineString, Point } from 'geojson';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { createTrail, getTrailStats, type TrailStatsResponse } from '../api/trailsApi';
+import { createTrail, uploadTrailPhoto, getTrailStats, type TrailStatsResponse } from '../api/trailsApi';
 import { setTrailRouteCoordinates } from '../state/trailRoutes';
 
 type LngLat = [number, number];
@@ -13,7 +14,13 @@ type DrawingStage = 'start' | 'middle' | 'end';
 
 type SaveTrailBody = {
   name: string;
+  name_ar?: string;
   description: string;
+  description_ar?: string;
+  region: string;
+  region_ar?: string;
+  features: string[];
+  features_ar?: string[];
   coordinates: LngLat[];
   stats: TrailStatsResponse;
 };
@@ -37,9 +44,16 @@ export type TrailCreatorProps = {
 
 const MAPBOX_ACCESS_TOKEN = process.env.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN ?? '';
 
-if (MAPBOX_ACCESS_TOKEN) {
-  Mapbox.setAccessToken(MAPBOX_ACCESS_TOKEN);
-}
+const AVAILABLE_FEATURES = [
+  'Water',
+  'Historical',
+  'Olive',
+  'Summit',
+  'Scenic',
+  'Wildlife',
+  'Cultural',
+  'Adventure'
+];
 
 function formatDuration(minutes: number) {
   if (!Number.isFinite(minutes) || minutes <= 0) return '--';
@@ -47,6 +61,117 @@ function formatDuration(minutes: number) {
   const m = Math.round(minutes % 60);
   if (h <= 0) return `${m}m`;
   return `${h}h ${m}m`;
+}
+
+async function translateText(text: string, from: string, to: string): Promise<string> {
+  if (!text.trim()) return text;
+  try {
+    const response = await fetch(`https://translate.googleapis.com/translate_a/single?client=gtx&sl=${from}&tl=${to}&dt=t&q=${encodeURIComponent(text)}`);
+    const data = await response.json();
+    return data[0][0][0];
+  } catch (error) {
+    console.warn('Translation failed:', error);
+    return text; // Fallback to original text
+  }
+}
+
+function isArabic(text: string): boolean {
+  const arabicRegex = /[\u0600-\u06FF]/;
+  return arabicRegex.test(text);
+}
+
+async function pickTrailImage(): Promise<string | null> {
+  try {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert('Permission required', 'Media library access is required to choose a trail photo.');
+      return null;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 0.8,
+      allowsEditing: true,
+      aspect: [4, 3],
+    });
+
+    if (result.canceled || !result.assets.length) {
+      return null;
+    }
+
+    return result.assets[0].uri;
+  } catch (error) {
+    console.warn('Trail image picker failed:', error);
+    return null;
+  }
+}
+
+async function reverseGeocodeRegion(coordinate: LngLat): Promise<string> {
+  if (!MAPBOX_ACCESS_TOKEN) {
+    return '';
+  }
+
+  try {
+    const url = new URL(`https://api.mapbox.com/geocoding/v5/mapbox.places/${coordinate[0]},${coordinate[1]}.json`);
+    url.searchParams.set('access_token', MAPBOX_ACCESS_TOKEN);
+    url.searchParams.set('types', 'place,locality,region,neighborhood,district');
+    url.searchParams.set('language', 'en');
+    url.searchParams.set('limit', '1');
+
+    const res = await fetch(url.toString());
+    if (!res.ok) {
+      return '';
+    }
+
+    const data = await res.json() as {
+      features?: Array<{
+        text?: string;
+        place_name?: string;
+        place_type?: string[];
+        context?: Array<{ text?: string; id?: string }>;
+      }>;
+    };
+    const feature = data.features?.[0];
+    if (!feature) {
+      return '';
+    }
+
+    const neighborhoodContext = feature.context?.find((item) => item.id?.startsWith('neighborhood'))
+      ?? feature.context?.find((item) => item.id?.startsWith('district'))
+      ?? (feature.place_type?.includes('neighborhood') || feature.place_type?.includes('district') ? feature : undefined);
+    const placeContext = feature.context?.find((item) => item.id?.startsWith('place'))
+      ?? feature.context?.find((item) => item.id?.startsWith('locality'))
+      ?? (feature.place_type?.includes('place') || feature.place_type?.includes('locality') ? feature : undefined);
+    const fallbackRegionContext = feature.context?.find((item) => item.id?.startsWith('region'));
+
+    const neighborhoodName = neighborhoodContext?.text?.trim();
+    const cityName = placeContext?.text?.trim() ?? fallbackRegionContext?.text?.trim();
+
+    if (neighborhoodName && cityName && neighborhoodName.toLowerCase() !== cityName.toLowerCase()) {
+      return `${neighborhoodName} - ${cityName}`;
+    }
+
+    if (neighborhoodName) {
+      return neighborhoodName;
+    }
+
+    if (cityName) {
+      return cityName;
+    }
+
+    if (feature.text?.trim()) {
+      return feature.text.trim();
+    }
+
+    if (feature.place_name?.trim()) {
+      return feature.place_name.split(',')[0].trim();
+    }
+
+    return '';
+  } catch (error) {
+    console.warn('Region reverse geocode failed:', error);
+    return '';
+  }
 }
 
 function toLineFeature(routeCoordinates: LngLat[]): FeatureCollection {
@@ -150,14 +275,42 @@ export function TrailCreator({
   const [routeCoordinates, setRouteCoordinates] = useState<LngLat[]>([]);
 
   const [stats, setStats] = useState<TrailStatsResponse | null>(null);
+
+  useEffect(() => {
+    const fetchRegion = async () => {
+      if (!startCoordinate) {
+        setRegion('');
+        return;
+      }
+
+      setIsRegionLoading(true);
+      const fetchedRegion = await reverseGeocodeRegion(startCoordinate);
+      setIsRegionLoading(false);
+      setRegion(fetchedRegion || '');
+    };
+
+    void fetchRegion();
+  }, [startCoordinate]);
   const [isCalculating, setIsCalculating] = useState(false);
   const [calcError, setCalcError] = useState<string | null>(null);
 
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
+  const [region, setRegion] = useState('');
+  const [isRegionLoading, setIsRegionLoading] = useState(false);
+  const [features, setFeatures] = useState<string[]>([]);
+  const [trailImage, setTrailImage] = useState<string | null>(null);
+  const [isPickingImage, setIsPickingImage] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState<string | null>(null);
+
+  const [zoomLevel, setZoomLevel] = useState(initialZoom);
+  const [pitch, setPitch] = useState(0); // 0 for 2D, 45 for 3D
+
+  const zoomIn = () => setZoomLevel(prev => Math.min(prev + 1, 20));
+  const zoomOut = () => setZoomLevel(prev => Math.max(prev - 1, 0));
+  const toggle3D = () => setPitch(prev => prev === 0 ? 45 : 0);
 
   const routeGeojson = useMemo(() => toLineFeature(routeCoordinates), [routeCoordinates]);
   const startGeojson = useMemo(() => toPointFeature(startCoordinate), [startCoordinate]);
@@ -174,6 +327,10 @@ export function TrailCreator({
     setSaveError(null);
     setCalcError(null);
     setStats(null);
+    setName('');
+    setDescription('');
+    setRegion('');
+    setFeatures([]);
     setStartCoordinate(null);
     setMiddleCoordinates([]);
     setEndCoordinate(null);
@@ -185,6 +342,10 @@ export function TrailCreator({
   };
 
   const clear = () => {
+    setName('');
+    setDescription('');
+    setRegion('');
+    setFeatures([]);
     setStartCoordinate(null);
     setMiddleCoordinates([]);
     setEndCoordinate(null);
@@ -292,18 +453,54 @@ export function TrailCreator({
       Alert.alert('Missing name', 'Please enter a trail name.');
       return;
     }
+    if (isRegionLoading) {
+      Alert.alert('Waiting for region', 'Please wait until the start point region is determined.');
+      return;
+    }
+    if (!region.trim()) {
+      Alert.alert('Missing region', 'Could not determine region from the start point. Please try a different start location.');
+      return;
+    }
 
     setIsSaving(true);
     setSaveError(null);
     setSaveSuccess(null);
     try {
+      // Handle translations
+      const nameAr = isArabic(name) ? name : await translateText(name, 'en', 'ar');
+      const nameEn = isArabic(name) ? await translateText(name, 'ar', 'en') : name;
+      
+      const descAr = isArabic(description) ? description : await translateText(description, 'en', 'ar');
+      const descEn = isArabic(description) ? await translateText(description, 'ar', 'en') : description;
+      
+      const regionAr = isArabic(region) ? region : await translateText(region, 'en', 'ar');
+      const regionEn = isArabic(region) ? await translateText(region, 'ar', 'en') : region;
+      
+      const featuresAr = await Promise.all(features.map(async f => isArabic(f) ? f : await translateText(f, 'en', 'ar')));
+      const featuresEn = await Promise.all(features.map(async f => isArabic(f) ? await translateText(f, 'ar', 'en') : f));
+
       const payload: SaveTrailBody = {
-        name: name.trim(),
-        description: description.trim(),
+        name: nameEn,
+        name_ar: nameAr,
+        description: descEn,
+        description_ar: descAr,
+        region: regionEn,
+        region_ar: regionAr,
+        features: featuresEn,
+        features_ar: featuresAr,
         coordinates: routeCoordinates,
         stats,
       };
       const json = await createTrail(payload);
+      if (trailImage) {
+        try {
+          await uploadTrailPhoto(json.data.id, trailImage);
+        } catch (uploadError) {
+          console.warn('Trail photo upload failed:', uploadError);
+          setSaveError('Trail saved, but photo upload failed.');
+        }
+      }
+
       setTrailRouteCoordinates(json.data.id, routeCoordinates);
       setSaveSuccess('Saved!');
       onSaved?.({ ...payload, id: json.data.id });
@@ -372,11 +569,9 @@ export function TrailCreator({
       >
         <Mapbox.Camera
           ref={cameraRef}
-          defaultSettings={{
-            centerCoordinate: initialCenter,
-            zoomLevel: initialZoom,
-            pitch: 0,
-          }}
+          centerCoordinate={initialCenter}
+          zoomLevel={zoomLevel}
+          pitch={pitch}
         />
 
         <Mapbox.ShapeSource id="trail-route-source" shape={routeGeojson}>
@@ -429,6 +624,18 @@ export function TrailCreator({
           />
         </Mapbox.ShapeSource>
       </Mapbox.MapView>
+
+      <View style={styles.mapControls}>
+        <Pressable style={styles.controlButton} onPress={zoomIn}>
+          <Ionicons name="add" size={24} color="#2C2418" />
+        </Pressable>
+        <Pressable style={styles.controlButton} onPress={zoomOut}>
+          <Ionicons name="remove" size={24} color="#2C2418" />
+        </Pressable>
+        <Pressable style={[styles.controlButton, pitch > 0 && styles.controlButtonActive]} onPress={toggle3D}>
+          <Ionicons name="cube-outline" size={20} color={pitch > 0 ? "#fff" : "#2C2418"} />
+        </Pressable>
+      </View>
 
       <View style={[styles.topBar, { paddingTop: Math.max(12, insets.top + 8) }]}>
         <View style={styles.brandPill}>
@@ -562,6 +769,82 @@ export function TrailCreator({
                     multiline
                   />
                 </View>
+                <View style={styles.formRow}>
+                  <Text style={styles.inputLabel}>Region/City</Text>
+                  <TextInput
+                    value={region}
+                    onChangeText={setRegion}
+                    placeholder={isRegionLoading ? 'Deriving area and city from start point...' : 'e.g. Old City - Nablus'}
+                    placeholderTextColor="#9E8E80"
+                    style={styles.input}
+                  />
+                </View>
+                <View style={styles.formRow}>
+                  <Text style={styles.inputLabel}>Features</Text>
+                  <View style={styles.featuresContainer}>
+                    {AVAILABLE_FEATURES.map((feature) => (
+                      <Pressable
+                        key={feature}
+                        style={[
+                          styles.featureChip,
+                          features.includes(feature) && styles.featureChipSelected,
+                        ]}
+                        onPress={() => {
+                          setFeatures(prev =>
+                            prev.includes(feature)
+                              ? prev.filter(f => f !== feature)
+                              : [...prev, feature]
+                          );
+                        }}
+                      >
+                        <Text
+                          style={[
+                            styles.featureChipText,
+                            features.includes(feature) && styles.featureChipTextSelected,
+                          ]}
+                        >
+                          {feature}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                </View>
+
+                <View style={styles.formRow}>
+                  <Text style={styles.inputLabel}>Trail photo</Text>
+                  <View style={styles.photoRow}>
+                    {trailImage ? (
+                      <Image source={{ uri: trailImage }} style={styles.photoPreview} />
+                    ) : (
+                      <View style={styles.photoPlaceholder}>
+                        <Text style={styles.photoPlaceholderText}>No photo selected</Text>
+                      </View>
+                    )}
+                    <View style={styles.photoActions}>
+                      <Pressable
+                        style={styles.photoButton}
+                        onPress={async () => {
+                          setIsPickingImage(true);
+                          const uri = await pickTrailImage();
+                          setIsPickingImage(false);
+                          if (uri) setTrailImage(uri);
+                        }}
+                      >
+                        <Text style={styles.photoButtonText}>
+                          {isPickingImage ? 'Picking...' : 'Select photo'}
+                        </Text>
+                      </Pressable>
+                      {trailImage ? (
+                        <Pressable
+                          style={[styles.photoButton, styles.photoRemoveButton]}
+                          onPress={() => setTrailImage(null)}
+                        >
+                          <Text style={[styles.photoButtonText, styles.photoRemoveButtonText]}>Remove</Text>
+                        </Pressable>
+                      ) : null}
+                    </View>
+                  </View>
+                </View>
 
                 {saveError ? <Text style={styles.errorText}>{saveError}</Text> : null}
                 {saveSuccess ? <Text style={styles.successText}>{saveSuccess}</Text> : null}
@@ -580,10 +863,6 @@ export function TrailCreator({
                     </>
                   )}
                 </Pressable>
-
-                <Text style={styles.hint}>
-                  Trail creation uses the shared mobile API URL from `EXPO_PUBLIC_API_URL`.
-                </Text>
               </>
             ) : (
               <Text style={styles.hint}>
@@ -600,6 +879,32 @@ export function TrailCreator({
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#EAE2CC' },
   map: { ...StyleSheet.absoluteFillObject },
+  mapControls: {
+    position: 'absolute',
+    right: 12,
+    bottom: 120, // Above the bottom panel
+    flexDirection: 'column',
+    gap: 8,
+  },
+  controlButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(255,255,255,0.94)',
+    borderWidth: 1,
+    borderColor: 'rgba(44,36,24,0.10)',
+    shadowColor: '#000',
+    shadowOpacity: 0.08,
+    shadowOffset: { width: 0, height: 4 },
+    shadowRadius: 12,
+    elevation: 6,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  controlButtonActive: {
+    backgroundColor: '#1D9E75',
+    borderColor: 'rgba(29,158,117,0.3)',
+  },
 
   topBar: {
     position: 'absolute',
@@ -643,8 +948,8 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(44,36,24,0.12)',
   },
   primaryIconButton: {
-    backgroundColor: '#1D9E75',
-    borderColor: 'rgba(29,158,117,0.35)',
+    backgroundColor: '#0F5A38',
+    borderColor: 'rgba(15,90,56,0.35)',
   },
   dangerIconButton: {
     backgroundColor: 'rgba(255,255,255,0.94)',
@@ -746,7 +1051,86 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
   },
+  inputDisabled: {
+    backgroundColor: '#F5F2EA',
+    color: '#8A7A6A',
+  },
   textarea: { minHeight: 86, textAlignVertical: 'top' },
+
+  featuresContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  featureChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 20,
+    backgroundColor: '#F7F3E7',
+    borderWidth: 1,
+    borderColor: 'rgba(44,36,24,0.12)',
+  },
+  photoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flexWrap: 'wrap',
+  },
+  photoPreview: {
+    width: 100,
+    height: 100,
+    borderRadius: 16,
+    backgroundColor: '#EFF7F1',
+    borderWidth: 1,
+    borderColor: 'rgba(15,90,56,0.18)',
+  },
+  photoPlaceholder: {
+    width: 100,
+    height: 100,
+    borderRadius: 16,
+    backgroundColor: '#F1FAF4',
+    borderWidth: 1,
+    borderColor: 'rgba(15,90,56,0.18)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 10,
+  },
+  photoPlaceholderText: {
+    fontSize: 12,
+    color: '#8A7A6A',
+    textAlign: 'center',
+  },
+  photoActions: { flex: 1, justifyContent: 'center', gap: 10 },
+  photoButton: {
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 14,
+    backgroundColor: '#0F5A38',
+    justifyContent: 'center',
+    alignItems: 'center',
+    minWidth: 120,
+  },
+  photoButtonText: {
+    color: '#fff',
+    fontWeight: '900',
+    fontSize: 12,
+  },
+  photoRemoveButton: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: 'rgba(15,90,56,0.18)',
+  },
+  photoRemoveButtonText: {
+    color: '#0F5A38',
+  },
+  featureChipSelected: {
+    backgroundColor: '#0F5A38',
+    borderColor: 'rgba(15,90,56,0.3)',
+  },
+  featureChipText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#2C2418',
+  },
+  featureChipTextSelected: {
+    color: '#fff',
+  },
 
   saveButton: {
     marginTop: 12,

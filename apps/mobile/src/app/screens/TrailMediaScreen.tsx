@@ -50,17 +50,6 @@ const TAB_LABELS: Record<MediaTab, string> = {
   tour: 'Tour',
 };
 
-const LATEST_LABELS = [
-  '11 Oct 2025',
-  '13 Apr 2025',
-  '12 Nov 2024',
-  '29 Jul 2024',
-  '14 May 2024',
-  '20 Apr 2024',
-];
-
-const SEASON_LABELS = ['Spring', 'Summer', 'Autumn', 'Winter', 'Spring', 'Summer'];
-const SIGHT_LABELS = ['River crossing', 'Power trail', 'Reed tunnel', 'Water bend', 'Open marsh', 'Stone house'];
 const CARD_HEIGHTS = [COLUMN_WIDTH * 1.45, COLUMN_WIDTH * 1.45, COLUMN_WIDTH * 1.18, COLUMN_WIDTH * 1.18, COLUMN_WIDTH * 1.22, COLUMN_WIDTH * 1.22];
 
 function formatDistance(distance: number) {
@@ -181,24 +170,103 @@ function buildAxisLabelsFromProfile(profile: ElevationProfile | null, trailDista
   return ['0 km', `${(safe / 2).toFixed(1)} km`, `${safe.toFixed(1)} km`];
 }
 
-function buildGalleryItems(tab: MediaTab, trail: Trail | null, images: string[]): GalleryItem[] {
-  const labels =
-    tab === 'latest'
-      ? LATEST_LABELS
-      : tab === 'seasons'
-      ? SEASON_LABELS
-      : SIGHT_LABELS;
-
-  const sourceImages = images.length ? images : trail?.image ? [trail.image] : [];
-
-  if (!sourceImages.length) {
-    return [];
+function formatPhotoDate(value?: string) {
+  if (!value) {
+    return 'Unknown date';
   }
 
-  return labels.map((label, index) => ({
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return 'Unknown date';
+  }
+
+  return parsed.toLocaleDateString('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  });
+}
+
+function toSeasonName(value?: string) {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
+  }
+
+  const month = parsed.getMonth() + 1;
+  if (month === 12 || month <= 2) return 'Winter';
+  if (month <= 5) return 'Spring';
+  if (month <= 8) return 'Summer';
+  return 'Autumn';
+}
+
+function buildGalleryItems(tab: MediaTab, trail: Trail | null, photos: TrailPhoto[], images: string[]): GalleryItem[] {
+  const photosWithUrls = photos.filter((photo) => Boolean(photo.url));
+
+  if (tab === 'latest') {
+    if (photosWithUrls.length) {
+      const sorted = [...photosWithUrls].sort((a, b) => {
+        const aTime = a.created_at ? new Date(a.created_at).getTime() : 0;
+        const bTime = b.created_at ? new Date(b.created_at).getTime() : 0;
+        return bTime - aTime;
+      });
+
+      return sorted.map((photo, index) => ({
+        id: `latest-${photo.id}`,
+        imageUri: photo.url,
+        label: formatPhotoDate(photo.created_at),
+        height: CARD_HEIGHTS[index % CARD_HEIGHTS.length],
+      }));
+    }
+  }
+
+  if (tab === 'sights') {
+    if (photosWithUrls.length) {
+      return photosWithUrls.map((photo, index) => ({
+        id: `sight-${photo.id}`,
+        imageUri: photo.url,
+        label: photo.caption?.trim() || trail?.features[index % Math.max(1, trail?.features.length ?? 1)] || formatPhotoDate(photo.created_at),
+        height: CARD_HEIGHTS[index % CARD_HEIGHTS.length],
+      }));
+    }
+
+    const dynamicFeatures = trail?.features.filter(Boolean) ?? [];
+    return dynamicFeatures.map((feature, index) => ({
+      id: `sight-feature-${index}`,
+      imageUri: images[index % Math.max(1, images.length)] ?? trail?.image ?? '',
+      label: feature,
+      height: CARD_HEIGHTS[index % CARD_HEIGHTS.length],
+    })).filter((item) => Boolean(item.imageUri));
+  }
+
+  if (tab === 'seasons') {
+    const bySeason = new Map<string, TrailPhoto>();
+    for (const photo of photosWithUrls) {
+      const season = toSeasonName(photo.created_at);
+      if (season && !bySeason.has(season)) {
+        bySeason.set(season, photo);
+      }
+    }
+
+    const seasonItems = Array.from(bySeason.entries()).map(([season, photo], index) => ({
+      id: `season-${season.toLowerCase()}`,
+      imageUri: photo.url,
+      label: season,
+      height: CARD_HEIGHTS[index % CARD_HEIGHTS.length],
+    }));
+
+    return seasonItems;
+  }
+
+  const sourceImages = images.length ? images : trail?.image ? [trail.image] : [];
+  return sourceImages.map((imageUri, index) => ({
     id: `${tab}-${index}`,
-    imageUri: sourceImages[index % sourceImages.length],
-    label: tab === 'sights' && trail?.features[index] ? trail.features[index] : label,
+    imageUri,
+    label: formatPhotoDate(photosWithUrls[index]?.created_at),
     height: CARD_HEIGHTS[index % CARD_HEIGHTS.length],
   }));
 }
@@ -379,7 +447,10 @@ export function TrailMediaScreen() {
     setTourProgress(next);
   }, []);
 
-  const galleryItems = useMemo(() => buildGalleryItems(activeTab, trail, galleryImages), [activeTab, galleryImages, trail]);
+  const galleryItems = useMemo(
+    () => buildGalleryItems(activeTab, trail, trailPhotos, galleryImages),
+    [activeTab, galleryImages, trail, trailPhotos],
+  );
   const isTour = activeTab === 'tour';
   const activeColor = theme.colors.buttonPrimary;
   const tourHeroUri = tourGallery[tourPhotoIndex] ?? trail?.image ?? '';
@@ -428,7 +499,7 @@ export function TrailMediaScreen() {
 
           <View style={[styles.tourPhotoBadge, { top: Math.max(insets.top + 72, 96) }]}>
             <Text style={styles.tourPhotoBadgeText}>
-              {tourGallery.length > 1 ? `${tourPhotoIndex + 1} / ${tourGallery.length}` : '1 / 1'}
+              {`${tourPhotoIndex + 1} / ${Math.max(1, tourGallery.length)}`}
             </Text>
           </View>
 

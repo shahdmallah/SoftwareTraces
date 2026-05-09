@@ -16,7 +16,13 @@ const calculateTrailStatsBodySchema = z.object({
 
 const createTrailBodySchema = z.object({
   name: z.string().min(1),
+  name_ar: z.string().optional(),
   description: z.string().optional(),
+  description_ar: z.string().optional(),
+  region: z.string().optional(),
+  region_ar: z.string().optional(),
+  features: z.array(z.string()).optional(),
+  features_ar: z.array(z.string()).optional(),
   coordinates: z.array(z.tuple([z.number(), z.number()])).min(2),
   stats: z.object({
     length_meters: z.number().nonnegative(),
@@ -534,7 +540,7 @@ export async function getElevationProfile(req: Request, res: Response): Promise<
 
 export async function calculateTrailStats(req: Request, res: Response): Promise<void> {
   const { coordinates } = calculateTrailStatsBodySchema.parse(req.body);
-  const stats = await trailStatsService.calculateTrailStats(coordinates);
+  const stats = await trailStatsService.calculateTrailStats(coordinates as [number, number][]);
 
   res.json({ data: stats });
 }
@@ -547,7 +553,9 @@ export async function createTrail(req: Request, res: Response): Promise<void> {
     console.error("[createTrail] auth.userId:", userId);
     console.error("[createTrail] request body:", JSON.stringify(req.body, null, 2));
 
-    const { name, description, coordinates, stats } = createTrailBodySchema.parse(req.body);
+    const parsedBody = createTrailBodySchema.parse(req.body);
+    const { name, name_ar, description, description_ar, region, region_ar, features, features_ar, stats } = parsedBody;
+    const coordinates = parsedBody.coordinates as [number, number][];
 
     if (!Array.isArray(coordinates) || coordinates.length < 2) {
       throw new Error("Coordinates must contain at least 2 points");
@@ -584,40 +592,49 @@ export async function createTrail(req: Request, res: Response): Promise<void> {
     });
 
     const slug = createTrailSlug(name);
-    const region = "Unknown";
     const linestring = `LINESTRING(${coordinates.map(([lng, lat]) => `${lng} ${lat}`).join(", ")})`;
     const [startLng, startLat] = coordinates[0];
 
     const insertQuery = `INSERT INTO trails (
       slug,
       name,
+      name_ar,
       description,
+      description_ar,
       region,
+      region_ar,
       difficulty,
       length_meters,
       elevation_gain_meters,
       estimated_duration_minutes,
+      features,
+      features_ar,
       start_point,
       geometry,
       user_id,
       is_active
     ) VALUES (
-      $1, $2, $3, $4, $5, $6, $7, $8,
-      ST_GeomFromText($9, 4326),
-      ST_GeogFromText($10),
-      $11,
-      $12
+      $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+      ST_GeomFromText($14, 4326),
+      ST_GeogFromText($15),
+      $16,
+      $17
     ) RETURNING id`;
 
     const queryValues = [
       slug,
       name,
+      name_ar ?? null,
       description ?? "",
-      region,
+      description_ar ?? null,
+      region ?? "Unknown",
+      region_ar ?? null,
       stats.difficulty,
       Math.round(stats.length_meters),
       stats.elevation_gain_meters,
       Math.round(stats.estimated_duration_minutes),
+      features ?? [],
+      features_ar ?? [],
       `POINT(${startLng} ${startLat})`,
       linestring,
       userId,

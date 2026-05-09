@@ -166,6 +166,37 @@ function normalizeDifficulty(value: string | null | undefined): TrailDifficulty 
   }
 }
 
+const WEST_BANK_LNG_MIN = 34;
+const WEST_BANK_LNG_MAX = 36.8;
+const WEST_BANK_LAT_MIN = 29;
+const WEST_BANK_LAT_MAX = 33.8;
+
+function isLikelyWestBankLngLat(point: [number, number]) {
+  const [lng, lat] = point;
+  return lng >= WEST_BANK_LNG_MIN && lng <= WEST_BANK_LNG_MAX && lat >= WEST_BANK_LAT_MIN && lat <= WEST_BANK_LAT_MAX;
+}
+
+function isLikelyWestBankLatLng(point: [number, number]) {
+  const [lat, lng] = point;
+  return lat >= WEST_BANK_LAT_MIN && lat <= WEST_BANK_LAT_MAX && lng >= WEST_BANK_LNG_MIN && lng <= WEST_BANK_LNG_MAX;
+}
+
+function normalizeRoutePoint(point: [number, number]): [number, number] {
+  if (isLikelyWestBankLatLng(point) && !isLikelyWestBankLngLat(point)) {
+    return [point[1], point[0]];
+  }
+
+  return point;
+}
+
+function normalizeRouteCoordinates(routeCoordinates?: [number, number][]) {
+  if (!Array.isArray(routeCoordinates)) {
+    return undefined;
+  }
+
+  return routeCoordinates.map(normalizeRoutePoint);
+}
+
 function toApiDifficulty(value: TrailDifficulty): TrailDifficultyApi {
   return value.toLowerCase() as TrailDifficultyApi;
 }
@@ -180,19 +211,43 @@ function normalizeTrail(trail: Trail): Trail {
     tags: Array.isArray(trail.tags) ? trail.tags : [],
     image: trail.image || trail.images?.[0] || 'https://images.unsplash.com/photo-1511497584788-876760111969?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&w=800',
     checkpointNote: trail.checkpointNote || undefined,
-    routeCoordinates: Array.isArray(trail.routeCoordinates) ? trail.routeCoordinates : undefined,
+    routeCoordinates: normalizeRouteCoordinates(trail.routeCoordinates),
   };
 }
 
 export async function createTrail(payload: {
   name: string;
+  name_ar?: string;
   description?: string;
+  description_ar?: string;
+  region: string;
+  region_ar?: string;
+  features?: string[];
+  features_ar?: string[];
   coordinates: [number, number][];
   stats: TrailStatsResponse;
 }) {
   return apiRequest<Envelope<{ id: string }>>('/api/trails', {
     method: 'POST',
     body: JSON.stringify(payload),
+  });
+}
+
+export async function uploadTrailPhoto(trailId: string, uri: string) {
+  const filename = uri.split('/').pop() ?? `trail-${Date.now()}.jpg`;
+  const match = filename.match(/\.([a-zA-Z0-9]+)$/);
+  const type = match ? `image/${match[1].toLowerCase()}` : 'image/jpeg';
+
+  const formData = new FormData();
+  formData.append('photo', {
+    uri,
+    name: filename,
+    type,
+  } as any);
+
+  return apiRequest<Envelope<{ id: string; url: string }>>(`/api/trails/${trailId}/photos`, {
+    method: 'POST',
+    body: formData,
   });
 }
 
