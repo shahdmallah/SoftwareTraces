@@ -4,6 +4,7 @@ import helmet from "helmet";
 import cron from "node-cron";
 import achievementsRoutes from "./features/achievements/achievements.routes";
 import activitiesRoutes from "./features/activities/activities.routes";
+import { sosAlert } from "./features/activities/activities.controller";
 import authRoutes from "./features/auth/auth.routes";
 import debugRoutes from "./features/debug/debug.routes";
 import healthRoutes from "./features/health/health.routes";
@@ -12,6 +13,8 @@ import profilesRoutes from "./features/profiles/profiles.routes";
 import socialRoutes from "./features/social/social.routes";
 import trailsRoutes from "./features/trails/trails.routes";
 import { errorHandler } from "./middleware/errorHandler";
+import { asyncHandler } from "./lib/asyncHandler";
+import { authenticate } from "./middleware/auth";
 import { apiRateLimit } from "./middleware/rateLimit";
 
 export function createApp() {
@@ -30,6 +33,7 @@ export function createApp() {
   app.use("/api/debug", debugRoutes);
   app.use("/api/trails", trailsRoutes);
   app.use("/api/activities", activitiesRoutes);
+  app.post("/api/sos", authenticate, asyncHandler(sosAlert));
   app.use("/api/health", healthRoutes);
   app.use("/api/social", socialRoutes);
   app.use("/api/profiles", profilesRoutes);
