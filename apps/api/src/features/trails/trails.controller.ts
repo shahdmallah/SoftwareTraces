@@ -96,6 +96,8 @@ function getTrailSelectFields(alias?: string): string {
     ${prefix}elevation_max,
     ${prefix}estimated_duration_minutes,
     ${prefix}difficulty,
+    ${prefix}average_rating,
+    ${prefix}total_reviews,
     ${prefix}rating,
     ${prefix}reviews,
     ${prefix}image,
