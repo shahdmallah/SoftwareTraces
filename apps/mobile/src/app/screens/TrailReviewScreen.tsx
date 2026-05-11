@@ -6,6 +6,7 @@ import type { StackNavigationProp } from '@react-navigation/stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { addTrailReview, saveBookmark } from '../api/trailsApi';
 import { useTrailTracking } from '../contexts/TrailTrackingContext';
+import type { TrailCompletionDraft } from '../features/trailCompletion/types';
 import type { RootStackParamList } from '../navigation/types';
 
 type TrailReviewNavigationProp = StackNavigationProp<RootStackParamList>;
@@ -47,11 +48,23 @@ export function TrailReviewScreen() {
         });
       }
 
-      const draft = {
+      const draft: TrailCompletionDraft = {
+        trailId: finishedSession.trailId,
         trailName,
+        trailNameAr: finishedSession.trail?.nameAr,
+        trailImage: finishedSession.trail?.image,
+        region: finishedSession.trail?.region,
+        regionAr: finishedSession.trail?.regionAr,
         rating,
         review: review.trim(),
         photoUris: finishedSession.sessionPhotos.map((photo) => photo.uri),
+        completedAtIso: new Date().toISOString(),
+        durationMs: finishedSession.elapsedMs,
+        stepCount: finishedSession.stepCount,
+        routePointCount: finishedSession.recordedPath.length,
+        trailDistanceKm: finishedSession.trail?.distance,
+        trailElevationGainM: finishedSession.trail?.elevationGain,
+        trailCoordinates: finishedSession.trail?.coordinates,
       };
 
       clearFinishedSession();

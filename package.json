@@ -26,6 +26,7 @@
   },
   "dependencies": {
     "expo-blur": "~55.0.14",
+    "expo-image-picker": "~55.0.20",
     "expo-linear-gradient": "^55.0.13"
   }
 }

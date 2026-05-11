@@ -1,0 +1,192 @@
+import React from 'react';
+import { Alert, Pressable, Share, StyleSheet, Text, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { MotiView } from 'moti';
+import type { StackNavigationProp } from '@react-navigation/stack';
+import { addLocalFeedItem } from '../../data/localSocial';
+import { completionRadii } from '../../features/trailCompletion/theme';
+import type { TrailCompletionDraft } from '../../features/trailCompletion/types';
+import type { RootStackParamList } from '../../navigation/types';
+import { formatCompletionDuration } from '../../features/trailCompletion/formatters';
+import { ltrRow, ltrText, rtlRow, rtlText } from '../../utils/direction';
+
+type Nav = StackNavigationProp<RootStackParamList>;
+
+type Props = {
+  draft: TrailCompletionDraft;
+  isArabic: boolean;
+  navigation: Nav;
+  delay?: number;
+  onSaveJournal?: () => void;
+};
+
+export function ShareActions({ draft, isArabic, navigation, delay = 400, onSaveJournal }: Props) {
+  const saveJournal =
+    onSaveJournal ??
+    (() => {
+      Alert.alert(
+        isArabic ? 'اليوميات' : 'Journal',
+        isArabic ? 'ستجد هذه الرحلة في السجل.' : 'This hike is kept in your History.',
+        [{ text: 'OK' }],
+      );
+    });
+  const shareRecap = async () => {
+    const dur = formatCompletionDuration(draft.durationMs, isArabic);
+    const message = isArabic
+      ? `أكملتُ «${draft.trailName}» على Traces — ${dur}\n${draft.review.trim().slice(0, 280)}`
+      : `Finished "${draft.trailName}" on Traces — ${dur}\n${draft.review.trim().slice(0, 280)}`;
+
+    const item = {
+      id: `local-recap-${Date.now()}`,
+      kind: 'recap' as const,
+      trailId: draft.trailId ?? '0',
+      user: 'You',
+      handle: '@you',
+      avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?crop=faces&fit=crop&w=240&h=240',
+      image: draft.photoUris[0] ?? draft.trailImage ?? 'https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=1200&q=80',
+      trailNameEn: draft.trailName,
+      trailNameAr: draft.trailName,
+      regionEn: isArabic ? 'Your trail' : 'Your route',
+      regionAr: isArabic ? 'رحلتك' : 'Your route',
+      captionEn: draft.review.trim() || message,
+      captionAr: draft.review.trim() || message,
+      timeEn: 'Just now',
+      timeAr: 'الآن',
+      likes: 1,
+      comments: 0,
+      distance: `${(draft.trailDistanceKm ?? 0).toFixed(1)} km`,
+    };
+
+    addLocalFeedItem(item);
+
+    try {
+      await Share.share({ message, title: draft.trailName });
+    } catch {
+      /* user cancelled */
+    }
+
+    navigation.navigate('AppTabs', { screen: 'Activity' });
+  };
+
+  return (
+    <MotiView
+      from={{ opacity: 0, translateY: 12 }}
+      animate={{ opacity: 1, translateY: 0 }}
+      transition={{ type: 'timing', duration: 420, delay }}
+      style={styles.wrap}
+    >
+      <Text style={[styles.sectionTitle, isArabic ? rtlText : ltrText]}>
+        {isArabic ? 'الخطوة التالية' : 'What’s next'}
+      </Text>
+      <Text style={[styles.sectionSub, isArabic ? rtlText : ltrText]}>
+        {isArabic ? 'بعد احتفالك بالرحلة، شارك بلطف أو خطط للقادم.' : 'After the celebration — share lightly, or plan what’s ahead.'}
+      </Text>
+
+      <View style={styles.grid}>
+        <ActionChip
+          icon="share-outline"
+          label={isArabic ? 'مشاركة الملخص' : 'Share recap'}
+          onPress={shareRecap}
+          isArabic={isArabic}
+        />
+        <ActionChip
+          icon="people-outline"
+          label={isArabic ? 'ادعُ أصدقاءك لاحقاً' : 'Invite friends next time'}
+          onPress={() => navigation.navigate('ActivityShareComposer', { type: 'plan' })}
+          isArabic={isArabic}
+        />
+        <ActionChip
+          icon="book-outline"
+          label={isArabic ? 'حفظ في اليوميات' : 'Save to journal'}
+          onPress={saveJournal}
+          isArabic={isArabic}
+        />
+        <ActionChip
+          icon="map-outline"
+          label={isArabic ? 'تفاصيل المسار' : 'View trail details'}
+          onPress={() => navigation.navigate('TrailDetail', { trailId: draft.trailId })}
+          isArabic={isArabic}
+        />
+      </View>
+    </MotiView>
+  );
+}
+
+function ActionChip({
+  icon,
+  label,
+  onPress,
+  isArabic,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  label: string;
+  onPress?: () => void;
+  isArabic: boolean;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [styles.chip, pressed && styles.chipPressed, isArabic ? rtlRow : ltrRow]}
+    >
+      <View style={styles.chipIcon}>
+        <Ionicons name={icon} size={18} color="#630E13" />
+      </View>
+      <Text style={[styles.chipLabel, isArabic ? rtlText : ltrText]} numberOfLines={2}>
+        {label}
+      </Text>
+    </Pressable>
+  );
+}
+
+const styles = StyleSheet.create({
+  wrap: {
+    marginHorizontal: 16,
+    marginTop: 24,
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: '900',
+    color: '#2C2418',
+  },
+  sectionSub: {
+    marginTop: 6,
+    fontSize: 13,
+    lineHeight: 19,
+    color: '#6B5D4E',
+    fontWeight: '600',
+    marginBottom: 14,
+  },
+  grid: {
+    gap: 10,
+  },
+  chip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    borderRadius: completionRadii.card,
+    backgroundColor: 'rgba(255,255,255,0.85)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(44,36,24,0.08)',
+  },
+  chipPressed: {
+    opacity: 0.88,
+    transform: [{ scale: 0.99 }],
+  },
+  chipIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 14,
+    backgroundColor: 'rgba(99,14,19,0.08)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  chipLabel: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#2C2418',
+    lineHeight: 19,
+  },
+});

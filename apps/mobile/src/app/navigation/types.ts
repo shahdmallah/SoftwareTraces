@@ -1,4 +1,5 @@
 import type { NavigatorScreenParams } from '@react-navigation/native';
+import type { TrailCompletionDraft } from '../features/trailCompletion/types';
 
 export type RootStackParamList = {
   Onboarding: undefined;
@@ -10,22 +11,20 @@ export type RootStackParamList = {
   TrailMedia: { trailId: string };
   ActivityMessages: undefined;
   ActivityThread: { threadId?: string; friendId?: string };
-  ActivityShare:
-    | {
-        draft?: {
-          trailName: string;
-          rating: number;
-          review: string;
-          photoUris: string[];
-        };
-      }
-    | undefined;
-  ActivityShareComposer: { type: 'photo' | 'plan' };
+  ActivityShare: { draft?: TrailCompletionDraft } | undefined;
+  ActivityShareComposer: {
+    type: 'photo' | 'plan';
+    trailId?: string;
+    trailName?: string;
+    initialMeetingLat?: number;
+    initialMeetingLng?: number;
+  };
   ProfileSettings: { settingId: string };
   CreateTrail: undefined;
   Recording: { trailId: string };
   TrailReview: undefined;
   History: undefined;
+  Journal: undefined;
   Notifications: undefined;
   SearchResults: { query?: string } | undefined;
   AdvancedFilters: undefined;

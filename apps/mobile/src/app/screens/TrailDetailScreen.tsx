@@ -28,46 +28,12 @@ import { WeatherSection } from '../components/WeatherSection';
 import { ReviewsSection } from '../components/ReviewsSection';
 import { CommunityPostsSection } from '../components/CommunityPostsSection';
 import { useTrailTracking } from '../contexts/TrailTrackingContext';
-import { getSocialFeed, type SocialFeedReview } from '../api/socialApi';
+import { getSocialFeed } from '../api/socialApi';
 import { type FeedItem } from '../data/activitySocial';
+import { mapSocialFeedItemToFeedItem } from '../utils/socialFeedMap';
 
 type TrailDetailScreenRouteProp = RouteProp<RootStackParamList, 'TrailDetail'>;
 type TrailDetailNavigationProp = StackNavigationProp<RootStackParamList>;
-
-function formatRelativeTime(value: string) {
-  const timestamp = new Date(value).getTime();
-  if (!Number.isFinite(timestamp)) return 'recently';
-  const diffMinutes = Math.floor(Math.max(0, Date.now() - timestamp) / 60000);
-  if (diffMinutes < 1) return 'just now';
-  if (diffMinutes < 60) return `${diffMinutes}m ago`;
-  const diffHours = Math.floor(diffMinutes / 60);
-  if (diffHours < 24) return `${diffHours}h ago`;
-  return `${Math.floor(diffHours / 24)}d ago`;
-}
-
-function mapSocialReviewToFeedItem(item: SocialFeedReview): FeedItem {
-  const userName = item.user.full_name || 'Trail friend';
-  return {
-    id: item.id,
-    kind: 'recap',
-    trailId: item.trail.id,
-    user: userName,
-    handle: `@${userName.toLowerCase().replace(/[^a-z0-9]+/g, '.').replace(/^\.+|\.+$/g, '') || 'traces'}`,
-    avatar: item.user.avatar_url || '',
-    image: item.photo_url || item.photos[0]?.url || item.trail.image || '',
-    trailNameEn: item.trail.name,
-    trailNameAr: item.trail.name,
-    regionEn: 'Trail review',
-    regionAr: 'Trail review',
-    captionEn: item.content,
-    captionAr: item.content,
-    timeEn: formatRelativeTime(item.created_at),
-    timeAr: formatRelativeTime(item.created_at),
-    likes: item.likes_count,
-    comments: item.comments_count,
-    distance: `${item.rating}/5`,
-  };
-}
 
 export function TrailDetailScreen() {
   const route = useRoute<TrailDetailScreenRouteProp>();
@@ -158,8 +124,8 @@ export function TrailDetailScreen() {
         const response = await getSocialFeed({ page: 1, limit: 50 });
         if (!cancelled) {
           const posts = response.data
-            .filter((item) => item.trail.id === trailId)
-            .map(mapSocialReviewToFeedItem);
+            .filter((item) => item.trail.id != null && String(item.trail.id) === String(trailId))
+            .map(mapSocialFeedItemToFeedItem);
           setCommunityPosts(posts);
         }
       } catch {
@@ -428,6 +394,31 @@ export function TrailDetailScreen() {
               onOpenActivity={() => navigation.navigate('AppTabs', { screen: 'Activity' })}
             />
           </AnimatedBlock>
+
+          <AnimatedBlock delay={370}>
+            <Pressable
+              style={styles.planTripButton}
+              onPress={() => navigation.navigate('ActivityShareComposer', {
+                type: 'plan',
+                trailId: trail.id,
+                trailName: isArabic ? trail.nameAr || trail.name : trail.name,
+                initialMeetingLat: trail.coordinates[0],
+                initialMeetingLng: trail.coordinates[1],
+              })}
+            >
+              <View style={styles.planTripIcon}>
+                <Ionicons name="calendar-outline" size={20} color="#FFF" />
+              </View>
+              <View style={styles.planTripCopy}>
+                <Text style={[styles.planTripLabel, isArabic ? { textAlign: 'right' } : null]}>
+                  {isArabic ? 'خطط لرحلة هذا المسار' : 'Plan a trip for this trail'}
+                </Text>
+                <Text style={[styles.planTripSub, isArabic ? { textAlign: 'right' } : null]}>
+                  {isArabic ? 'حدد التاريخ، الدعوات، ونقطة اللقاء.' : 'Set date, invite friends, and choose a meetup point.'}
+                </Text>
+              </View>
+            </Pressable>
+          </AnimatedBlock>
         </View>
       </ScrollView>
     </AnimatedScreen>
@@ -448,6 +439,37 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  planTripButton: {
+    marginTop: 18,
+    padding: 18,
+    borderRadius: 22,
+    backgroundColor: '#630E13',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  planTripIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  planTripCopy: {
+    flex: 1,
+  },
+  planTripLabel: {
+    color: '#FFF',
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  planTripSub: {
+    marginTop: 4,
+    color: 'rgba(255,255,255,0.82)',
+    fontSize: 12,
+    lineHeight: 18,
   },
   notFound: {
     padding: 16,

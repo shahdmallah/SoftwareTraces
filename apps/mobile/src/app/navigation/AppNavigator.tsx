@@ -28,6 +28,7 @@ import { ActivityShareScreen } from '../screens/ActivityShareScreen';
 import { ActivityShareComposerScreen } from '../screens/ActivityShareComposerScreen';
 import { TrailReviewScreen } from '../screens/TrailReviewScreen';
 import { HistoryScreen } from '../screens/HistoryScreen';
+import { JournalScreen } from '../screens/JournalScreen';
 import { ProfileSettingsScreen } from '../screens/ProfileSettingsScreen';
 import { NotificationsScreen } from '../screens/NotificationsScreen';
 import { SearchResultsScreen } from '../screens/SearchResultsScreen';
@@ -278,6 +279,7 @@ export function AppNavigator() {
           <Stack.Screen name="Recording" component={RecordingScreen} />
           <Stack.Screen name="TrailReview" component={TrailReviewScreen} />
           <Stack.Screen name="History" component={HistoryScreen} />
+          <Stack.Screen name="Journal" component={JournalScreen} />
           <Stack.Screen name="Notifications" component={NotificationsScreen} />
           <Stack.Screen name="SearchResults" component={SearchResultsScreen} />
           <Stack.Screen name="AdvancedFilters" component={AdvancedFiltersScreen} />

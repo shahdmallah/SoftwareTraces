@@ -10,29 +10,79 @@ type Envelope<T> = {
   };
 };
 
-export type SocialFeedReview = {
+export type SocialFeedReviewPhotos = Array<{ id: string; url: string; created_at: string }>;
+
+type SocialFeedUser = {
+  id: string;
+  full_name: string;
+  avatar_url: string | null;
+};
+
+type SocialFeedTrail = {
+  id: string | null;
+  name: string | null;
+  image: string | null;
+};
+
+type SocialFeedActivityStats = {
+  id: string | null;
+  distance_meters: number | null;
+  elapsed_time_seconds: number | null;
+  elevation_gain_meters: number | null;
+} | null;
+
+export type SocialFeedReviewItem = {
   id: string;
   type: 'review';
-  user: {
-    id: string;
-    full_name: string;
-    avatar_url: string | null;
-  };
-  trail: {
-    id: string;
-    name: string;
-    image: string | null;
-  };
-  rating: number;
+  user: SocialFeedUser;
+  trail: SocialFeedTrail;
+  rating: number | null;
   title: string | null;
-  content: string;
+  content: string | null;
+  caption: string | null;
+  visibility: string | null;
   photo_url: string | null;
-  photos: Array<{ id: string; url: string; created_at: string }>;
+  photos: SocialFeedReviewPhotos;
+  activity: SocialFeedActivityStats;
   created_at: string;
   likes_count: number;
   comments_count: number;
   is_liked_by_user: boolean;
 };
+
+export type SocialFeedActivityItem = {
+  id: string;
+  type: 'activity';
+  user: SocialFeedUser;
+  trail: SocialFeedTrail;
+  rating: number | null;
+  title: string | null;
+  content: string | null;
+  caption: string | null;
+  visibility: string | null;
+  photo_url: string | null;
+  photos: SocialFeedReviewPhotos;
+  activity: NonNullable<SocialFeedActivityStats>;
+  created_at: string;
+  likes_count: number;
+  comments_count: number;
+  is_liked_by_user: boolean;
+};
+
+export type SocialFeedItem = SocialFeedReviewItem | SocialFeedActivityItem;
+
+export type SocialFeedResponse = {
+  data: SocialFeedItem[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    pages: number;
+  };
+};
+
+/** @deprecated Use SocialFeedItem; kept for gradual migration */
+export type SocialFeedReview = SocialFeedReviewItem;
 
 export type SocialProfile = {
   id: string;
@@ -47,23 +97,30 @@ export type ReviewComment = {
   user: SocialProfile;
 };
 
+export type PaginatedList<T> = {
+  count: number;
+  data: T[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    pages: number;
+  };
+};
+
 export async function getSocialFeed(params: { page?: number; limit?: number } = {}) {
-  const response = await apiRequest<Envelope<SocialFeedReview[]>>('/api/social/feed', {}, {
+  return apiRequest<SocialFeedResponse>('/api/social/feed', {}, {
     page: params.page,
     limit: params.limit,
   });
-
-  return response;
 }
 
 export async function getFollowers(userId: string, params: { page?: number; limit?: number } = {}) {
-  const response = await apiRequest<Envelope<SocialProfile[]>>(`/api/social/users/${userId}/followers`, {}, params);
-  return response;
+  return apiRequest<PaginatedList<SocialProfile>>(`/api/social/users/${userId}/followers`, {}, params);
 }
 
 export async function getFollowing(userId: string, params: { page?: number; limit?: number } = {}) {
-  const response = await apiRequest<Envelope<SocialProfile[]>>(`/api/social/users/${userId}/following`, {}, params);
-  return response;
+  return apiRequest<PaginatedList<SocialProfile>>(`/api/social/users/${userId}/following`, {}, params);
 }
 
 export async function followUser(userId: string) {
@@ -96,8 +153,7 @@ export async function addReviewComment(reviewId: string, content: string) {
 }
 
 export async function getReviewComments(reviewId: string, params: { page?: number; limit?: number } = {}) {
-  const response = await apiRequest<Envelope<ReviewComment[]>>(`/api/social/reviews/${reviewId}/comments`, {}, params);
-  return response;
+  return apiRequest<PaginatedList<ReviewComment>>(`/api/social/reviews/${reviewId}/comments`, {}, params);
 }
 
 export async function deleteReviewComment(commentId: string) {

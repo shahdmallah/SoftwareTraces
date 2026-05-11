@@ -1,52 +1,56 @@
-import React from 'react';
-import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { checkAchievements } from '../api/achievementsApi';
 import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
+import {
+  CommunitySuggestions,
+  CompletionHero,
+  JourneyTimeline,
+  PhotoGalleryStrip,
+  ReviewSummary,
+  ShareActions,
+  SharePreviewCard,
+  TrailStatsCard,
+} from '../components/trailCompletion';
 import { useLanguage } from '../contexts/LanguageContext';
+import {
+  formatCompletionDate,
+  formatCompletionDuration,
+  formatDistanceKm,
+  formatElevation,
+} from '../features/trailCompletion/formatters';
+import { useCompletionWeather } from '../features/trailCompletion/useCompletionWeather';
+import { addLocalFeedItem, saveJournalEntry } from '../data/localSocial';
 import { RootStackParamList } from '../navigation/types';
 import { ltrRow, ltrText, rtlRow, rtlText } from '../utils/direction';
 
 type ShareNavigationProp = StackNavigationProp<RootStackParamList>;
 type ShareRouteProp = RouteProp<RootStackParamList, 'ActivityShare'>;
 
-const shareOptions = [
+const fallbackShareOptions = [
   {
-    id: 'photo',
+    id: 'photo' as const,
     icon: 'images-outline' as const,
-    titleEn: 'Share a trail photo',
-    titleAr: 'شارك صورة من المسار',
-    descriptionEn: 'Post photos from a completed visit, add a caption, and tag the trail.',
-    descriptionAr: 'انشر صوراً من زيارة مكتملة، وأضف تعليقاً وحدد المسار.',
+    titleEn: 'Share a trail moment',
+    titleAr: 'لحظة من المسار',
+    descriptionEn: 'Photo recap with caption — ties to your completed trails and reviews.',
+    descriptionAr: 'ملخص بالصور — مرتبط بمساراتك ومراجعاتك.',
     accent: ['#7A9A3A', '#D4A843'] as const,
   },
   {
-    id: 'plan',
+    id: 'plan' as const,
     icon: 'calendar-outline' as const,
-    titleEn: 'Share a future plan',
-    titleAr: 'شارك خطة قادمة',
-    descriptionEn: 'Invite friends to join the next hike and share the time, vibe, and open spots.',
-    descriptionAr: 'ادعُ الأصدقاء للرحلة القادمة وشارك الوقت والأجواء والأماكن المتاحة.',
+    titleEn: 'Plan the next hike',
+    titleAr: 'خطّط للرحلة القادمة',
+    descriptionEn: 'Invite friends for a future outing — same flow as before.',
+    descriptionAr: 'ادعُ الأصدقاء — نفس المسار السابق.',
     accent: ['#630E13', '#B34A2E'] as const,
-  },
-];
-
-const previewCards = [
-  {
-    id: 'p1',
-    image: 'https://images.unsplash.com/photo-1726091983472-a7da2540c492?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&w=900',
-    titleEn: 'Photo recap preview',
-    titleAr: 'معاينة منشور صورة',
-  },
-  {
-    id: 'p2',
-    image: 'https://images.unsplash.com/photo-1722228097356-bd0202d99367?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&w=900',
-    titleEn: 'Plan card preview',
-    titleAr: 'معاينة بطاقة الخطة',
   },
 ];
 
@@ -57,38 +61,170 @@ export function ActivityShareScreen() {
   const { language } = useLanguage();
   const isArabic = language === 'ar';
   const draft = route.params?.draft;
+  const { weather } = useCompletionWeather(draft, isArabic ? 'ar' : 'en');
+  const [achievementHints, setAchievementHints] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (!draft) {
+      setAchievementHints([]);
+      return;
+    }
+    let cancelled = false;
+    checkAchievements()
+      .then((rows) => {
+        if (cancelled) return;
+        const titles = rows
+          .filter((r) => r.earned_at)
+          .slice(-4)
+          .map((r) => (r.title || r.name || '').trim())
+          .filter(Boolean);
+        setAchievementHints(titles);
+      })
+      .catch(() => {
+        if (!cancelled) setAchievementHints([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [draft]);
+
+  const weatherLine = useMemo(() => {
+    if (!weather) return null;
+    return `${weather.summary} · ${Math.round(weather.tempC)}°`;
+  }, [weather]);
+
+  const stats = useMemo(() => {
+    if (!draft) return [];
+    const dur = formatCompletionDuration(draft.durationMs, isArabic);
+    const dist = formatDistanceKm(draft.trailDistanceKm, isArabic);
+    const elev = formatElevation(draft.trailElevationGainM, isArabic);
+    return [
+      { icon: 'time-outline' as const, label: isArabic ? 'المدة' : 'Duration', value: dur },
+      { icon: 'navigate-outline' as const, label: isArabic ? 'طول المسار' : 'Trail length', value: dist },
+      { icon: 'trending-up-outline' as const, label: isArabic ? 'الصعود' : 'Elevation gain', value: elev },
+      { icon: 'footsteps-outline' as const, label: isArabic ? 'الخطوات' : 'Steps', value: String(draft.stepCount) },
+      {
+        icon: 'radio-button-on-outline' as const,
+        label: isArabic ? 'نقاط التتبع' : 'GPS checkpoints',
+        value: String(Math.max(1, draft.routePointCount)),
+      },
+    ];
+  }, [draft, isArabic]);
+
+  const handleJournalSave = () => {
+    if (!draft) return;
+
+    saveJournalEntry({
+      type: 'journal',
+      trail: draft.trailName,
+      note: draft.review,
+      date: draft.completedAtIso,
+    });
+
+    Alert.alert(
+      isArabic ? 'حُفظ في اليوميات' : 'Saved to your journal',
+      isArabic
+        ? 'تم حفظ هذا المسار في يومياتك. يمكنك الاطلاع عليه من خلال صفحة اليوميات.'
+        : 'This hike was saved to your journal. You can view it in Journal.',
+      [
+        { text: isArabic ? 'البقاء' : 'Stay', style: 'cancel' },
+        { text: isArabic ? 'اليوميات' : 'Open Journal', onPress: () => navigation.navigate('Journal') },
+      ],
+    );
+  };
+
+  if (draft) {
+    const heroPhoto = draft.photoUris[0] ?? '';
+    const region = isArabic ? draft.regionAr ?? draft.region : draft.region;
+    const completedLabel = formatCompletionDate(draft.completedAtIso, isArabic);
+
+    return (
+      <AnimatedScreen style={styles.screen}>
+        <ScrollView
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={{
+            paddingBottom: Math.max(32, insets.bottom + 28),
+          }}
+        >
+          <CompletionHero
+            heroUri={heroPhoto}
+            fallbackUri={draft.trailImage}
+            trailName={isArabic ? draft.trailNameAr ?? draft.trailName : draft.trailName}
+            region={region}
+            completedDateLabel={completedLabel}
+            weatherLine={weatherLine}
+            isArabic={isArabic}
+            onBack={() => navigation.goBack()}
+          />
+
+          <TrailStatsCard stats={stats} achievementHints={achievementHints} isArabic={isArabic} />
+
+          {draft.routePointCount > 0 ? (
+            <JourneyTimeline
+              routePointCount={draft.routePointCount}
+              durationMs={draft.durationMs}
+              isArabic={isArabic}
+            />
+          ) : null}
+
+          <ReviewSummary rating={draft.rating} reviewText={draft.review} isArabic={isArabic} />
+
+          <PhotoGalleryStrip photoUris={draft.photoUris} isArabic={isArabic} />
+
+          <SharePreviewCard
+            trailName={isArabic ? draft.trailNameAr ?? draft.trailName : draft.trailName}
+            heroUri={heroPhoto || draft.trailImage || ''}
+            rating={draft.rating}
+            reviewExcerpt={draft.review}
+            durationMs={draft.durationMs}
+            isArabic={isArabic}
+          />
+
+          <ShareActions
+            draft={draft}
+            isArabic={isArabic}
+            navigation={navigation}
+            onSaveJournal={handleJournalSave}
+          />
+
+          <CommunitySuggestions draft={draft} isArabic={isArabic} navigation={navigation} />
+        </ScrollView>
+      </AnimatedScreen>
+    );
+  }
 
   return (
-    <AnimatedScreen style={styles.container}>
+    <AnimatedScreen style={styles.screen}>
       <ScrollView
-        style={styles.container}
         contentContainerStyle={[
-          styles.content,
+          styles.fallbackContent,
           { paddingTop: Math.max(12, insets.top + 8), paddingBottom: Math.max(28, insets.bottom + 22) },
         ]}
         showsVerticalScrollIndicator={false}
       >
         <AnimatedBlock delay={40}>
-          <View style={[styles.header, isArabic ? rtlRow : ltrRow]}>
-            <View style={[styles.headerSide, isArabic ? rtlRow : ltrRow]}>
-              <Pressable style={styles.iconButton} onPress={() => navigation.goBack()}>
-                <Ionicons name={isArabic ? 'chevron-forward' : 'chevron-back'} size={20} color="#2C2418" />
-              </Pressable>
-              <View>
-                <Text style={[styles.title, isArabic ? rtlText : ltrText]}>{isArabic ? 'مشاركة' : 'Share'}</Text>
-                <Text style={[styles.subtitle, isArabic ? rtlText : ltrText]}>
-                  {isArabic ? 'انشر صورة أو أضف خطة جديدة للأصدقاء' : 'Post a photo or add a new plan for friends'}
-                </Text>
-              </View>
+          <View style={[styles.fallbackHeader, isArabic ? rtlRow : ltrRow]}>
+            <Pressable style={styles.iconButton} onPress={() => navigation.goBack()}>
+              <Ionicons name={isArabic ? 'chevron-forward' : 'chevron-back'} size={20} color="#2C2418" />
+            </Pressable>
+            <View style={styles.fallbackHeaderText}>
+              <Text style={[styles.fallbackTitle, isArabic ? rtlText : ltrText]}>
+                {isArabic ? 'شارك لحظة' : 'Share a moment'}
+              </Text>
+              <Text style={[styles.fallbackSub, isArabic ? rtlText : ltrText]}>
+                {isArabic
+                  ? 'بعد إنهاء مسار، سيظهر هنا احتفال كامل بملخصك. يمكنك أيضاً بدء منشور يدوياً.'
+                  : 'After you finish a trail, your full celebration recap appears here. You can still start a post manually.'}
+              </Text>
             </View>
           </View>
         </AnimatedBlock>
 
-        {shareOptions.map((option, index) => (
+        {fallbackShareOptions.map((option, index) => (
           <AnimatedBlock key={option.id} delay={80 + index * 40}>
             <Pressable
               style={styles.optionCard}
-              onPress={() => navigation.navigate('ActivityShareComposer', { type: option.id as 'photo' | 'plan' })}
+              onPress={() => navigation.navigate('ActivityShareComposer', { type: option.id })}
             >
               <LinearGradient colors={[...option.accent]} style={styles.optionIcon}>
                 <Ionicons name={option.icon} size={22} color="#fff" />
@@ -105,69 +241,27 @@ export function ActivityShareScreen() {
             </Pressable>
           </AnimatedBlock>
         ))}
-
-        {draft ? (
-          <AnimatedBlock delay={150}>
-            <View style={styles.draftCard}>
-              <View style={styles.draftHeader}>
-                <Ionicons name="checkmark-circle" size={18} color="#1E7A46" />
-                <Text style={[styles.draftTitle, isArabic ? rtlText : ltrText]}>
-                  {isArabic ? 'تم تجهيز ملخص رحلتك' : 'Your trail recap is ready'}
-                </Text>
-              </View>
-              <Text style={[styles.draftSubtitle, isArabic ? rtlText : ltrText]}>
-                {isArabic ? `${draft.trailName} - تقييم ${draft.rating}/5` : `${draft.trailName} - ${draft.rating}/5 rating`}
-              </Text>
-              {draft.review ? (
-                <Text style={[styles.draftReview, isArabic ? rtlText : ltrText]}>{draft.review}</Text>
-              ) : null}
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.draftPhotos}>
-                {draft.photoUris.map((uri, index) => (
-                  <Image key={`${uri}-${index}`} source={{ uri }} style={styles.draftPhoto} />
-                ))}
-              </ScrollView>
-            </View>
-          </AnimatedBlock>
-        ) : null}
-
-        <AnimatedBlock delay={170}>
-          <Text style={[styles.sectionTitle, isArabic ? rtlText : ltrText]}>
-            {isArabic ? 'كيف ستظهر المشاركة' : 'How your share will look'}
-          </Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={[styles.previewRow, isArabic && styles.previewRowRtl]}>
-            {previewCards.map((card) => (
-              <View key={card.id} style={styles.previewCard}>
-                <Image source={{ uri: card.image }} style={styles.previewImage} />
-                <LinearGradient colors={['transparent', 'rgba(0,0,0,0.6)']} style={styles.previewOverlay}>
-                  <Text style={styles.previewTitle}>{isArabic ? card.titleAr : card.titleEn}</Text>
-                </LinearGradient>
-              </View>
-            ))}
-          </ScrollView>
-        </AnimatedBlock>
       </ScrollView>
     </AnimatedScreen>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  screen: {
     flex: 1,
-    backgroundColor: '#F3F1ED',
+    backgroundColor: '#EDE9E2',
   },
-  content: {
+  fallbackContent: {
     paddingHorizontal: 16,
   },
-  header: {
+  fallbackHeader: {
     flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 18,
-  },
-  headerSide: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: 12,
+    marginBottom: 20,
+  },
+  fallbackHeaderText: {
+    flex: 1,
   },
   iconButton: {
     width: 42,
@@ -177,62 +271,28 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  title: {
-    fontSize: 25,
+  fallbackTitle: {
+    fontSize: 24,
     fontWeight: '900',
     color: '#2C2418',
   },
-  subtitle: {
-    marginTop: 4,
-    fontSize: 13,
-    color: '#7B6D5A',
+  fallbackSub: {
+    marginTop: 8,
+    fontSize: 14,
+    lineHeight: 21,
+    color: '#6B5D4E',
+    fontWeight: '600',
   },
   optionCard: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 14,
     backgroundColor: '#FFFFFF',
-    borderRadius: 24,
+    borderRadius: 22,
     padding: 16,
-    marginBottom: 14,
-  },
-  draftCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 24,
-    padding: 16,
-    marginBottom: 16,
-  },
-  draftHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  draftTitle: {
-    color: '#2C2418',
-    fontSize: 16,
-    fontWeight: '800',
-  },
-  draftSubtitle: {
-    marginTop: 10,
-    color: '#6B5D4E',
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  draftReview: {
-    marginTop: 8,
-    color: '#43382C',
-    fontSize: 14,
-    lineHeight: 20,
-  },
-  draftPhotos: {
-    gap: 10,
-    paddingTop: 14,
-  },
-  draftPhoto: {
-    width: 110,
-    height: 110,
-    borderRadius: 18,
-    backgroundColor: '#E7D8C3',
+    marginBottom: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(44,36,24,0.06)',
   },
   optionIcon: {
     width: 52,
@@ -254,39 +314,5 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 19,
     color: '#6B5D4E',
-  },
-  sectionTitle: {
-    marginTop: 8,
-    marginBottom: 12,
-    fontSize: 16,
-    fontWeight: '800',
-    color: '#2C2418',
-  },
-  previewRow: {
-    gap: 12,
-  },
-  previewRowRtl: {
-    flexDirection: 'row-reverse',
-  },
-  previewCard: {
-    width: 220,
-    height: 260,
-    borderRadius: 26,
-    overflow: 'hidden',
-    backgroundColor: '#D4C6A4',
-  },
-  previewImage: {
-    width: '100%',
-    height: '100%',
-  },
-  previewOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    justifyContent: 'flex-end',
-    padding: 16,
-  },
-  previewTitle: {
-    color: '#fff',
-    fontSize: 18,
-    fontWeight: '800',
   },
 });
