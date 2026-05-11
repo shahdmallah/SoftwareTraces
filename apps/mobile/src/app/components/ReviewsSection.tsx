@@ -4,6 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { ltrRow, ltrText, rtlRow, rtlText } from '../utils/direction';
 import { addTrailReview, type ReactNativeFile, type TrailReview } from '../api/trailsApi';
+import { addReviewComment, getReviewComments, likeReview, unlikeReview } from '../api/socialApi';
 import { ReviewPhotoStrip } from './ReviewPhotoStrip';
 
 type ReviewSort = 'recent' | 'helpful' | 'highest';
@@ -83,6 +84,9 @@ export function ReviewsSection({
   const [isSortOpen, setIsSortOpen] = useState(false);
   const [expandedReviews, setExpandedReviews] = useState<Record<string, boolean>>({});
   const [helpfulReviews, setHelpfulReviews] = useState<Record<string, boolean>>({});
+  const [reviewLikes, setReviewLikes] = useState<Record<string, { liked: boolean; count: number }>>({});
+  const [reviewComments, setReviewComments] = useState<Record<string, { count: number; open: boolean; draft: string; loading: boolean; error: string }>>({});
+  const [pendingReviewAction, setPendingReviewAction] = useState<string | null>(null);
   const [isReviewModalOpen, setIsReviewModalOpen] = useState(false);
   const [draftRating, setDraftRating] = useState(5);
   const [draftReview, setDraftReview] = useState('');
@@ -212,8 +216,8 @@ export function ReviewsSection({
         rating: draftRating,
         content: addLabelsToContent(content, draftLabels),
         created_at: createdAt,
-        photos: response.data.photos?.length
-          ? response.data.photos
+        photos: (response.data as { id: string; photos?: TrailReview['photos'] }).photos?.length
+          ? (response.data as { id: string; photos?: TrailReview['photos'] }).photos
           : draftPhotos.map((photo) => ({ id: photo.id, url: photo.uri, created_at: createdAt })),
       });
       setDraftRating(5);
@@ -225,6 +229,109 @@ export function ReviewsSection({
       setErrorMessage(error instanceof Error ? error.message : isArabic ? 'تعذر إرسال المراجعة الآن.' : 'Unable to post review right now.');
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const getLikeState = (review: TrailReview) => {
+    const raw = review as TrailReview & { likes_count?: number; is_liked_by_user?: boolean };
+    return reviewLikes[review.id] ?? {
+      liked: Boolean(raw.is_liked_by_user),
+      count: Number(raw.likes_count ?? 0),
+    };
+  };
+
+  const getCommentState = (review: TrailReview) => {
+    const raw = review as TrailReview & { comments_count?: number };
+    return reviewComments[review.id] ?? {
+      count: Number(raw.comments_count ?? 0),
+      open: false,
+      draft: '',
+      loading: false,
+      error: '',
+    };
+  };
+
+  const updateCommentState = (reviewId: string, updater: (state: ReturnType<typeof getCommentState>) => ReturnType<typeof getCommentState>) => {
+    setReviewComments((current) => {
+      const existing = current[reviewId] ?? { count: 0, open: false, draft: '', loading: false, error: '' };
+      return { ...current, [reviewId]: updater(existing) };
+    });
+  };
+
+  const handleToggleReviewLike = async (review: TrailReview) => {
+    if (!isAuthenticated) {
+      onRequireAuth?.();
+      return;
+    }
+
+    const current = getLikeState(review);
+    const next = { liked: !current.liked, count: Math.max(0, current.count + (current.liked ? -1 : 1)) };
+    setReviewLikes((state) => ({ ...state, [review.id]: next }));
+    setPendingReviewAction(`like-${review.id}`);
+
+    try {
+      await (current.liked ? unlikeReview(review.id) : likeReview(review.id));
+    } catch (error) {
+      setReviewLikes((state) => ({ ...state, [review.id]: current }));
+      updateCommentState(review.id, (state) => ({
+        ...state,
+        error: error instanceof Error ? error.message : isArabic ? 'تعذر تحديث الإعجاب.' : 'Unable to update like.',
+      }));
+    } finally {
+      setPendingReviewAction(null);
+    }
+  };
+
+  const handleToggleReviewComments = async (review: TrailReview) => {
+    const state = getCommentState(review);
+    const opening = !state.open;
+    updateCommentState(review.id, (current) => ({ ...current, open: opening, loading: opening, error: '' }));
+
+    if (!opening) return;
+
+    try {
+      const response = await getReviewComments(review.id, { page: 1, limit: 1 });
+      updateCommentState(review.id, (current) => ({
+        ...current,
+        count: response.pagination?.total ?? response.count ?? current.count,
+        loading: false,
+      }));
+    } catch (error) {
+      updateCommentState(review.id, (current) => ({
+        ...current,
+        loading: false,
+        error: error instanceof Error ? error.message : isArabic ? 'تعذر تحميل التعليقات.' : 'Unable to load comments.',
+      }));
+    }
+  };
+
+  const handleSubmitReviewComment = async (review: TrailReview) => {
+    if (!isAuthenticated) {
+      onRequireAuth?.();
+      return;
+    }
+
+    const state = getCommentState(review);
+    const content = state.draft.trim();
+    if (!content) return;
+
+    setPendingReviewAction(`comment-${review.id}`);
+    updateCommentState(review.id, (current) => ({ ...current, error: '' }));
+
+    try {
+      await addReviewComment(review.id, content);
+      updateCommentState(review.id, (current) => ({
+        ...current,
+        draft: '',
+        count: current.count + 1,
+      }));
+    } catch (error) {
+      updateCommentState(review.id, (current) => ({
+        ...current,
+        error: error instanceof Error ? error.message : isArabic ? 'تعذر إرسال التعليق.' : 'Unable to post comment.',
+      }));
+    } finally {
+      setPendingReviewAction(null);
     }
   };
 
@@ -294,6 +401,8 @@ export function ReviewsSection({
           const isLong = review.content.length > 130;
           const isHelpful = !!helpfulReviews[review.id];
           const helpfulCount = getHelpfulSeed(review) + (isHelpful ? 1 : 0);
+          const likeState = getLikeState(review);
+          const commentState = getCommentState(review);
 
           return (
             <Pressable
@@ -343,6 +452,60 @@ export function ReviewsSection({
                   {isArabic ? `مفيد (${helpfulCount})` : `Helpful (${helpfulCount})`}
                 </Text>
               </Pressable>
+              <View style={[styles.reviewSocialRow, isArabic ? rtlRow : ltrRow]}>
+                <Pressable
+                  style={[styles.reviewSocialButton, likeState.liked && styles.reviewSocialButtonActive, isArabic ? rtlRow : ltrRow]}
+                  onPress={() => void handleToggleReviewLike(review)}
+                  disabled={pendingReviewAction === `like-${review.id}`}
+                >
+                  {pendingReviewAction === `like-${review.id}` ? (
+                    <ActivityIndicator size="small" color={likeState.liked ? '#fff' : '#630E13'} />
+                  ) : (
+                    <Ionicons name={likeState.liked ? 'heart' : 'heart-outline'} size={15} color={likeState.liked ? '#fff' : '#630E13'} />
+                  )}
+                  <Text style={[styles.reviewSocialText, likeState.liked && styles.reviewSocialTextActive]}>
+                    {likeState.count}
+                  </Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.reviewSocialButton, isArabic ? rtlRow : ltrRow]}
+                  onPress={() => void handleToggleReviewComments(review)}
+                >
+                  <Ionicons name="chatbubble-outline" size={15} color="#630E13" />
+                  <Text style={styles.reviewSocialText}>{commentState.count}</Text>
+                </Pressable>
+              </View>
+
+              {commentState.open ? (
+                <View style={styles.reviewCommentPanel}>
+                  {commentState.loading ? (
+                    <ActivityIndicator color="#630E13" />
+                  ) : (
+                    <>
+                      <Text style={[styles.reviewCommentCount, isArabic ? rtlText : ltrText]}>
+                        {isArabic ? `${commentState.count} تعليقات` : `${commentState.count} comments`}
+                      </Text>
+                      <View style={[styles.reviewCommentComposer, isArabic ? rtlRow : ltrRow]}>
+                        <TextInput
+                          value={commentState.draft}
+                          onChangeText={(value) => updateCommentState(review.id, (current) => ({ ...current, draft: value, error: '' }))}
+                          placeholder={isArabic ? 'اكتب تعليقاً...' : 'Write a comment...'}
+                          placeholderTextColor="#A18F7A"
+                          style={[styles.reviewCommentInput, isArabic ? rtlText : ltrText]}
+                        />
+                        <Pressable
+                          style={[styles.reviewCommentSend, (!commentState.draft.trim() || pendingReviewAction === `comment-${review.id}`) && styles.reviewCommentSendDisabled]}
+                          disabled={!commentState.draft.trim() || pendingReviewAction === `comment-${review.id}`}
+                          onPress={() => void handleSubmitReviewComment(review)}
+                        >
+                          {pendingReviewAction === `comment-${review.id}` ? <ActivityIndicator size="small" color="#fff" /> : <Ionicons name="send" size={14} color="#fff" />}
+                        </Pressable>
+                      </View>
+                    </>
+                  )}
+                  {commentState.error ? <Text style={[styles.reviewCommentError, isArabic ? rtlText : ltrText]}>{commentState.error}</Text> : null}
+                </View>
+              ) : null}
             </Pressable>
           );
         })
@@ -638,6 +801,75 @@ const styles = StyleSheet.create({
   helpfulTextActive: {
     color: '#fff',
   },
+  reviewSocialRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 10,
+  },
+  reviewSocialButton: {
+    minHeight: 34,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    backgroundColor: '#FFF8F1',
+  },
+  reviewSocialButtonActive: {
+    backgroundColor: '#630E13',
+  },
+  reviewSocialText: {
+    color: '#630E13',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  reviewSocialTextActive: {
+    color: '#fff',
+  },
+  reviewCommentPanel: {
+    marginTop: 10,
+    borderRadius: 14,
+    padding: 10,
+    backgroundColor: '#FFF8F1',
+  },
+  reviewCommentCount: {
+    color: '#6B5D4E',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  reviewCommentComposer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 8,
+  },
+  reviewCommentInput: {
+    flex: 1,
+    minHeight: 38,
+    borderRadius: 14,
+    paddingHorizontal: 11,
+    backgroundColor: '#FFFFFF',
+    color: '#2C2418',
+    fontSize: 13,
+  },
+  reviewCommentSend: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#630E13',
+  },
+  reviewCommentSendDisabled: {
+    opacity: 0.55,
+  },
+  reviewCommentError: {
+    marginTop: 8,
+    color: '#8B1E1E',
+    fontSize: 12,
+    fontWeight: '800',
+  },
   reviewEmpty: {
     marginTop: 14,
     color: '#6B5D4E',
@@ -694,6 +926,50 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 20,
     textAlignVertical: 'top',
+  },
+  photoActionsRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 12,
+  },
+  photoActionButton: {
+    flex: 1,
+    minHeight: 42,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+    borderRadius: 14,
+    backgroundColor: '#F7EBE8',
+  },
+  photoActionText: {
+    color: '#630E13',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  draftPhotoRow: {
+    gap: 10,
+    paddingTop: 12,
+  },
+  draftPhotoFrame: {
+    position: 'relative',
+  },
+  draftPhoto: {
+    width: 92,
+    height: 92,
+    borderRadius: 14,
+    backgroundColor: '#E8E0D0',
+  },
+  removePhotoButton: {
+    position: 'absolute',
+    top: 6,
+    right: 6,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(44,36,24,0.75)',
   },
   modalError: {
     marginTop: 10,

@@ -17,4 +17,10 @@ config.resolver.extraNodeModules = {
   'react-native': path.resolve(projectRoot, 'node_modules/react-native'),
 };
 
+// Fix for Windows file watching issues
+config.watchFolders = [workspaceRoot];
+config.watcher = {
+  usePolling: true,
+};
+
 module.exports = config;

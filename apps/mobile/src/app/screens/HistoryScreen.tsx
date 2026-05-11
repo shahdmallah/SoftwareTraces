@@ -7,6 +7,8 @@ import {
   StyleSheet,
   Dimensions,
   Image,
+  ActivityIndicator,
+  Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
@@ -16,11 +18,11 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLanguage } from '../contexts/LanguageContext';
 import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
 import { useAuth } from '../contexts/AuthContext';
-import { getUserActivities, type Activity } from '../api/activitiesApi';
+import { deleteActivity, getActivityById, getUserActivities, type Activity, type ActivityDetail } from '../api/activitiesApi';
 import { getTrailById, type Trail } from '../api/trailsApi';
 
 const dayNamesAr = ['أح', 'إث', 'ثل', 'أر', 'خم', 'جم', 'سب'];
-const dayNamesEn = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+const dayNamesEn = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
 
 type HistoryNavigationProp = StackNavigationProp<RootStackParamList, 'TrailDetail'>;
 
@@ -33,6 +35,10 @@ export function HistoryScreen() {
   const isArabic = language === 'ar';
   const [activities, setActivities] = useState<Activity[]>([]);
   const [trailMap, setTrailMap] = useState<Record<string, Trail>>({});
+  const [activityDetails, setActivityDetails] = useState<Record<string, ActivityDetail>>({});
+  const [expandedActivityId, setExpandedActivityId] = useState<string | null>(null);
+  const [loadingActivityId, setLoadingActivityId] = useState<string | null>(null);
+  const [activityError, setActivityError] = useState('');
 
   useEffect(() => {
     let cancelled = false;
@@ -51,7 +57,13 @@ export function HistoryScreen() {
         if (cancelled) return;
         setActivities(userActivities);
 
-        const trailIds = Array.from(new Set(userActivities.map((item) => item.trail_id).filter((id): id is string => Boolean(id))));
+        const trailIds = Array.from(
+          new Set(
+            userActivities
+              .map((item) => item.trail_id)
+              .filter((id): id is string => Boolean(id)),
+          ),
+        );
         const trails = await Promise.all(
           trailIds.map(async (trailId) => {
             try {
@@ -85,7 +97,10 @@ export function HistoryScreen() {
   }, [user?.id]);
 
   const completedActivities = useMemo(
-    () => activities.filter((item) => item.status === 'completed').sort((a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime()),
+    () =>
+      activities
+        .filter((item) => item.status === 'completed')
+        .sort((a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime()),
     [activities],
   );
 
@@ -94,6 +109,7 @@ export function HistoryScreen() {
     const month = now.getMonth();
     const year = now.getFullYear();
     const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const firstDayOfWeek = new Date(year, month, 1).getDay(); // 0=Sun
     const activeDays = new Set(
       completedActivities
         .map((activity) => new Date(activity.started_at))
@@ -101,10 +117,7 @@ export function HistoryScreen() {
         .map((date) => date.getDate()),
     );
 
-    return Array.from({ length: daysInMonth }, (_, index) => ({
-      d: index + 1,
-      hasHike: activeDays.has(index + 1),
-    }));
+    return { daysInMonth, firstDayOfWeek, activeDays };
   }, [completedActivities]);
 
   const totalDistance = completedActivities.reduce((sum, hike) => sum + (hike.distance_km ?? 0), 0);
@@ -117,8 +130,60 @@ export function HistoryScreen() {
     return sum + (ended - started) / 3600000;
   }, 0);
 
+  const handleToggleActivityDetail = async (activity: Activity) => {
+    if (expandedActivityId === activity.id) {
+      setExpandedActivityId(null);
+      return;
+    }
+
+    setExpandedActivityId(activity.id);
+    setActivityError('');
+
+    if (activityDetails[activity.id]) {
+      return;
+    }
+
+    setLoadingActivityId(activity.id);
+    try {
+      const detail = await getActivityById(activity.id);
+      setActivityDetails((current) => ({ ...current, [activity.id]: detail }));
+    } catch (error) {
+      setActivityError(error instanceof Error ? error.message : 'Unable to load activity details.');
+    } finally {
+      setLoadingActivityId(null);
+    }
+  };
+
+  const handleDeleteActivity = (activity: Activity) => {
+    Alert.alert('Delete activity?', 'This removes the recorded activity from your account.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await deleteActivity(activity.id);
+            setActivities((current) => current.filter((item) => item.id !== activity.id));
+            setActivityDetails((current) => {
+              const next = { ...current };
+              delete next[activity.id];
+              return next;
+            });
+            if (expandedActivityId === activity.id) setExpandedActivityId(null);
+          } catch (error) {
+            Alert.alert('Unable to delete activity', error instanceof Error ? error.message : 'Please try again.');
+          }
+        },
+      },
+    ]);
+  };
+
+  const now = new Date();
+  const monthLabel = new Intl.DateTimeFormat(isArabic ? 'ar' : 'en-US', { month: 'long', year: 'numeric' }).format(now);
+
   return (
     <AnimatedScreen style={styles.container}>
+      {/* ── Header ── */}
       <AnimatedBlock delay={40} style={[styles.header, { paddingTop: Math.max(12, insets.top + 8) }]}>
         <View>
           <Text style={styles.title}>{t('historyTitle')}</Text>
@@ -144,99 +209,228 @@ export function HistoryScreen() {
         </View>
       </AnimatedBlock>
 
+      {/* ── Tab bar ── */}
       <AnimatedBlock delay={120} style={styles.tabBar}>
         <Pressable
           style={[styles.tabButton, activeTab === 'list' && styles.tabButtonActive]}
           onPress={() => setActiveTab('list')}
         >
-          <Ionicons name="bar-chart-outline" size={14} color={activeTab === 'list' ? 'white' : '#6B5D4E'} style={styles.tabIcon} />
-          <Text style={[styles.tabText, activeTab === 'list' && styles.tabTextActive]}>{t('historyTabList')}</Text>
+          <Ionicons
+            name="bar-chart-outline"
+            size={14}
+            color={activeTab === 'list' ? 'white' : '#6B5D4E'}
+            style={styles.tabIcon}
+          />
+          <Text style={[styles.tabText, activeTab === 'list' && styles.tabTextActive]}>
+            {t('historyTabList')}
+          </Text>
         </Pressable>
         <Pressable
           style={[styles.tabButton, activeTab === 'calendar' && styles.tabButtonActive]}
           onPress={() => setActiveTab('calendar')}
         >
-          <Ionicons name="calendar-outline" size={14} color={activeTab === 'calendar' ? 'white' : '#6B5D4E'} style={styles.tabIcon} />
-          <Text style={[styles.tabText, activeTab === 'calendar' && styles.tabTextActive]}>{t('historyTabCalendar')}</Text>
+          <Ionicons
+            name="calendar-outline"
+            size={14}
+            color={activeTab === 'calendar' ? 'white' : '#6B5D4E'}
+            style={styles.tabIcon}
+          />
+          <Text style={[styles.tabText, activeTab === 'calendar' && styles.tabTextActive]}>
+            {t('historyTabCalendar')}
+          </Text>
         </Pressable>
       </AnimatedBlock>
 
+      {/* ── Content ── */}
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         {activeTab === 'list' ? (
-          completedActivities.map((hike, index) => (
-            <AnimatedBlock key={hike.id} delay={160 + index * 40}>
-            <Pressable
-              style={styles.hikeCard}
-              onPress={() => {
-                if (hike.trail_id) {
-                  navigation.navigate('TrailDetail', { trailId: hike.trail_id });
-                }
-              }}
-            >
-              <View style={styles.timelineMarker}>
-                <View style={styles.timelineDot} />
-                {index < completedActivities.length - 1 && <View style={styles.timelineLine} />}
-              </View>
-              <View style={styles.hikeContent}>
-                <Image source={{ uri: trailMap[hike.trail_id ?? '']?.image ?? '' }} style={styles.hikeImage} />
-                <View style={styles.hikeInfo}>
-                  <Text style={styles.hikeDate}>
-                    {new Intl.DateTimeFormat(isArabic ? 'ar' : 'en-US', { dateStyle: 'medium' }).format(new Date(hike.started_at))}
-                  </Text>
-                  <Text style={styles.hikeName}>{trailMap[hike.trail_id ?? '']?.name ?? 'Trail'}</Text>
-                  <View style={styles.hikeMetaRow}>
-                    <Text style={styles.hikeMetaText}>{(hike.distance_km ?? 0).toFixed(1)}km</Text>
-                    <Text style={styles.hikeMetaText}>• {(hike.avg_speed_kph ?? 0).toFixed(1)} km/h</Text>
-                    <Text style={styles.hikeMetaText}>• ↑{Math.round(hike.elevation_gain_m ?? 0)}m</Text>
-                  </View>
-                </View>
-                <Ionicons name="chevron-forward" size={18} color="#8A7A6A" />
-              </View>
-            </Pressable>
-            </AnimatedBlock>
-          ))
-        ) : (
-          <AnimatedBlock delay={180}>
-          <View style={styles.calendarCard}>
-            <Text style={styles.calendarTitle}>
-              {isArabic ? `${t('historyMonthTitle')} — ${t('historyMonthTitleEnOnly')}` : t('historyMonthTitle')}
-            </Text>
-            <View style={styles.weekHeader}>
-              {(isArabic ? dayNamesAr : dayNamesEn).map((day) => (
-                <Text key={day} style={styles.weekDayText}>{day}</Text>
-              ))}
+          completedActivities.length === 0 ? (
+            <View style={styles.emptyState}>
+              <Ionicons name="trail-sign-outline" size={48} color="#C9B89A" />
+              <Text style={styles.emptyStateText}>No completed hikes yet</Text>
             </View>
-            <View style={styles.calendarGrid}>
-              {[...Array(2)].map((_, idx) => (
-                <View key={`empty-${idx}`} style={styles.calendarCellEmpty} />
-              ))}
-              {calendarDays.map((day) => (
-                <View
-                  key={day.d}
-                  style={[
-                    styles.calendarCell,
-                    day.hasHike && styles.calendarCellActive,
-                  ]}
+          ) : (
+            completedActivities.map((hike, index) => (
+              <AnimatedBlock key={hike.id} delay={160 + index * 40}>
+                {/* Outer card is now a column so the detail panel sits below the row */}
+                <Pressable
+                  style={styles.hikeCard}
+                  onPress={() => void handleToggleActivityDetail(hike)}
                 >
-                  <Text style={[styles.calendarCellText, day.hasHike && styles.calendarCellTextActive]}>{day.d}</Text>
-                  {day.hasHike && <View style={styles.calendarDot} />}
-                </View>
-              ))}
+                  {/* ── Row: timeline + card content ── */}
+                  <View style={styles.hikeRow}>
+                    <View style={styles.timelineMarker}>
+                      <View style={styles.timelineDot} />
+                      {index < completedActivities.length - 1 && (
+                        <View style={styles.timelineLine} />
+                      )}
+                    </View>
+
+                    <View style={styles.hikeContent}>
+                      <Image
+                        source={{ uri: trailMap[hike.trail_id ?? '']?.image ?? '' }}
+                        style={styles.hikeImage}
+                      />
+                      <View style={styles.hikeInfo}>
+                        <Text style={styles.hikeDate}>
+                          {new Intl.DateTimeFormat(isArabic ? 'ar' : 'en-US', {
+                            dateStyle: 'medium',
+                          }).format(new Date(hike.started_at))}
+                        </Text>
+                        <Text style={styles.hikeName} numberOfLines={1}>
+                          {trailMap[hike.trail_id ?? '']?.name ?? 'Trail'}
+                        </Text>
+                        <View style={styles.hikeMetaRow}>
+                          <Text style={styles.hikeMetaText}>
+                            {(hike.distance_km ?? 0).toFixed(1)}km
+                          </Text>
+                          <Text style={styles.hikeMetaDot}>·</Text>
+                          <Text style={styles.hikeMetaText}>
+                            {(hike.avg_speed_kph ?? 0).toFixed(1)} km/h
+                          </Text>
+                          <Text style={styles.hikeMetaDot}>·</Text>
+                          <Text style={styles.hikeMetaText}>
+                            ↑{Math.round(hike.elevation_gain_m ?? 0)}m
+                          </Text>
+                        </View>
+                      </View>
+                      <Ionicons
+                        name={expandedActivityId === hike.id ? 'chevron-up' : 'chevron-forward'}
+                        size={18}
+                        color="#8A7A6A"
+                        style={styles.hikeChevron}
+                      />
+                    </View>
+                  </View>
+
+                  {/* ── Detail panel: full width, below the row ── */}
+                  {expandedActivityId === hike.id && (
+                    <View style={styles.activityDetailPanel}>
+                      {loadingActivityId === hike.id ? (
+                        <ActivityIndicator color="#630E13" />
+                      ) : activityError ? (
+                        <Text style={styles.activityErrorText}>{activityError}</Text>
+                      ) : (
+                        <>
+                          <Text style={styles.activityDetailTitle}>Activity details</Text>
+                          <Text style={styles.activityDetailText}>
+                            {activityDetails[hike.id]?.points?.length ?? 0} GPS points ·{' '}
+                            {Math.round(
+                              activityDetails[hike.id]?.elapsed_time_seconds ??
+                                hike.elapsed_time_seconds ??
+                                0,
+                            )}{' '}
+                            sec
+                          </Text>
+                          <View style={styles.activityActionRow}>
+                            {hike.trail_id ? (
+                              <Pressable
+                                style={styles.activityActionButton}
+                                onPress={() =>
+                                  navigation.navigate('TrailDetail', { trailId: hike.trail_id! })
+                                }
+                              >
+                                <Ionicons name="map-outline" size={14} color="#630E13" />
+                                <Text style={styles.activityActionText}>Open trail</Text>
+                              </Pressable>
+                            ) : null}
+                            <Pressable
+                              style={[styles.activityActionButton, styles.activityDeleteButton]}
+                              onPress={() => handleDeleteActivity(hike)}
+                            >
+                              <Ionicons name="trash-outline" size={14} color="#8B1E1E" />
+                              <Text style={[styles.activityActionText, styles.activityDeleteText]}>
+                                Delete
+                              </Text>
+                            </Pressable>
+                          </View>
+                        </>
+                      )}
+                    </View>
+                  )}
+                </Pressable>
+              </AnimatedBlock>
+            ))
+          )
+        ) : (
+          /* ── Calendar tab ── */
+          <AnimatedBlock delay={180}>
+            <View style={styles.calendarCard}>
+              <Text style={styles.calendarTitle}>{monthLabel}</Text>
+
+              {/* Day-name header */}
+              <View style={styles.weekHeader}>
+                {(isArabic ? dayNamesAr : dayNamesEn).map((day, i) => (
+                  <Text key={i} style={styles.weekDayText}>
+                    {day}
+                  </Text>
+                ))}
+              </View>
+
+              {/* Calendar grid */}
+              <View style={styles.calendarGrid}>
+                {/* Leading empty cells so day 1 lands on the right weekday */}
+                {Array.from({ length: calendarDays.firstDayOfWeek }).map((_, i) => (
+                  <View key={`empty-${i}`} style={styles.calendarCell} />
+                ))}
+
+                {Array.from({ length: calendarDays.daysInMonth }, (_, i) => i + 1).map((day) => {
+                  const hasHike = calendarDays.activeDays.has(day);
+                  return (
+                    <View
+                      key={day}
+                      style={[styles.calendarCell, hasHike && styles.calendarCellActive]}
+                    >
+                      <Text
+                        style={[
+                          styles.calendarCellText,
+                          hasHike && styles.calendarCellTextActive,
+                        ]}
+                      >
+                        {day}
+                      </Text>
+                      {hasHike && <View style={styles.calendarDot} />}
+                    </View>
+                  );
+                })}
+              </View>
+
+              {/* Month summary */}
+              <View style={styles.monthSummaryGrid}>
+                {[
+                  {
+                    label: t('historyThisMonthHikes'),
+                    value: String(calendarDays.activeDays.size),
+                    color: '#630E13',
+                  },
+                  {
+                    label: t('historyTotalKm'),
+                    value: `${totalDistance.toFixed(1)}km`,
+                    color: '#D4A843',
+                  },
+                  {
+                    label: t('historyHighestElevation'),
+                    value: `${Math.round(
+                      Math.max(
+                        ...completedActivities.map((item) => item.elevation_gain_m ?? 0),
+                        0,
+                      ),
+                    )}m`,
+                    color: '#7DB3CC',
+                  },
+                  {
+                    label: t('historyAvgDuration'),
+                    value: `${(totalDurationHours / Math.max(1, totalHikes)).toFixed(1)}h`,
+                    color: '#BB2823',
+                  },
+                ].map((item) => (
+                  <View key={item.label} style={styles.summaryCard}>
+                    <Text style={[styles.summaryValue, { color: item.color }]}>{item.value}</Text>
+                    <Text style={styles.summaryLabel}>{item.label}</Text>
+                  </View>
+                ))}
+              </View>
             </View>
-            <View style={styles.monthSummaryGrid}>
-              {[
-                { label: t('historyThisMonthHikes'), value: String(calendarDays.filter((d) => d.hasHike).length), color: '#630E13' },
-                { label: t('historyTotalKm'), value: `${totalDistance.toFixed(1)}km`, color: '#D4A843' },
-                { label: t('historyHighestElevation'), value: `${Math.round(Math.max(...completedActivities.map((item) => item.elevation_gain_m ?? 0), 0))}m`, color: '#7DB3CC' },
-                { label: t('historyAvgDuration'), value: `${(totalDurationHours / Math.max(1, totalHikes)).toFixed(1)}h`, color: '#BB2823' },
-              ].map((item) => (
-                <View key={item.label} style={styles.summaryCard}>
-                  <Text style={[styles.summaryValue, { color: item.color }]}>{item.value}</Text>
-                  <Text style={styles.summaryLabel}>{item.label}</Text>
-                </View>
-              ))}
-            </View>
-          </View>
           </AnimatedBlock>
         )}
       </ScrollView>
@@ -245,12 +439,15 @@ export function HistoryScreen() {
 }
 
 const { width } = Dimensions.get('window');
+const CELL_SIZE = Math.floor((width - 32 - 32 - 6 * 4) / 7); // calendar padding + gaps
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#F7F7F7',
   },
+
+  // ── Header ──────────────────────────────────────────────
   header: {
     paddingHorizontal: 16,
     paddingTop: 24,
@@ -292,11 +489,15 @@ const styles = StyleSheet.create({
     marginTop: 4,
     fontSize: 10,
     color: 'rgba(255,255,255,0.65)',
+    textAlign: 'center',
   },
+
+  // ── Tab bar ─────────────────────────────────────────────
   tabBar: {
     flexDirection: 'row',
+    gap: 8,
     paddingHorizontal: 16,
-    paddingBottom: 12,
+    paddingVertical: 12,
     backgroundColor: '#F7F7F7',
   },
   tabButton: {
@@ -317,21 +518,44 @@ const styles = StyleSheet.create({
   tabText: {
     color: '#6B5D4E',
     fontWeight: '700',
+    fontSize: 13,
   },
   tabTextActive: {
     color: 'white',
   },
+
+  // ── Scroll content ───────────────────────────────────────
   content: {
     paddingHorizontal: 16,
-    paddingBottom: 24,
+    paddingBottom: 32,
+    paddingTop: 4,
   },
+
+  // ── Empty state ──────────────────────────────────────────
+  emptyState: {
+    alignItems: 'center',
+    paddingTop: 60,
+    gap: 12,
+  },
+  emptyStateText: {
+    color: '#8A7A6A',
+    fontSize: 15,
+    fontWeight: '600',
+  },
+
+  // ── List: hike card ──────────────────────────────────────
   hikeCard: {
-    flexDirection: 'row',
+    flexDirection: 'column', // column so detail panel sits below the row
     marginBottom: 16,
+  },
+  hikeRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
   },
   timelineMarker: {
     width: 24,
     alignItems: 'center',
+    paddingTop: 12, // vertically center dot with card content
   },
   timelineDot: {
     width: 12,
@@ -342,12 +566,14 @@ const styles = StyleSheet.create({
   timelineLine: {
     width: 2,
     flex: 1,
+    minHeight: 32,
     backgroundColor: 'rgba(99,14,19,0.2)',
     marginTop: 4,
   },
   hikeContent: {
     flex: 1,
     flexDirection: 'row',
+    alignItems: 'center',
     backgroundColor: 'white',
     borderRadius: 18,
     overflow: 'hidden',
@@ -359,18 +585,19 @@ const styles = StyleSheet.create({
     marginLeft: 8,
   },
   hikeImage: {
-    width: 90,
-    height: 90,
+    width: 88,
+    height: 88,
   },
   hikeInfo: {
     flex: 1,
-    padding: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
     justifyContent: 'center',
   },
   hikeDate: {
     fontSize: 11,
     color: '#8A7A6A',
-    marginBottom: 4,
+    marginBottom: 3,
   },
   hikeName: {
     fontSize: 14,
@@ -379,56 +606,114 @@ const styles = StyleSheet.create({
   },
   hikeMetaRow: {
     flexDirection: 'row',
+    alignItems: 'center',
     flexWrap: 'wrap',
     marginTop: 6,
+    gap: 4,
   },
   hikeMetaText: {
     fontSize: 11,
     color: '#8A7A6A',
   },
+  hikeMetaDot: {
+    fontSize: 11,
+    color: '#C9B89A',
+  },
+  hikeChevron: {
+    paddingRight: 12,
+  },
+
+  // ── Activity detail panel ────────────────────────────────
+  activityDetailPanel: {
+    marginTop: 8,
+    marginLeft: 32, // aligns with the card (timeline width + gap)
+    borderRadius: 16,
+    padding: 14,
+    backgroundColor: '#FFF8F1',
+    borderWidth: 1,
+    borderColor: '#E7D8C3',
+  },
+  activityDetailTitle: {
+    color: '#2C2418',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  activityDetailText: {
+    marginTop: 5,
+    color: '#6B5D4E',
+    fontSize: 12,
+  },
+  activityErrorText: {
+    color: '#8B1E1E',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  activityActionRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 10,
+  },
+  activityActionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    backgroundColor: '#F6F0E0',
+  },
+  activityActionText: {
+    color: '#630E13',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  activityDeleteButton: {
+    backgroundColor: '#F7EBE8',
+  },
+  activityDeleteText: {
+    color: '#8B1E1E',
+  },
+
+  // ── Calendar card ────────────────────────────────────────
   calendarCard: {
     backgroundColor: 'white',
-    borderRadius: 18,
+    borderRadius: 20,
     padding: 16,
     shadowColor: '#000',
     shadowOpacity: 0.08,
     shadowOffset: { width: 0, height: 4 },
     shadowRadius: 10,
     elevation: 3,
-    width: width - 32,
-    alignSelf: 'center',
   },
   calendarTitle: {
     fontSize: 15,
     fontWeight: '700',
     color: '#2C2418',
-    marginBottom: 12,
+    marginBottom: 14,
     textAlign: 'center',
   },
   weekHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: 8,
+    marginBottom: 6,
   },
   weekDayText: {
-    width: (width - 64) / 7,
+    width: CELL_SIZE,
     textAlign: 'center',
     fontSize: 10,
+    fontWeight: '600',
     color: '#8A7A6A',
   },
   calendarGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    marginBottom: 16,
-  },
-  calendarCellEmpty: {
-    width: (width - 64) / 7,
-    height: (width - 64) / 7,
+    gap: 4,
+    marginBottom: 20,
   },
   calendarCell: {
-    width: (width - 64) / 7,
-    height: (width - 64) / 7,
-    borderRadius: 12,
+    width: CELL_SIZE,
+    height: CELL_SIZE,
+    borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -444,30 +729,34 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   calendarDot: {
-    width: 5,
-    height: 5,
-    borderRadius: 2.5,
+    width: 4,
+    height: 4,
+    borderRadius: 2,
     backgroundColor: '#D4A843',
-    marginTop: 4,
+    marginTop: 2,
   },
+
+  // ── Month summary grid ───────────────────────────────────
   monthSummaryGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    justifyContent: 'space-between',
+    gap: 10,
   },
   summaryCard: {
     backgroundColor: '#EAE2CC',
     borderRadius: 14,
     padding: 12,
-    width: (width - 60) / 2,
+    // two cards per row with gap accounted for
+    width: (width - 32 - 32 - 10) / 2,
   },
   summaryValue: {
-    fontSize: 18,
+    fontSize: 20,
     fontWeight: '800',
   },
   summaryLabel: {
     marginTop: 6,
     fontSize: 11,
     color: '#8A7A6A',
+    lineHeight: 15,
   },
 });

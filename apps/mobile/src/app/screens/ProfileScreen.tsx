@@ -6,6 +6,8 @@ import {
   Pressable,
   StyleSheet,
   Vibration,
+  ActivityIndicator,
+  Image,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
@@ -16,7 +18,8 @@ import { useAuth } from '../contexts/AuthContext';
 import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getUserAchievements, type UserAchievement } from '../api/achievementsApi';
-import { getUserActivities, type Activity } from '../api/activitiesApi';
+import { getMyActivities, type Activity } from '../api/activitiesApi';
+import { getProfile, getProfilePhotos, getProfileReviews, type Profile, type ProfilePhoto, type ProfileReview } from '../api/profilesApi';
 
 type SettingItem = {
   id: string;
@@ -26,8 +29,36 @@ type SettingItem = {
   badge?: number;
 };
 
+type ProfileLinkItem = {
+  id: 'history' | 'journal';
+  icon: string;
+  labelKey: TranslationKey;
+  subtitleEn: string;
+  subtitleAr: string;
+  route: 'History' | 'Journal';
+};
+
 const settings: SettingItem[] = [
   { id: 's5', icon: 'settings-outline', labelKey: 'settingGeneral' },
+];
+
+const profileLinks: ProfileLinkItem[] = [
+  {
+    id: 'history',
+    icon: 'time-outline',
+    labelKey: 'activityHistory',
+    subtitleEn: 'Review completed hikes and monthly stats',
+    subtitleAr: 'راجع الرحلات المكتملة وإحصاءات الشهر',
+    route: 'History',
+  },
+  {
+    id: 'journal',
+    icon: 'journal-outline',
+    labelKey: 'activityJournal',
+    subtitleEn: 'Open your saved trail notes',
+    subtitleAr: 'افتح ملاحظات الرحلات المحفوظة',
+    route: 'Journal',
+  },
 ];
 
 const achievementEmojis = ['🏆', '🗺️', '🥾', '🌿', '⛰️', '⭐', '🔥', '🎯'];
@@ -49,7 +80,12 @@ export function ProfileScreen() {
   const { isAuthenticated, signOut, user } = useAuth();
   const isArabic = language === 'ar';
   const insets = useSafeAreaInsets();
-  const displayName = user?.full_name?.trim() || user?.email || '';
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [profileReviews, setProfileReviews] = useState<ProfileReview[]>([]);
+  const [profilePhotos, setProfilePhotos] = useState<ProfilePhoto[]>([]);
+  const [isProfileLoading, setIsProfileLoading] = useState(false);
+  const [profileError, setProfileError] = useState('');
+  const displayName = profile?.full_name?.trim() || user?.full_name?.trim() || user?.email || '';
   const avatarText = displayName
     .split(/\s+/)
     .filter(Boolean)
@@ -58,28 +94,6 @@ export function ProfileScreen() {
     .join('') || 'TR';
   const [achievements, setAchievements] = useState<ProfileAchievement[]>([]);
   const [activities, setActivities] = useState<Activity[]>([]);
-
-  if (!isAuthenticated || !user) {
-    return (
-      <AnimatedScreen style={styles.container}>
-        <View style={styles.emptyState}>
-          <View style={styles.emptyStateBadge}>
-            <Ionicons name="person-outline" size={34} color="white" />
-          </View>
-          <Text style={[styles.emptyStateTitle, isArabic && styles.textRtl]}>No user logged in</Text>
-          <Text style={[styles.emptyStateText, isArabic && styles.textRtl]}>
-            Create an account to save trails, track achievements, and personalize your profile.
-          </Text>
-          <Pressable
-            style={styles.emptyStateButton}
-            onPress={() => navigation.navigate('Auth', { mode: 'signup' })}
-          >
-            <Text style={styles.emptyStateButtonText}>Go to Sign Up</Text>
-          </Pressable>
-        </View>
-      </AnimatedScreen>
-    );
-  }
 
   useEffect(() => {
     let cancelled = false;
@@ -93,13 +107,21 @@ export function ProfileScreen() {
     }
 
     const loadProfileData = async () => {
+      setIsProfileLoading(true);
+      setProfileError('');
       try {
-        const [userAchievements, userActivities] = await Promise.all([
+        const [userAchievements, userActivities, nextProfile, nextReviews, nextPhotos] = await Promise.all([
           getUserAchievements(user.id).catch(() => [] as UserAchievement[]),
-          getUserActivities(user.id).catch(() => [] as Activity[]),
+          getMyActivities({ page: 1, limit: 50 }).catch(() => [] as Activity[]),
+          getProfile(user.id),
+          getProfileReviews(user.id).catch(() => [] as ProfileReview[]),
+          getProfilePhotos(user.id).catch(() => [] as ProfilePhoto[]),
         ]);
 
         if (!cancelled) {
+          setProfile(nextProfile);
+          setProfileReviews(nextReviews);
+          setProfilePhotos(nextPhotos);
           setAchievements(
             userAchievements.map((achievement, index) => ({
               id: achievement.id,
@@ -111,11 +133,20 @@ export function ProfileScreen() {
             })),
           );
           setActivities(userActivities);
+          setProfileError('');
         }
-      } catch {
+      } catch (error) {
         if (!cancelled) {
+          setProfile(null);
+          setProfileReviews([]);
+          setProfilePhotos([]);
           setAchievements([]);
           setActivities([]);
+          setProfileError(error instanceof Error ? error.message : 'Unable to load profile data.');
+        }
+      } finally {
+        if (!cancelled) {
+          setIsProfileLoading(false);
         }
       }
     };
@@ -132,6 +163,8 @@ export function ProfileScreen() {
   const nextAchievement = achievements.find((a) => !a.earned);
   const totalDistance = activities.reduce((sum, activity) => sum + (activity.distance_km ?? 0), 0);
   const completedTrips = activities.filter((activity) => activity.status === 'completed').length;
+  const followerCount = profile?.stats?.total_followers ?? 0;
+  const reviewCount = profile?.stats?.total_reviews ?? profileReviews.length;
   const totalDurationHours = useMemo(() => {
     return activities.reduce((sum, activity) => {
       if (!activity.started_at || !activity.ended_at) return sum;
@@ -160,6 +193,33 @@ export function ProfileScreen() {
     navigation.navigate('ProfileSettings', { settingId: setting.id });
   };
 
+  const handleProfileLinkPress = (item: ProfileLinkItem) => {
+    triggerFeedback(10);
+    navigation.navigate(item.route);
+  };
+
+  if (!isAuthenticated || !user) {
+    return (
+      <AnimatedScreen style={styles.container}>
+        <View style={styles.emptyState}>
+          <View style={styles.emptyStateBadge}>
+            <Ionicons name="person-outline" size={34} color="white" />
+          </View>
+          <Text style={[styles.emptyStateTitle, isArabic && styles.textRtl]}>No user logged in</Text>
+          <Text style={[styles.emptyStateText, isArabic && styles.textRtl]}>
+            Create an account to save trails, track achievements, and personalize your profile.
+          </Text>
+          <Pressable
+            style={styles.emptyStateButton}
+            onPress={() => navigation.navigate('Auth', { mode: 'signup' })}
+          >
+            <Text style={styles.emptyStateButtonText}>Go to Sign Up</Text>
+          </Pressable>
+        </View>
+      </AnimatedScreen>
+    );
+  }
+
   return (
     <AnimatedScreen style={styles.container}>
       <ScrollView
@@ -172,9 +232,13 @@ export function ProfileScreen() {
           <View style={[styles.profileTop, isArabic && styles.rowReverse]}>
             <View style={styles.avatarWrapper}>
               <View style={styles.avatarGradient}>
-                <View style={styles.avatarCircle}>
-                  <Text style={styles.avatarText}>{avatarText}</Text>
-                </View>
+                {profile?.avatar_url ? (
+                  <Image source={{ uri: profile.avatar_url }} style={styles.avatarImage} />
+                ) : (
+                  <View style={styles.avatarCircle}>
+                    <Text style={styles.avatarText}>{avatarText}</Text>
+                  </View>
+                )}
               </View>
               <View style={styles.statusDot} />
               <Pressable style={styles.changePhotoButton}>
@@ -192,7 +256,7 @@ export function ProfileScreen() {
               <View style={[styles.locationRow, isArabic && styles.rowReverse]}>
                 <Ionicons name="location-outline" size={13} color="rgba(255,244,226,0.7)" />
                 <Text style={[styles.profileLocation, isArabic && styles.textRight, isArabic && styles.textRtl]}>
-                  {t('profileLocation')}
+                  {profile?.location || t('profileLocation')}
                 </Text>
               </View>
             </View>
@@ -206,7 +270,7 @@ export function ProfileScreen() {
               {[
               { value: totalDistance.toFixed(1), unit: 'km', labelKey: 'profileTotalDistance', icon: 'map-outline' },
               { value: String(completedTrips), unit: '', labelKey: 'profileCompletedTrips', icon: 'checkmark-circle-outline' },
-              { value: String(earnedCount), unit: '', labelKey: 'profileBadges', icon: 'ribbon-outline' },
+              { value: String(followerCount), unit: '', labelKey: 'profileBadges', icon: 'people-outline' },
             ].map((item, index) => (
               <Pressable
                 key={item.labelKey}
@@ -281,7 +345,7 @@ export function ProfileScreen() {
                     )}
                   </View>
                   <Text style={[styles.achievementName, isArabic && styles.textRtl]}>
-                    {isArabic ? achievement.nameAr : achievement.nameEn}
+                    {achievement.name}
                   </Text>
                   {!achievement.earned && achievement.progress && (
                     <View style={styles.achievementProgress}>
@@ -289,7 +353,7 @@ export function ProfileScreen() {
                         <View 
                           style={[
                             styles.achievementProgressFill, 
-                            { width: `${(achievement.progress / achievement.target) * 100}%` }
+                            { width: `${Math.max(0, Math.min(100, achievement.progress))}%` }
                           ]} 
                         />
                       </View>
@@ -359,8 +423,86 @@ export function ProfileScreen() {
           </View>
         </AnimatedBlock>
 
+        {/* Journal & History */}
+        <AnimatedBlock delay={200} style={styles.section}>
+          <View style={styles.profileLinksPanel}>
+            {profileLinks.map((item, index) => (
+              <Pressable
+                key={item.id}
+                onPress={() => handleProfileLinkPress(item)}
+                style={({ pressed }) => [
+                  styles.profileLinkRow,
+                  isArabic && styles.rowReverse,
+                  index < profileLinks.length - 1 && styles.profileLinkDivider,
+                  pressed && styles.settingRowPressed,
+                ]}
+              >
+                <View style={styles.settingIconWrapper}>
+                  <View style={styles.settingIconGradient}>
+                    <Ionicons name={item.icon as any} size={18} color="#630E13" />
+                  </View>
+                </View>
+                <View style={[styles.settingTextWrapper, isArabic && styles.settingTextWrapperRtl]}>
+                  <Text style={[styles.settingTitle, isArabic && styles.textRight, isArabic && styles.textRtl]}>
+                    {t(item.labelKey)}
+                  </Text>
+                  <Text style={[styles.settingSubtitle, isArabic && styles.textRight, isArabic && styles.textRtl]}>
+                    {isArabic ? item.subtitleAr : item.subtitleEn}
+                  </Text>
+                </View>
+                <Ionicons name={isArabic ? 'chevron-back' : 'chevron-forward'} size={16} color="#C4BBA0" />
+              </Pressable>
+            ))}
+          </View>
+        </AnimatedBlock>
+
+        <AnimatedBlock delay={90} style={styles.section}>
+          <View style={styles.profileDataPanel}>
+            <View style={[styles.sectionHeader, isArabic && styles.rowReverse]}>
+              <View style={[styles.sectionTitleRow, isArabic && styles.rowReverse]}>
+                <Ionicons name="person-circle-outline" size={20} color="#630E13" />
+                <Text style={[styles.sectionTitle, isArabic && styles.textRight, isArabic && styles.textRtl]}>
+                  {isArabic ? 'الملف العام' : 'Public profile'}
+                </Text>
+              </View>
+              {isProfileLoading ? <ActivityIndicator color="#630E13" /> : null}
+            </View>
+            {profileError ? (
+              <Text style={[styles.profileErrorText, isArabic && styles.textRtl]}>{profileError}</Text>
+            ) : (
+              <>
+                <Text style={[styles.profileBioText, isArabic && styles.textRtl]}>
+                  {profile?.bio || (isArabic ? 'أضف نبذة قصيرة ليعرفك المتنزهون.' : 'Add a short bio so hikers know your trail style.')}
+                </Text>
+                <View style={[styles.profileMiniStats, isArabic && styles.rowReverse]}>
+                  <Text style={styles.profileMiniStat}>{reviewCount} {isArabic ? 'مراجعات' : 'reviews'}</Text>
+                  <Text style={styles.profileMiniStat}>{profilePhotos.length} {isArabic ? 'صور' : 'photos'}</Text>
+                  <Text style={styles.profileMiniStat}>{profile?.stats?.total_likes_received ?? 0} {isArabic ? 'إعجابات' : 'likes'}</Text>
+                </View>
+                {profilePhotos.length ? (
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.profilePhotoRow}>
+                    {profilePhotos.slice(0, 8).map((photo) => (
+                      <Pressable key={photo.id} style={styles.profilePhotoCard} onPress={() => photo.trail_id && navigation.navigate('TrailDetail', { trailId: photo.trail_id })}>
+                        <Image source={{ uri: photo.url }} style={styles.profilePhoto} />
+                        <Text numberOfLines={1} style={styles.profilePhotoCaption}>{photo.trail_name ?? photo.caption ?? 'Trail photo'}</Text>
+                      </Pressable>
+                    ))}
+                  </ScrollView>
+                ) : null}
+                {profileReviews.slice(0, 2).map((review) => (
+                  <Pressable key={review.id} style={styles.profileReviewCard} onPress={() => navigation.navigate('TrailDetail', { trailId: review.trail.id })}>
+                    <Text style={styles.profileReviewTrail}>{review.trail.name}</Text>
+                    <Text numberOfLines={2} style={[styles.profileReviewText, isArabic && styles.textRtl]}>{review.content}</Text>
+                    <Text style={styles.profileReviewMeta}>{review.rating}/5 · {review.likes_count ?? 0} likes · {review.comments_count ?? 0} comments</Text>
+                  </Pressable>
+                ))}
+              </>
+            )}
+          </View>
+        </AnimatedBlock>
+
         {/* Settings */}
-        <AnimatedBlock delay={220} style={styles.section}>
+        <AnimatedBlock delay={240} style={styles.section}>
           {settings.map((item, index) => (
             <Pressable 
               key={item.id} 
@@ -403,7 +545,7 @@ export function ProfileScreen() {
         </AnimatedBlock>
 
         {/* Logout Button */}
-        <AnimatedBlock delay={260}>
+        <AnimatedBlock delay={280}>
           <Pressable
             style={[styles.logoutButton, isArabic && styles.rowReverse]}
             onPress={() => {
@@ -480,6 +622,12 @@ const styles = StyleSheet.create({
     backgroundColor: '#C89D32',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  avatarImage: {
+    width: 82,
+    height: 82,
+    borderRadius: 41,
+    backgroundColor: '#C89D32',
   },
   avatarText: {
     color: '#FFF8EA',
@@ -748,6 +896,84 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(99,14,19,0.16)',
     backgroundColor: '#F6F0E0',
   },
+  profileDataPanel: {
+    borderRadius: 20,
+    padding: 16,
+    backgroundColor: '#FFFDF8',
+    shadowColor: '#000',
+    shadowOpacity: 0.04,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 6,
+    elevation: 2,
+  },
+  profileErrorText: {
+    color: '#8B1E1E',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  profileBioText: {
+    color: '#5A4F41',
+    fontSize: 13,
+    lineHeight: 20,
+  },
+  profileMiniStats: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 12,
+  },
+  profileMiniStat: {
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    backgroundColor: '#F6F0E0',
+    color: '#630E13',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  profilePhotoRow: {
+    gap: 10,
+    paddingTop: 14,
+    paddingBottom: 4,
+  },
+  profilePhotoCard: {
+    width: 104,
+  },
+  profilePhoto: {
+    width: 104,
+    height: 84,
+    borderRadius: 14,
+    backgroundColor: '#E8E0D0',
+  },
+  profilePhotoCaption: {
+    marginTop: 6,
+    color: '#6B5D4E',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  profileReviewCard: {
+    marginTop: 10,
+    borderRadius: 16,
+    padding: 12,
+    backgroundColor: '#F6F0E0',
+  },
+  profileReviewTrail: {
+    color: '#630E13',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  profileReviewText: {
+    marginTop: 5,
+    color: '#4A4131',
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  profileReviewMeta: {
+    marginTop: 6,
+    color: '#8A7A6A',
+    fontSize: 11,
+    fontWeight: '800',
+  },
   featuredTitle: {
     fontSize: 12,
     fontWeight: '600',
@@ -819,6 +1045,27 @@ const styles = StyleSheet.create({
   },
   languageButtonTextActive: {
     color: 'white',
+  },
+  profileLinksPanel: {
+    overflow: 'hidden',
+    borderRadius: 20,
+    backgroundColor: '#FFFDF8',
+    shadowColor: '#000',
+    shadowOpacity: 0.04,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 6,
+    elevation: 2,
+  },
+  profileLinkRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    backgroundColor: '#FFFDF8',
+  },
+  profileLinkDivider: {
+    borderBottomWidth: 1,
+    borderBottomColor: '#EFE7D8',
   },
   settingRow: {
     flexDirection: 'row',

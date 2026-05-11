@@ -1,5 +1,6 @@
 import type { NavigatorScreenParams } from '@react-navigation/native';
 import type { TrailCompletionDraft } from '../features/trailCompletion/types';
+import type { FeedItem } from '../data/activitySocial';
 
 export type RootStackParamList = {
   Onboarding: undefined;
@@ -11,6 +12,7 @@ export type RootStackParamList = {
   TrailMedia: { trailId: string };
   ActivityMessages: undefined;
   ActivityThread: { threadId?: string; friendId?: string };
+  ActivityPlanJoin: { plan: Extract<FeedItem, { kind: 'plan' }> };
   ActivityShare: { draft?: TrailCompletionDraft } | undefined;
   ActivityShareComposer: {
     type: 'photo' | 'plan';
@@ -20,6 +22,7 @@ export type RootStackParamList = {
     initialMeetingLng?: number;
   };
   ProfileSettings: { settingId: string };
+  PublicProfile: { profileId: string };
   CreateTrail: undefined;
   Recording: { trailId: string };
   TrailReview: undefined;

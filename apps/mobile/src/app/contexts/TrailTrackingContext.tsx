@@ -3,6 +3,7 @@ import * as Location from 'expo-location';
 import { Pedometer } from 'expo-sensors';
 import type { Trail } from '../api/trailsApi';
 import { getTrailById } from '../api/trailsApi';
+import { addActivityPoints, completeActivity, createActivity } from '../api/activitiesApi';
 
 export type SessionPhoto = {
   id: string;
@@ -26,6 +27,8 @@ export type ActiveTrailSession = {
   stepCount: number;
   elapsedMs: number;
   startedAt: number | null;
+  backendActivityId: string | null;
+  backendSyncMessage: string | null;
   nearestDistance: number | null;
 };
 
@@ -37,6 +40,7 @@ export type CompletedTrailSession = {
   stepCount: number;
   elapsedMs: number;
   finishedAt: number;
+  activityId?: string;
 };
 
 type TrailTrackingContextValue = {
@@ -83,6 +87,13 @@ function getNearestDistanceToTrail(current: [number, number], trail: Trail | nul
     trail.routeCoordinates?.length ? trail.routeCoordinates : ([[trail.coordinates[1], trail.coordinates[0]]] as [number, number][]);
 
   return route.reduce((nearest, point) => Math.min(nearest, getDistanceMeters(current, point)), Number.POSITIVE_INFINITY);
+}
+
+function getPathDistanceMeters(path: [number, number][]) {
+  return path.reduce((total, point, index) => {
+    const previous = path[index - 1];
+    return previous ? total + getDistanceMeters(previous, point) : total;
+  }, 0);
 }
 
 export function TrailTrackingProvider({ children }: { children: ReactNode }) {
@@ -301,8 +312,41 @@ export function TrailTrackingProvider({ children }: { children: ReactNode }) {
         stepCount: 0,
         elapsedMs: 0,
         startedAt: Date.now(),
+        backendActivityId: null,
+        backendSyncMessage: null,
         nearestDistance: null,
       });
+
+      const startedAtIso = new Date().toISOString();
+      createActivity({ trailId, startedAt: startedAtIso, title: 'Trail recording' })
+        .then((activity) => {
+          if (sessionRunIdRef.current !== runId) {
+            return;
+          }
+          setActiveSession((current) =>
+            current && current.trailId === trailId
+              ? {
+                  ...current,
+                  backendActivityId: activity.id,
+                  backendSyncMessage: null,
+                }
+              : current,
+          );
+        })
+        .catch((error) => {
+          if (sessionRunIdRef.current !== runId) {
+            return;
+          }
+          setActiveSession((current) =>
+            current && current.trailId === trailId
+              ? {
+                  ...current,
+                  backendActivityId: null,
+                  backendSyncMessage: error instanceof Error ? error.message : 'Backend activity sync is unavailable.',
+                }
+              : current,
+          );
+        });
 
       try {
         const trail = await getTrailById(trailId);
@@ -424,15 +468,46 @@ export function TrailTrackingProvider({ children }: { children: ReactNode }) {
       return null;
     }
 
+    const backendActivityId = activeSession.backendActivityId;
+    const finishedAt = Date.now();
+    const elapsedMs = activeSession.isTracking && activeSession.startedAt ? finishedAt - activeSession.startedAt : activeSession.elapsedMs;
+    const distanceMeters = getPathDistanceMeters(activeSession.recordedPath);
+
     const completed: CompletedTrailSession = {
       trailId: activeSession.trailId,
       trail: activeSession.trail,
       recordedPath: activeSession.recordedPath,
       sessionPhotos: activeSession.sessionPhotos,
       stepCount: activeSession.stepCount,
-      elapsedMs: activeSession.isTracking && activeSession.startedAt ? Date.now() - activeSession.startedAt : activeSession.elapsedMs,
-      finishedAt: Date.now(),
+      elapsedMs,
+      finishedAt,
+      activityId: backendActivityId ?? undefined,
     };
+
+    if (backendActivityId) {
+      const startedAt = activeSession.startedAt ?? finishedAt - elapsedMs;
+      const pointIntervalMs = activeSession.recordedPath.length > 1 ? Math.max(1000, Math.floor(elapsedMs / activeSession.recordedPath.length)) : 1000;
+
+      void addActivityPoints(
+        backendActivityId,
+        activeSession.recordedPath.map(([lng, lat], index) => ({
+          lat,
+          lng,
+          recordedAt: new Date(startedAt + index * pointIntervalMs).toISOString(),
+        })),
+      ).catch(() => undefined);
+
+      void completeActivity(backendActivityId, {
+        endedAt: new Date(finishedAt).toISOString(),
+        distanceMeters,
+        elevationGainMeters: activeSession.trail?.elevationGain ?? 0,
+        elevationLossMeters: 0,
+        maxElevationMeters: 0,
+        minElevationMeters: 0,
+        maxSpeedMps: elapsedMs > 0 ? distanceMeters / (elapsedMs / 1000) : 0,
+        avgSpeedMps: elapsedMs > 0 ? distanceMeters / (elapsedMs / 1000) : 0,
+      }).catch(() => undefined);
+    }
 
     sessionRunIdRef.current += 1;
     cleanupSubscriptions();

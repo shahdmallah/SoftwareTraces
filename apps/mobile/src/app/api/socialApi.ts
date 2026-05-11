@@ -97,6 +97,14 @@ export type ReviewComment = {
   user: SocialProfile;
 };
 
+export type ActivityComment = {
+  id: string;
+  activity_id: string;
+  user_id: string;
+  body: string;
+  created_at?: string;
+};
+
 export type PaginatedList<T> = {
   count: number;
   data: T[];
@@ -165,7 +173,7 @@ export async function likeActivity(activityId: string) {
 }
 
 export async function commentOnActivity(activityId: string, body: string) {
-  const response = await apiRequest<Envelope<Record<string, unknown>>>(`/api/social/activities/${activityId}/comments`, {
+  const response = await apiRequest<Envelope<ActivityComment>>(`/api/social/activities/${activityId}/comments`, {
     method: 'POST',
     body: JSON.stringify({ body }),
   });

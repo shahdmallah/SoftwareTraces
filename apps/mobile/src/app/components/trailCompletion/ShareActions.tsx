@@ -3,6 +3,7 @@ import { Alert, Pressable, Share, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { MotiView } from 'moti';
 import type { StackNavigationProp } from '@react-navigation/stack';
+import { shareActivityPost } from '../../api/activitiesApi';
 import { addLocalFeedItem } from '../../data/localSocial';
 import { completionRadii } from '../../features/trailCompletion/theme';
 import type { TrailCompletionDraft } from '../../features/trailCompletion/types';
@@ -39,6 +40,8 @@ export function ShareActions({ draft, isArabic, navigation, delay = 400, onSaveJ
     const item = {
       id: `local-recap-${Date.now()}`,
       kind: 'recap' as const,
+      activityId: draft.activityId,
+      completionDraft: draft,
       trailId: draft.trailId ?? '0',
       user: 'You',
       handle: '@you',
@@ -56,6 +59,24 @@ export function ShareActions({ draft, isArabic, navigation, delay = 400, onSaveJ
       comments: 0,
       distance: `${(draft.trailDistanceKm ?? 0).toFixed(1)} km`,
     };
+
+    if (draft.activityId) {
+      try {
+        await shareActivityPost(draft.activityId, {
+          visibility: 'public',
+          caption: draft.review.trim() || message,
+        });
+      } catch (error) {
+        Alert.alert(
+          isArabic ? 'طھط¹ط°ط± ط§ظ„ظ†ط´ط± ط¹ظ„ظ‰ ط§ظ„ط®ط§ط¯ظ…' : 'Backend post failed',
+          error instanceof Error
+            ? error.message
+            : isArabic
+              ? 'طھظ… ط­ظپط¸ ط§ظ„ظ…ظ„ط®طµ ظ…ط­ظ„ظٹط§ظ‹ ظپظ‚ط·.'
+              : 'The recap will be kept locally for now.',
+        );
+      }
+    }
 
     addLocalFeedItem(item);
 

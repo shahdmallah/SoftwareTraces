@@ -2,12 +2,18 @@ import { apiRequest, apiTextRequest } from './client';
 
 type Envelope<T> = {
   data: T;
+  pagination?: {
+    page: number;
+    limit: number;
+    total: number;
+    pages: number;
+  };
 };
 
 /** Raw row shapes returned by `GET /api/activities/user/:userId` (database columns). */
 export type ActivityRow = {
   id: string;
-  user_id: string;
+  user_id?: string;
   trail_id?: string | null;
   status: string;
   start_time?: string | null;
@@ -84,7 +90,7 @@ export function normalizeActivityRow(row: ActivityRow): Activity {
 
   return {
     id: row.id,
-    user_id: row.user_id,
+    user_id: row.user_id ?? '',
     trail_id: row.trail_id,
     trail_name: row.trail_name,
     status: row.status,
@@ -99,7 +105,12 @@ export function normalizeActivityRow(row: ActivityRow): Activity {
 }
 
 export async function getUserActivities(_userId: string) {
-  const response = await apiRequest<Envelope<ActivityRow[]>>('/api/activities');
+  const response = await apiRequest<Envelope<ActivityRow[]>>(`/api/activities/user/${_userId}`);
+  return response.data.map(normalizeActivityRow);
+}
+
+export async function getMyActivities(params: { page?: number; limit?: number; status?: string } = {}) {
+  const response = await apiRequest<Envelope<ActivityRow[]>>('/api/activities/me', {}, params);
   return response.data.map(normalizeActivityRow);
 }
 
@@ -173,6 +184,34 @@ export async function completeActivity(
       avg_speed_mps: payload.avgSpeedMps,
     }),
   });
+}
+
+export async function shareActivityPost(
+  activityId: string,
+  payload: {
+    visibility?: 'public' | 'friends' | 'private';
+    caption?: string;
+    reviewId?: string;
+  } = {},
+) {
+  const body: Record<string, string | undefined> = {
+    visibility: payload.visibility ?? 'public',
+    caption: payload.caption?.trim() || undefined,
+    review_id: payload.reviewId,
+  };
+  Object.keys(body).forEach((key) => {
+    if (body[key] === undefined) {
+      delete body[key];
+    }
+  });
+
+  return apiRequest<Envelope<{ post_id: string; activity_id: string; visibility: string; created_at: string }>>(
+    `/api/activities/${activityId}/share`,
+    {
+      method: 'POST',
+      body: JSON.stringify(body),
+    },
+  );
 }
 
 export async function deleteActivity(activityId: string) {

@@ -8,6 +8,7 @@ import type { Feature, FeatureCollection, LineString } from 'geojson';
 import { RootStackParamList } from '../navigation/types';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTrailTracking } from '../contexts/TrailTrackingContext';
+import { sendSosAlert } from '../api/sosApi';
 
 const MAPBOX_STYLE_URL =
   process.env.EXPO_PUBLIC_MAPBOX_STYLE_URL ?? 'mapbox://styles/shahdmallah/cmnqgt687000h01s66inve68a';
@@ -147,6 +148,7 @@ export function RecordingScreen() {
     cancelTrailSession,
   } = useTrailTracking();
   const [isCapturingPhoto, setIsCapturingPhoto] = useState(false);
+  const [isSendingSos, setIsSendingSos] = useState(false);
   const [isPanelExpanded, setIsPanelExpanded] = useState(false);
   const [isPhotosExpanded, setIsPhotosExpanded] = useState(false);
 
@@ -328,6 +330,37 @@ export function RecordingScreen() {
     ]);
   };
 
+  const handleSos = () => {
+    if (!currentLocation) {
+      Alert.alert('Location needed', 'Wait for GPS before sending an SOS alert.');
+      return;
+    }
+
+    Alert.alert('Send SOS?', 'Your current location and activity will be sent to the safety endpoint.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Send SOS',
+        style: 'destructive',
+        onPress: async () => {
+          setIsSendingSos(true);
+          try {
+            const alert = await sendSosAlert({
+              latitude: currentLocation[1],
+              longitude: currentLocation[0],
+              activityId: session?.backendActivityId,
+              message: trail ? `Emergency on ${trail.name}` : 'Emergency during live recording',
+            });
+            Alert.alert('SOS sent', `Alert ${alert.id} is ${alert.status}.`);
+          } catch (error) {
+            Alert.alert('Unable to send SOS', error instanceof Error ? error.message : 'Please try again or contact emergency services directly.');
+          } finally {
+            setIsSendingSos(false);
+          }
+        },
+      },
+    ]);
+  };
+
   return (
     <View style={styles.recordingContainer}>
       {canRenderMapbox && Mapbox ? (
@@ -434,6 +467,9 @@ export function RecordingScreen() {
 
             <Pressable style={styles.collapseButton} onPress={() => setIsPanelExpanded((current) => !current)}>
               <Ionicons name={isPanelExpanded ? 'chevron-up' : 'chevron-down'} size={20} color="#2C2418" />
+            </Pressable>
+            <Pressable style={[styles.sosButton, isSendingSos && styles.sosButtonDisabled]} onPress={handleSos} disabled={isSendingSos}>
+              {isSendingSos ? <ActivityIndicator size="small" color="#fff" /> : <Ionicons name="warning-outline" size={20} color="#fff" />}
             </Pressable>
           </View>
         </View>
@@ -669,6 +705,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'rgba(234,226,204,0.96)',
+  },
+  sosButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#BB2823',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.35)',
+  },
+  sosButtonDisabled: {
+    opacity: 0.7,
   },
   heroCard: {
     borderRadius: 28,

@@ -91,7 +91,7 @@ async function getProfileByUserId(userId: string): Promise<ProfileRow> {
        bio,
        location
      FROM profiles
-     WHERE user_id = $1 OR id::text = $1
+    WHERE user_id = $1::uuid OR id = $1::uuid
      LIMIT 1`,
     [userId]
   );

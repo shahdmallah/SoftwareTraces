@@ -3,6 +3,7 @@
  * Maps to session data, trail API models, and review submission — no fabricated fields.
  */
 export type TrailCompletionDraft = {
+  activityId?: string;
   trailId: string;
   trailName: string;
   trailNameAr?: string;

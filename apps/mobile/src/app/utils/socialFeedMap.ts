@@ -41,11 +41,29 @@ export function mapSocialFeedItemToFeedItem(item: SocialFeedItem): FeedItem {
 
   if (item.type === 'review') {
     const photo = item.photo_url || item.photos[0]?.url || item.trail.image || '';
+    const trailId = item.trail.id ?? '';
     const ratingLabel = item.rating != null ? `${item.rating}/5` : '—';
     return {
       id: item.id,
       kind: 'recap',
-      trailId: item.trail.id ?? '',
+      sourceType: 'review',
+      userId: item.user.id,
+      isLiked: item.is_liked_by_user,
+      trailId,
+      completionDraft: trailId
+        ? {
+            trailId,
+            trailName: item.trail.name ?? 'Trail',
+            trailImage: photo || item.trail.image || undefined,
+            rating: item.rating ?? 0,
+            review: item.content ?? '',
+            photoUris: item.photos.map((photoItem) => photoItem.url).filter(Boolean),
+            completedAtIso: item.created_at,
+            durationMs: item.activity?.elapsed_time_seconds ? item.activity.elapsed_time_seconds * 1000 : 0,
+            stepCount: 0,
+            routePointCount: 0,
+          }
+        : undefined,
       user: userName,
       handle,
       avatar: item.user.avatar_url || '',
@@ -67,11 +85,33 @@ export function mapSocialFeedItemToFeedItem(item: SocialFeedItem): FeedItem {
   const caption = item.caption?.trim() || '';
   const trailImage = item.trail.image || '';
   const distanceLabel = formatDistanceKmFromMeters(item.activity?.distance_meters ?? null);
+  const trailId = item.trail.id ?? '';
 
   return {
     id: item.id,
     kind: 'recap',
-    trailId: item.trail.id ?? '',
+    sourceType: 'activity',
+    userId: item.user.id,
+    isLiked: item.is_liked_by_user,
+    activityId: item.activity.id ?? undefined,
+    trailId,
+    completionDraft: trailId
+      ? {
+          activityId: item.activity.id ?? undefined,
+          trailId,
+          trailName: item.trail.name ?? 'Trail',
+          trailImage: trailImage || undefined,
+          rating: item.rating ?? 0,
+          review: caption,
+          photoUris: item.photos.map((photoItem) => photoItem.url).filter(Boolean),
+          completedAtIso: item.created_at,
+          durationMs: item.activity.elapsed_time_seconds ? item.activity.elapsed_time_seconds * 1000 : 0,
+          stepCount: 0,
+          routePointCount: 0,
+          trailDistanceKm: item.activity.distance_meters != null ? Number(item.activity.distance_meters) / 1000 : undefined,
+          trailElevationGainM: item.activity.elevation_gain_meters != null ? Number(item.activity.elevation_gain_meters) : undefined,
+        }
+      : undefined,
     user: userName,
     handle,
     avatar: item.user.avatar_url || '',

@@ -49,6 +49,7 @@ export function TrailReviewScreen() {
       }
 
       const draft: TrailCompletionDraft = {
+        activityId: finishedSession.activityId,
         trailId: finishedSession.trailId,
         trailName,
         trailNameAr: finishedSession.trail?.nameAr,

@@ -1,3 +1,5 @@
+import type { TrailCompletionDraft } from '../features/trailCompletion/types';
+
 export type Friend = {
   id: string;
   name: string;
@@ -23,6 +25,11 @@ export type FeedItem =
   | {
       id: string;
       kind: 'recap';
+      sourceType?: 'review' | 'activity';
+      userId?: string;
+      isLiked?: boolean;
+      activityId?: string;
+      completionDraft?: TrailCompletionDraft;
       trailId: string;
       user: string;
       handle: string;
