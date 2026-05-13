@@ -112,6 +112,7 @@ export type ActivityComment = {
   user_id: string;
   body: string;
   created_at?: string;
+  user?: SocialProfile;
 };
 
 export type PaginatedList<T> = {

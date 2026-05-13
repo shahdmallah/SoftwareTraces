@@ -47,6 +47,8 @@ CREATE TABLE IF NOT EXISTS trails (
   elevation_loss_m NUMERIC NOT NULL DEFAULT 0,
   rating NUMERIC NOT NULL DEFAULT 0,
   reviews INTEGER NOT NULL DEFAULT 0,
+  average_rating DECIMAL(3,2) NOT NULL DEFAULT 0,
+  total_reviews INTEGER NOT NULL DEFAULT 0,
   tags TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
   image TEXT,
   images TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
@@ -78,6 +80,9 @@ CREATE TABLE IF NOT EXISTS trail_reviews (
   photo_storage_path TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE trails ADD COLUMN IF NOT EXISTS average_rating DECIMAL(3,2) DEFAULT 0;
+ALTER TABLE trails ADD COLUMN IF NOT EXISTS total_reviews INTEGER DEFAULT 0;
 
 CREATE TABLE IF NOT EXISTS trail_conditions (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -201,6 +206,37 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+CREATE OR REPLACE FUNCTION update_trail_rating()
+RETURNS TRIGGER AS $$
+BEGIN
+  UPDATE trails
+  SET
+    average_rating = (
+      SELECT COALESCE(AVG(rating), 0)
+      FROM trail_reviews
+      WHERE trail_id = COALESCE(NEW.trail_id, OLD.trail_id)
+    ),
+    total_reviews = (
+      SELECT COUNT(*)
+      FROM trail_reviews
+      WHERE trail_id = COALESCE(NEW.trail_id, OLD.trail_id)
+    ),
+    rating = (
+      SELECT COALESCE(AVG(rating), 0)
+      FROM trail_reviews
+      WHERE trail_id = COALESCE(NEW.trail_id, OLD.trail_id)
+    ),
+    reviews = (
+      SELECT COUNT(*)
+      FROM trail_reviews
+      WHERE trail_id = COALESCE(NEW.trail_id, OLD.trail_id)
+    )
+  WHERE id = COALESCE(NEW.trail_id, OLD.trail_id);
+
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
 DROP TRIGGER IF EXISTS users_set_updated_at ON users;
 CREATE TRIGGER users_set_updated_at BEFORE UPDATE ON users
 FOR EACH ROW EXECUTE PROCEDURE set_updated_at();
@@ -223,6 +259,35 @@ AFTER INSERT OR UPDATE ON activities
 FOR EACH ROW
 WHEN (NEW.status = 'completed')
 EXECUTE PROCEDURE refresh_profile_stats();
+
+DROP TRIGGER IF EXISTS update_trail_rating_trigger ON trail_reviews;
+CREATE TRIGGER update_trail_rating_trigger
+AFTER INSERT OR UPDATE OR DELETE ON trail_reviews
+FOR EACH ROW
+EXECUTE PROCEDURE update_trail_rating();
+
+UPDATE trails t
+SET
+  average_rating = (
+    SELECT COALESCE(AVG(rating), 0)
+    FROM trail_reviews
+    WHERE trail_id = t.id
+  ),
+  total_reviews = (
+    SELECT COUNT(*)
+    FROM trail_reviews
+    WHERE trail_id = t.id
+  ),
+  rating = (
+    SELECT COALESCE(AVG(rating), 0)
+    FROM trail_reviews
+    WHERE trail_id = t.id
+  ),
+  reviews = (
+    SELECT COUNT(*)
+    FROM trail_reviews
+    WHERE trail_id = t.id
+  );
 
 CREATE INDEX IF NOT EXISTS trails_start_point_idx ON trails USING GIST (start_point);
 CREATE INDEX IF NOT EXISTS trails_geometry_idx ON trails USING GIST (geometry);

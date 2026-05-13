@@ -493,7 +493,8 @@ export function TrailMediaScreen() {
       {isTour ? (
         <View style={styles.tourScreen}>
           <Animated.View style={[styles.tourHeroImage, { opacity: imageFade }]}>
-            <Image source={{ uri: tourHeroUri }} style={StyleSheet.absoluteFillObject} resizeMode="cover" />
+            <Image source={{ uri: tourHeroUri }} style={styles.tourHeroBackdrop} resizeMode="cover" />
+            <Image source={{ uri: tourHeroUri }} style={styles.tourHeroPhoto} resizeMode="contain" />
           </Animated.View>
           <View style={styles.tourOverlay} />
 
@@ -751,6 +752,16 @@ const styles = StyleSheet.create({
   tourHeroImage: {
     ...StyleSheet.absoluteFillObject,
     width,
+    height: '100%',
+    backgroundColor: '#10170E',
+  },
+  tourHeroBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    opacity: 0.4,
+  },
+  tourHeroPhoto: {
+    ...StyleSheet.absoluteFillObject,
+    width: '100%',
     height: '100%',
   },
   tourOverlay: {

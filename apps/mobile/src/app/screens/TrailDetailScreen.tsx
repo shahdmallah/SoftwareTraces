@@ -20,7 +20,7 @@ import {
 import { useAuth } from '../contexts/AuthContext';
 import { buildMapImageUri } from '../config/mapConfig';
 import { buildForecast } from '../utils/weatherUtils';
-import { buildGalleryImages, buildMiniRoutePreviewPoints, buildSmoothPath } from '../utils/trailUtils';
+import { buildMiniRoutePreviewPoints, buildSmoothPath } from '../utils/trailUtils';
 import { TrailHeroSection } from '../components/TrailHeroSection';
 import { TrailSummaryCard } from '../components/TrailSummaryCard';
 import { TrailMapPreview } from '../components/TrailMapPreview';
@@ -29,11 +29,50 @@ import { ReviewsSection } from '../components/ReviewsSection';
 import { CommunityPostsSection } from '../components/CommunityPostsSection';
 import { useTrailTracking } from '../contexts/TrailTrackingContext';
 import { getSocialFeed } from '../api/socialApi';
+import { getTrailPhotos } from '../api/mediaApi';
+import { getProfile, type Profile } from '../api/profilesApi';
 import { type FeedItem } from '../data/activitySocial';
 import { mapSocialFeedItemToFeedItem } from '../utils/socialFeedMap';
 
 type TrailDetailScreenRouteProp = RouteProp<RootStackParamList, 'TrailDetail'>;
 type TrailDetailNavigationProp = StackNavigationProp<RootStackParamList>;
+
+async function hydrateReviewProfiles(reviews: TrailReview[]): Promise<TrailReview[]> {
+  const userIds = Array.from(new Set(reviews.map((review) => review.user_id).filter(Boolean)));
+  if (!userIds.length) {
+    return reviews;
+  }
+
+  const profileEntries = await Promise.all(
+    userIds.map(async (userId) => {
+      try {
+        const profile = await getProfile(userId);
+        return [userId, profile] as const;
+      } catch {
+        return [userId, null] as const;
+      }
+    }),
+  );
+  const profilesByUserId = new Map<string, Profile | null>(profileEntries);
+
+  return reviews.map((review) => {
+    const profile = profilesByUserId.get(review.user_id);
+    if (!profile) {
+      return review;
+    }
+
+    return {
+      ...review,
+      user: {
+        id: profile.user_id ?? profile.id ?? review.user_id,
+        full_name: profile.full_name,
+        avatar_url: profile.avatar_url ?? null,
+      },
+      full_name: profile.full_name,
+      avatar_url: profile.avatar_url ?? null,
+    };
+  });
+}
 
 export function TrailDetailScreen() {
   const route = useRoute<TrailDetailScreenRouteProp>();
@@ -58,6 +97,7 @@ export function TrailDetailScreen() {
   const [isWeatherLoading, setIsWeatherLoading] = useState(true);
   const [selectedForecastDate, setSelectedForecastDate] = useState<string | null>(null);
   const [communityPosts, setCommunityPosts] = useState<FeedItem[]>([]);
+  const [trailMediaImages, setTrailMediaImages] = useState<string[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -67,14 +107,21 @@ export function TrailDetailScreen() {
       setLoadError(null);
 
       try {
-        const [nextTrail, nextReviews] = await Promise.all([
+        const [nextTrail, rawReviews, nextPhotos] = await Promise.all([
           getTrailById(trailId),
           getTrailReviews(trailId).catch(() => []),
+          getTrailPhotos(trailId).catch(() => []),
         ]);
+        const nextReviews = await hydrateReviewProfiles(rawReviews);
 
         if (!cancelled) {
           setTrail(nextTrail);
           setReviews(nextReviews);
+          setTrailMediaImages(
+            nextPhotos
+              .map((photo) => photo.url)
+              .filter((url, index, collection): url is string => Boolean(url) && collection.indexOf(url) === index),
+          );
         }
 
         if (isAuthenticated && !cancelled) {
@@ -101,6 +148,7 @@ export function TrailDetailScreen() {
         if (!cancelled) {
           setLoadError(error instanceof Error ? error.message : 'Unable to load trail details.');
           setReviews([]);
+          setTrailMediaImages([]);
         }
       } finally {
         if (!cancelled) {
@@ -144,12 +192,16 @@ export function TrailDetailScreen() {
 
   const weeklyForecast = useMemo(() => buildForecast(trail, language), [language, trail]);
   const trailImages = useMemo(() => {
-    if (!trail) {
-      return [];
-    }
+    const reviewImages = reviews.flatMap((review) => review.photos?.map((photo) => photo.url).filter(Boolean) ?? []);
+    const postImages = communityPosts
+      .map((post) => ('image' in post ? post.image : 'cover' in post ? post.cover : undefined))
+      .filter(Boolean);
 
-    return buildGalleryImages(trail.images, trail.image);
-  }, [trail]);
+    return [...trailMediaImages, ...reviewImages, ...postImages].filter(
+      (imageUri, index, collection): imageUri is string =>
+        Boolean(imageUri) && collection.indexOf(imageUri) === index,
+    );
+  }, [communityPosts, reviews, trailMediaImages]);
   const miniRoutePoints = useMemo(() => buildMiniRoutePreviewPoints(trail?.routeCoordinates), [trail?.routeCoordinates]);
   const miniRoutePath = useMemo(() => buildSmoothPath(miniRoutePoints), [miniRoutePoints]);
   const mapImageUri = useMemo(() => {
@@ -276,13 +328,35 @@ export function TrailDetailScreen() {
 
   const posts = communityPosts;
   const isThisTrailActive = activeSessionTrailId === trail.id;
+  const planTripButton = (
+    <Pressable
+      style={styles.planTripButton}
+      onPress={() => navigation.navigate('ActivityShareComposer', {
+        type: 'plan',
+        trailId: trail.id,
+        trailName: isArabic ? trail.nameAr || trail.name : trail.name,
+        initialMeetingLat: trail.coordinates[0],
+        initialMeetingLng: trail.coordinates[1],
+      })}
+    >
+      <View style={styles.planTripIcon}>
+        <Ionicons name="calendar-outline" size={20} color="#FFF" />
+      </View>
+      <View style={styles.planTripCopy}>
+        <Text style={[styles.planTripLabel, isArabic ? { textAlign: 'right' } : null]}>
+          {isArabic ? 'خطط لرحلة هذا المسار' : 'Plan a trip for this trail'}
+        </Text>
+       
+      </View>
+    </Pressable>
+  );
 
   return (
     <AnimatedScreen style={styles.container}>
       <ScrollView
         style={styles.container}
         nestedScrollEnabled
-        contentContainerStyle={{ paddingBottom: Math.max(28, insets.bottom + 16) }}
+        contentContainerStyle={{ paddingBottom: Math.max(150, insets.bottom + 138) }}
         showsVerticalScrollIndicator={false}
       >
         <AnimatedBlock delay={40}>
@@ -293,8 +367,10 @@ export function TrailDetailScreen() {
             onBackPress={() => navigation.goBack()}
             onSavePress={toggleSaved}
             onGalleryPress={openMediaGallery}
+            onMapPress={openMapPreview}
             isSaved={isSaved}
             isSaving={isSaving}
+            miniRoutePath={miniRoutePath}
           />
         </AnimatedBlock>
 
@@ -395,32 +471,11 @@ export function TrailDetailScreen() {
             />
           </AnimatedBlock>
 
-          <AnimatedBlock delay={370}>
-            <Pressable
-              style={styles.planTripButton}
-              onPress={() => navigation.navigate('ActivityShareComposer', {
-                type: 'plan',
-                trailId: trail.id,
-                trailName: isArabic ? trail.nameAr || trail.name : trail.name,
-                initialMeetingLat: trail.coordinates[0],
-                initialMeetingLng: trail.coordinates[1],
-              })}
-            >
-              <View style={styles.planTripIcon}>
-                <Ionicons name="calendar-outline" size={20} color="#FFF" />
-              </View>
-              <View style={styles.planTripCopy}>
-                <Text style={[styles.planTripLabel, isArabic ? { textAlign: 'right' } : null]}>
-                  {isArabic ? 'خطط لرحلة هذا المسار' : 'Plan a trip for this trail'}
-                </Text>
-                <Text style={[styles.planTripSub, isArabic ? { textAlign: 'right' } : null]}>
-                  {isArabic ? 'حدد التاريخ، الدعوات، ونقطة اللقاء.' : 'Set date, invite friends, and choose a meetup point.'}
-                </Text>
-              </View>
-            </Pressable>
-          </AnimatedBlock>
         </View>
       </ScrollView>
+      <View style={[styles.stickyPlanTripWrap, { paddingBottom: Math.max(insets.bottom + 10, 18) }]}>
+        {planTripButton}
+      </View>
     </AnimatedScreen>
   );
 }
@@ -440,8 +495,21 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  stickyPlanTripWrap: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    backgroundColor: 'rgba(254,254,253,0.94)',
+    shadowColor: '#2C1A0E',
+    shadowOpacity: 0.12,
+    shadowOffset: { width: 0, height: -8 },
+    shadowRadius: 18,
+    elevation: 12,
+  },
   planTripButton: {
-    marginTop: 18,
     padding: 18,
     borderRadius: 22,
     backgroundColor: '#630E13',

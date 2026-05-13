@@ -32,11 +32,34 @@ type ComposerRouteProp = RouteProp<RootStackParamList, 'ActivityShareComposer'>;
 type ComposerNavigationProp = StackNavigationProp<RootStackParamList, 'ActivityShareComposer'>;
 type MapboxModule = typeof import('@rnmapbox/maps');
 type LngLat = [number, number];
+type PlanVisibility = 'public' | 'private';
 
 const MAPBOX_ACCESS_TOKEN = process.env.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN ?? '';
 const MAPBOX_STYLE_URL =
   process.env.EXPO_PUBLIC_MAPBOX_STYLE_URL ?? 'mapbox://styles/shahdmallah/cmnqgt687000h01s66inve68a';
 const DEFAULT_MEETING_COORDINATE: LngLat = [35.22, 31.9];
+
+const BRING_OPTIONS = [
+  { en: 'Water', ar: 'ماء' },
+  { en: 'Hat', ar: 'قبعة' },
+  { en: 'Sunscreen', ar: 'واقي شمس' },
+  { en: 'Light jacket', ar: 'معطف خفيف' },
+  { en: 'Snacks', ar: 'وجبات خفيفة' },
+  { en: 'First aid kit', ar: 'حقيبة إسعاف' },
+  { en: 'Power bank', ar: 'شاحن متنقل' },
+  { en: 'Comfortable shoes', ar: 'حذاء مريح' },
+];
+
+const TRIP_DESCRIPTION_OPTIONS = [
+  { en: 'Easy pace', ar: 'وتيرة سهلة' },
+  { en: 'Moderate pace', ar: 'وتيرة متوسطة' },
+  { en: 'Challenging climbs', ar: 'صعود صعب' },
+  { en: 'Photo stops', ar: 'توقفات للتصوير' },
+  { en: 'Coffee stop', ar: 'استراحة قهوة' },
+  { en: 'Family friendly', ar: 'مناسب للعائلة' },
+  { en: 'Sunset walk', ar: 'مشي وقت الغروب' },
+  { en: 'Quiet nature route', ar: 'مسار طبيعي هادئ' },
+];
 
 let Mapbox: MapboxModule | null = null;
 let mapboxLoadError: string | null = null;
@@ -582,9 +605,14 @@ export function ActivityShareComposerScreen() {
       ? { lat: route.params.initialMeetingLat, lng: route.params.initialMeetingLng }
       : null,
   );
+  const [planVisibility, setPlanVisibility] = useState<PlanVisibility>('public');
   const [maxHeadcount, setMaxHeadcount] = useState('6');
   const [selectedFriends, setSelectedFriends] = useState<string[]>([]);
   const [bringItems, setBringItems] = useState('');
+  const [selectedBringItems, setSelectedBringItems] = useState<string[]>([]);
+  const [customBringItem, setCustomBringItem] = useState('');
+  const [selectedDescriptionItems, setSelectedDescriptionItems] = useState<string[]>([]);
+  const [customDescription, setCustomDescription] = useState('');
   const [friendSearch, setFriendSearch] = useState('');
   const [contacts, setContacts] = useState<SocialProfile[]>([]);
 
@@ -592,6 +620,8 @@ export function ActivityShareComposerScreen() {
   const [showCalendar, setShowCalendar] = useState(false);
   const [showMap, setShowMap] = useState(false);
   const [showFriends, setShowFriends] = useState(false);
+  const [showBringPicker, setShowBringPicker] = useState(false);
+  const [showDescriptionPicker, setShowDescriptionPicker] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -619,6 +649,32 @@ export function ActivityShareComposerScreen() {
     const q = friendSearch.trim().toLowerCase();
     return q ? contacts.filter(f => f.full_name.toLowerCase().includes(q)) : contacts;
   }, [contacts, friendSearch]);
+
+  const bringOptions = useMemo(
+    () => BRING_OPTIONS.map(option => (isArabic ? option.ar : option.en)),
+    [isArabic],
+  );
+
+  const descriptionOptions = useMemo(
+    () => TRIP_DESCRIPTION_OPTIONS.map(option => (isArabic ? option.ar : option.en)),
+    [isArabic],
+  );
+
+  useEffect(() => {
+    setBringItems([...selectedBringItems, customBringItem.trim()].filter(Boolean).join(', '));
+  }, [selectedBringItems, customBringItem]);
+
+  useEffect(() => {
+    if (!isPlan) return;
+    setNote([...selectedDescriptionItems, customDescription.trim()].filter(Boolean).join('. '));
+  }, [isPlan, selectedDescriptionItems, customDescription]);
+
+  const toggleSelectedValue = useCallback(
+    (value: string, setter: React.Dispatch<React.SetStateAction<string[]>>) => {
+      setter(prev => (prev.includes(value) ? prev.filter(item => item !== value) : [...prev, value]));
+    },
+    [],
+  );
 
   const handlePickPhoto = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -664,6 +720,8 @@ export function ActivityShareComposerScreen() {
           noteAr: [trimmedNote, meetingSummary, bringItems ? `أحضر: ${bringItems}` : null].filter(Boolean).join(' · '),
           peopleJoined: joined,
           spotsLeft,
+          visibility: planVisibility,
+          invitedNames: selectedFriends,
         }
       : {
           id: `local-recap-${Date.now()}`,
@@ -814,6 +872,40 @@ export function ActivityShareComposerScreen() {
                 )}
               </FieldRow>
 
+              <FieldRow icon="lock-closed-outline" label={isArabic ? 'خصوصية الخطة' : 'Plan privacy'} isArabic={isArabic}>
+                <View style={[styles.visibilityRow, isArabic && styles.visibilityRowRtl]}>
+                  {(['public', 'private'] as PlanVisibility[]).map(option => {
+                    const active = planVisibility === option;
+                    const isPublic = option === 'public';
+                    return (
+                      <Pressable
+                        key={option}
+                        style={[styles.visibilityCard, active && styles.visibilityCardActive]}
+                        onPress={() => setPlanVisibility(option)}
+                      >
+                        <Ionicons
+                          name={isPublic ? 'globe-outline' : 'people-outline'}
+                          size={18}
+                          color={active ? '#fff' : '#630E13'}
+                        />
+                        <View style={styles.visibilityCopy}>
+                          <Text style={[styles.visibilityTitle, active && styles.visibilityTextActive]}>
+                            {isPublic
+                              ? isArabic ? 'عام' : 'Public'
+                              : isArabic ? 'خاص' : 'Private'}
+                          </Text>
+                          <Text style={[styles.visibilityHint, active && styles.visibilityTextActive]} numberOfLines={2}>
+                            {isPublic
+                              ? isArabic ? 'يظهر في النشاط للجميع' : 'Visible in Activity'
+                              : isArabic ? 'للمدعوين فقط' : 'Invited members only'}
+                          </Text>
+                        </View>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              </FieldRow>
+
               {/* ── Max headcount (plain numeric input) ── */}
               <FieldRow icon="person-outline" label={isArabic ? 'الحد الأقصى للمشاركين' : 'Max headcount'} isArabic={isArabic}>
                 <View style={[styles.counterRow, isArabic && styles.counterRowRtl]}>
@@ -842,13 +934,11 @@ export function ActivityShareComposerScreen() {
 
               {/* ── What to bring ── */}
               <FieldRow icon="bag-outline" label={isArabic ? 'ماذا تجلب' : 'What to bring'} isArabic={isArabic}>
-                <TextInput
+                <SelectPill
                   value={bringItems}
-                  onChangeText={setBringItems}
-                  placeholder={isArabic ? 'ماء، قبعة، معطف خفيف...' : 'Water, hat, light jacket...'}
-                  placeholderTextColor="#A18F7A"
-                  multiline
-                  style={[styles.textArea, isArabic ? rtlText : ltrText]}
+                  placeholder={isArabic ? 'اختر الأشياء الشائعة أو أضف غير ذلك' : 'Choose common items or add other'}
+                  isArabic={isArabic}
+                  onPress={() => setShowBringPicker(true)}
                 />
               </FieldRow>
             </>
@@ -860,18 +950,33 @@ export function ActivityShareComposerScreen() {
             label={isPlan ? (isArabic ? 'وصف الرحلة' : 'Trip description') : isArabic ? 'النص' : 'Caption'}
             isArabic={isArabic}
           >
-            <TextInput
-              value={note}
-              onChangeText={setNote}
-              multiline
-              placeholder={
-                isPlan
-                  ? isArabic ? 'صف الأجواء، الوتيرة، ومستوى الصعوبة...' : 'Describe the vibe, pace, and difficulty...'
-                  : isArabic ? 'اكتب لحظة من الرحلة...' : 'Write a moment from the trail...'
-              }
-              placeholderTextColor="#A18F7A"
-              style={[styles.textArea, isArabic ? rtlText : ltrText]}
-            />
+            {isPlan ? (
+              <>
+                <SelectPill
+                  value={note}
+                  placeholder={isArabic ? 'اختر الأجواء والوتيرة أو أضف غير ذلك' : 'Choose vibe and pace or add other'}
+                  isArabic={isArabic}
+                  onPress={() => setShowDescriptionPicker(true)}
+                />
+                <TextInput
+                  value={customDescription}
+                  onChangeText={setCustomDescription}
+                  multiline
+                  placeholder={isArabic ? 'غير ذلك...' : 'Other details...'}
+                  placeholderTextColor="#A18F7A"
+                  style={[styles.otherInput, isArabic ? rtlText : ltrText]}
+                />
+              </>
+            ) : (
+              <TextInput
+                value={note}
+                onChangeText={setNote}
+                multiline
+                placeholder={isArabic ? 'اكتب لحظة من الرحلة...' : 'Write a moment from the trail...'}
+                placeholderTextColor="#A18F7A"
+                style={[styles.textArea, isArabic ? rtlText : ltrText]}
+              />
+            )}
           </FieldRow>
 
           <Pressable style={styles.submitButton} onPress={handlePost}>
@@ -934,6 +1039,71 @@ export function ActivityShareComposerScreen() {
           )}
         </ScrollView>
       </PickerModal>
+
+      <PickerModal
+        visible={showBringPicker}
+        title={isArabic ? 'ماذا تجلب' : 'What to bring'}
+        onClose={() => setShowBringPicker(false)}
+        large
+      >
+        <ScrollView style={{ maxHeight: 280 }} showsVerticalScrollIndicator={false}>
+          {bringOptions.map(option => (
+            <OptionRow
+              key={option}
+              label={option}
+              selected={selectedBringItems.includes(option)}
+              onPress={() => toggleSelectedValue(option, setSelectedBringItems)}
+              checkmark
+            />
+          ))}
+          <OptionRow
+            label={isArabic ? 'غير ذلك' : 'Other'}
+            selected={customBringItem.trim().length > 0}
+            onPress={() => undefined}
+            checkmark
+          />
+          <TextInput
+            value={customBringItem}
+            onChangeText={setCustomBringItem}
+            placeholder={isArabic ? 'اكتب شيئاً آخر...' : 'Type another item...'}
+            placeholderTextColor="#A18F7A"
+            style={[styles.otherInput, isArabic ? rtlText : ltrText]}
+          />
+        </ScrollView>
+      </PickerModal>
+
+      <PickerModal
+        visible={showDescriptionPicker}
+        title={isArabic ? 'وصف الرحلة' : 'Trip description'}
+        onClose={() => setShowDescriptionPicker(false)}
+        large
+      >
+        <ScrollView style={{ maxHeight: 280 }} showsVerticalScrollIndicator={false}>
+          {descriptionOptions.map(option => (
+            <OptionRow
+              key={option}
+              label={option}
+              selected={selectedDescriptionItems.includes(option)}
+              onPress={() => toggleSelectedValue(option, setSelectedDescriptionItems)}
+              checkmark
+            />
+          ))}
+          <OptionRow
+            label={isArabic ? 'غير ذلك' : 'Other'}
+            selected={customDescription.trim().length > 0}
+            onPress={() => undefined}
+            checkmark
+          />
+          <TextInput
+            value={customDescription}
+            onChangeText={setCustomDescription}
+            placeholder={isArabic ? 'اكتب تفاصيل أخرى...' : 'Type other trip details...'}
+            placeholderTextColor="#A18F7A"
+            multiline
+            style={[styles.otherInput, styles.otherInputTall, isArabic ? rtlText : ltrText]}
+          />
+        </ScrollView>
+      </PickerModal>
     </AnimatedScreen>
   );
 }
@@ -972,6 +1142,25 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFF8F1', color: '#2C2418', fontSize: 14,
     lineHeight: 20, textAlignVertical: 'top',
   },
+  otherInput: {
+    minHeight: 48, borderRadius: 16, paddingHorizontal: 14, paddingVertical: 12,
+    backgroundColor: '#FFF8F1', color: '#2C2418', fontSize: 14,
+    lineHeight: 20, textAlignVertical: 'top', marginTop: 10,
+  },
+  otherInputTall: { minHeight: 92 },
+
+  visibilityRow: { flexDirection: 'row', gap: 10 },
+  visibilityRowRtl: { flexDirection: 'row-reverse' },
+  visibilityCard: {
+    flex: 1, minHeight: 76, borderRadius: 18, padding: 12,
+    backgroundColor: '#FFF8F1', borderWidth: 1, borderColor: '#F0E2D2',
+    flexDirection: 'row', alignItems: 'flex-start', gap: 10,
+  },
+  visibilityCardActive: { backgroundColor: '#630E13', borderColor: '#630E13' },
+  visibilityCopy: { flex: 1 },
+  visibilityTitle: { fontSize: 14, fontWeight: '900', color: '#2C2418', marginBottom: 3 },
+  visibilityHint: { fontSize: 11, fontWeight: '700', color: '#8A7A6A', lineHeight: 15 },
+  visibilityTextActive: { color: '#fff' },
 
   counterRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   counterRowRtl: { flexDirection: 'row-reverse' },

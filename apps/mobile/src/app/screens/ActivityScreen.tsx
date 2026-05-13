@@ -65,9 +65,9 @@ function activityCommentToPreview(
 ): FeedCommentPreview {
   return {
     id: comment.id,
-    userId: comment.user_id || fallbackUser?.id,
-    user: fallbackUser?.full_name || 'You',
-    avatar: '',
+    userId: comment.user?.id || comment.user_id || fallbackUser?.id,
+    user: comment.user?.full_name || fallbackUser?.full_name || 'You',
+    avatar: comment.user?.avatar_url || '',
     body: comment.body,
     createdAt: comment.created_at,
   };
@@ -864,10 +864,12 @@ export function ActivityScreen() {
       try {
         let previewComment: FeedCommentPreview | null = null;
 
-        if (item.sourceType === 'review') {
-          previewComment = reviewCommentToPreview(await addReviewComment(item.id, body));
-        } else if (item.sourceType === 'activity' && item.activityId) {
+        if (item.activityId) {
           previewComment = activityCommentToPreview(await commentOnActivity(item.activityId, body), user ?? null);
+        } else if (item.sourceType === 'review') {
+          previewComment = reviewCommentToPreview(await addReviewComment(item.id, body));
+        } else {
+          throw new Error('Comment target is not available for this post.');
         }
 
         updateRecap(item.id, (current) => ({

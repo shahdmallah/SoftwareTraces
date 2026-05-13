@@ -54,6 +54,20 @@ export type TrailReview = {
   content: string;
   created_at: string;
   photos?: Array<{ id: string; url: string; created_at?: string }>;
+  user?: {
+    id?: string;
+    full_name?: string | null;
+    avatar_url?: string | null;
+  } | null;
+  profile?: {
+    id?: string;
+    full_name?: string | null;
+    avatar_url?: string | null;
+  } | null;
+  full_name?: string | null;
+  user_name?: string | null;
+  username?: string | null;
+  avatar_url?: string | null;
 };
 
 export type TrailPhoto = {

@@ -18,6 +18,24 @@ export const exploreTrailCardStyles = StyleSheet.create({
     width: '100%',
     height: '100%',
   },
+  mapHeroPreview: {
+    width: '100%',
+    height: '100%',
+    backgroundColor: '#FFFFFF',
+  },
+  routePreview: {
+    width: '100%',
+    height: '100%',
+    backgroundColor: '#FFFFFF',
+  },
+  routePreviewImage: {
+    ...StyleSheet.absoluteFillObject,
+    width: '100%',
+    height: '100%',
+  },
+  routePreviewOverlay: {
+    ...StyleSheet.absoluteFillObject,
+  },
   favoriteButton: {
     position: 'absolute',
     top: theme.spacing.lg,

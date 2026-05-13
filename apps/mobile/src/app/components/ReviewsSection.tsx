@@ -51,6 +51,21 @@ function getHelpfulSeed(review: TrailReview) {
   return (base % 9) + Math.max(0, Math.round(Number(review.rating) || 0) - 3);
 }
 
+function getReviewerName(review: TrailReview, isArabic: boolean) {
+  return (
+    review.user?.full_name?.trim() ||
+    review.profile?.full_name?.trim() ||
+    review.full_name?.trim() ||
+    review.user_name?.trim() ||
+    review.username?.trim() ||
+    (review.user_id === 'me' ? (isArabic ? 'أنت' : 'You') : isArabic ? 'متنزه' : 'Hiker')
+  );
+}
+
+function getReviewerAvatar(review: TrailReview) {
+  return review.user?.avatar_url?.trim() || review.profile?.avatar_url?.trim() || review.avatar_url?.trim() || '';
+}
+
 function buildReviewPhoto(asset: ImagePicker.ImagePickerAsset): ReviewDraftPhoto {
   const extension = asset.uri.split('.').pop()?.split('?')[0]?.toLowerCase() || 'jpg';
   const mimeExtension = extension === 'jpg' ? 'jpeg' : extension;
@@ -401,6 +416,8 @@ export function ReviewsSection({
           const isLong = review.content.length > 130;
           const likeState = getLikeState(review);
           const commentState = getCommentState(review);
+          const reviewerName = getReviewerName(review, isArabic);
+          const reviewerAvatar = getReviewerAvatar(review);
 
           return (
             <Pressable
@@ -415,10 +432,14 @@ export function ReviewsSection({
               <View style={[styles.reviewHeader, isArabic ? rtlRow : ltrRow]}>
                 <View style={[styles.reviewerRow, isArabic ? rtlRow : ltrRow]}>
                   <View style={styles.reviewerAvatar}>
-                    <Ionicons name="person" size={15} color="#630E13" />
+                    {reviewerAvatar ? (
+                      <Image source={{ uri: reviewerAvatar }} style={styles.reviewerAvatarImage} />
+                    ) : (
+                      <Ionicons name="person" size={15} color="#630E13" />
+                    )}
                   </View>
                   <View>
-                    <Text style={[styles.reviewUser, isArabic ? rtlText : ltrText]}>{isArabic ? 'متنزه' : 'Hiker'}</Text>
+                    <Text style={[styles.reviewUser, isArabic ? rtlText : ltrText]}>{reviewerName}</Text>
                     <Text style={[styles.reviewDate, isArabic ? rtlText : ltrText]}>
                       {review.created_at ? new Date(review.created_at).toLocaleDateString() : ''}
                     </Text>
@@ -737,6 +758,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#F7EBE8',
+    overflow: 'hidden',
+  },
+  reviewerAvatarImage: {
+    width: '100%',
+    height: '100%',
   },
   reviewUser: {
     color: '#2C2418',
@@ -961,3 +987,4 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
 });
+

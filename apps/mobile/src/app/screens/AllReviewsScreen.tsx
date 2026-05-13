@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 
 import { getTrailReviews, type TrailReview } from '../api/trailsApi';
+import { getProfile, type Profile } from '../api/profilesApi';
 import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
 import { ReviewPhotoStrip } from '../components/ReviewPhotoStrip';
 import { useLanguage } from '../contexts/LanguageContext';
@@ -17,6 +18,58 @@ type AllReviewsNavigationProp = StackNavigationProp<RootStackParamList, 'AllRevi
 function formatRating(value: number | string | undefined | null) {
   const parsed = typeof value === 'number' ? value : Number(value);
   return Number.isFinite(parsed) ? parsed.toFixed(1) : '0.0';
+}
+
+function getReviewerName(review: TrailReview, isArabic: boolean) {
+  return (
+    review.user?.full_name?.trim() ||
+    review.profile?.full_name?.trim() ||
+    review.full_name?.trim() ||
+    review.user_name?.trim() ||
+    review.username?.trim() ||
+    (review.user_id === 'me' ? (isArabic ? 'أنت' : 'You') : isArabic ? 'متنزه' : 'Hiker')
+  );
+}
+
+function getReviewerAvatar(review: TrailReview) {
+  return review.user?.avatar_url?.trim() || review.profile?.avatar_url?.trim() || review.avatar_url?.trim() || '';
+}
+
+async function hydrateReviewProfiles(reviews: TrailReview[]): Promise<TrailReview[]> {
+  const userIds = Array.from(new Set(reviews.map((review) => review.user_id).filter(Boolean)));
+  if (!userIds.length) {
+    return reviews;
+  }
+
+  const profileEntries = await Promise.all(
+    userIds.map(async (userId) => {
+      try {
+        const profile = await getProfile(userId);
+        return [userId, profile] as const;
+      } catch {
+        return [userId, null] as const;
+      }
+    }),
+  );
+  const profilesByUserId = new Map<string, Profile | null>(profileEntries);
+
+  return reviews.map((review) => {
+    const profile = profilesByUserId.get(review.user_id);
+    if (!profile) {
+      return review;
+    }
+
+    return {
+      ...review,
+      user: {
+        id: profile.user_id ?? profile.id ?? review.user_id,
+        full_name: profile.full_name,
+        avatar_url: profile.avatar_url ?? null,
+      },
+      full_name: profile.full_name,
+      avatar_url: profile.avatar_url ?? null,
+    };
+  });
 }
 
 export function AllReviewsScreen() {
@@ -37,7 +90,8 @@ export function AllReviewsScreen() {
       setErrorMessage('');
 
       try {
-        const nextReviews = await getTrailReviews(trailId);
+        const rawReviews = await getTrailReviews(trailId);
+        const nextReviews = await hydrateReviewProfiles(rawReviews);
         if (!cancelled) {
           setReviews(nextReviews);
         }
@@ -105,16 +159,24 @@ export function AllReviewsScreen() {
         ) : errorMessage ? (
           <Text style={[styles.errorText, isArabic ? rtlText : ltrText]}>{errorMessage}</Text>
         ) : reviews.length ? (
-          reviews.map((review, index) => (
+          reviews.map((review, index) => {
+            const reviewerName = getReviewerName(review, isArabic);
+            const reviewerAvatar = getReviewerAvatar(review);
+
+            return (
             <AnimatedBlock key={review.id} delay={120 + index * 35}>
               <View style={styles.reviewCard}>
                 <View style={[styles.reviewHeader, isArabic ? rtlRow : ltrRow]}>
                   <View style={[styles.reviewerRow, isArabic ? rtlRow : ltrRow]}>
                     <View style={styles.avatar}>
-                      <Ionicons name="person" size={15} color="#630E13" />
+                      {reviewerAvatar ? (
+                        <Image source={{ uri: reviewerAvatar }} style={styles.avatarImage} />
+                      ) : (
+                        <Ionicons name="person" size={15} color="#630E13" />
+                      )}
                     </View>
                     <View>
-                      <Text style={[styles.reviewerName, isArabic ? rtlText : ltrText]}>{isArabic ? 'متنزه' : 'Hiker'}</Text>
+                      <Text style={[styles.reviewerName, isArabic ? rtlText : ltrText]}>{reviewerName}</Text>
                       <Text style={[styles.reviewDate, isArabic ? rtlText : ltrText]}>
                         {review.created_at ? new Date(review.created_at).toLocaleDateString() : ''}
                       </Text>
@@ -130,7 +192,8 @@ export function AllReviewsScreen() {
                 </View>
               </View>
             </AnimatedBlock>
-          ))
+            );
+          })
         ) : (
           <Text style={[styles.emptyText, isArabic ? rtlText : ltrText]}>
             {isArabic ? 'لا توجد مراجعات بعد لهذا المسار.' : 'No reviews for this trail yet.'}
@@ -238,6 +301,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#F7EBE8',
+    overflow: 'hidden',
+  },
+  avatarImage: {
+    width: '100%',
+    height: '100%',
   },
   reviewerName: {
     color: '#2C2418',
@@ -269,3 +337,4 @@ const styles = StyleSheet.create({
     fontSize: 13,
   },
 });
+

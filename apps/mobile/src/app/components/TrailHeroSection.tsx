@@ -10,6 +10,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { ScrollView } from 'react-native-gesture-handler';
 import { LinearGradient } from 'expo-linear-gradient';
+import Svg, { Path, Rect } from 'react-native-svg';
 
 const { width } = Dimensions.get('window');
 const HERO_WIDTH = width ;
@@ -21,8 +22,10 @@ interface TrailHeroSectionProps {
   onBackPress: () => void;
   onSavePress: () => void;
   onGalleryPress: () => void;
+  onMapPress: () => void;
   isSaved: boolean;
   isSaving: boolean;
+  miniRoutePath: string;
 }
 
 export function TrailHeroSection({
@@ -32,39 +35,47 @@ export function TrailHeroSection({
   onBackPress,
   onSavePress,
   onGalleryPress,
+  onMapPress,
   isSaved,
   isSaving,
+  miniRoutePath,
 }: TrailHeroSectionProps) {
   const [loadedImages, setLoadedImages] = useState<Record<number, boolean>>({});
 
   return (
     <View style={styles.container}>
       <View style={styles.hero}>
-        <ScrollView
-          horizontal
-          pagingEnabled
-          showsHorizontalScrollIndicator={false}
-          decelerationRate="fast"
-          snapToInterval={HERO_WIDTH}
-          bounces={false}
-          onMomentumScrollEnd={onImageScroll}
-          scrollEnabled={trailImages.length > 1}
-        >
-          {trailImages.map((uri, index) => (
-            <View key={`${uri}-${index}`} style={{ width: HERO_WIDTH }}>
-              {!loadedImages[index] && <View style={styles.imagePlaceholder} />}
+        {trailImages.length ? (
+          <ScrollView
+            horizontal
+            pagingEnabled
+            showsHorizontalScrollIndicator={false}
+            decelerationRate="fast"
+            snapToInterval={HERO_WIDTH}
+            bounces={false}
+            onMomentumScrollEnd={onImageScroll}
+            scrollEnabled={trailImages.length > 1}
+          >
+            {trailImages.map((uri, index) => (
+              <View key={`${uri}-${index}`} style={{ width: HERO_WIDTH }}>
+                {!loadedImages[index] && <View style={styles.imagePlaceholder} />}
 
-              <Image
-                source={{ uri }}
-                resizeMode="cover"
-                onLoad={() =>
-                  setLoadedImages((prev) => ({ ...prev, [index]: true }))
-                }
-                style={styles.image}
-              />
-            </View>
-          ))}
-        </ScrollView>
+                <Image
+                  source={{ uri }}
+                  resizeMode="cover"
+                  onLoad={() =>
+                    setLoadedImages((prev) => ({ ...prev, [index]: true }))
+                  }
+                  style={styles.image}
+                />
+              </View>
+            ))}
+          </ScrollView>
+        ) : (
+          <Pressable style={styles.mapHero} onPress={onMapPress}>
+            <RoutePreviewHero path={miniRoutePath} />
+          </Pressable>
+        )}
 
         {/* Gradient Overlay */}
         <LinearGradient
@@ -93,19 +104,37 @@ export function TrailHeroSection({
         </View>
 
         {/* Pagination */}
-        <View style={styles.pagination}>
-          {trailImages.map((_, index) => (
-            <View
-              key={index}
-              style={[
-                styles.dot,
-                index === activeImageIndex && styles.dotActive,
-              ]}
-            />
-          ))}
-        </View>
+        {trailImages.length > 1 ? (
+          <View style={styles.pagination}>
+            {trailImages.map((_, index) => (
+              <View
+                key={index}
+                style={[
+                  styles.dot,
+                  index === activeImageIndex && styles.dotActive,
+                ]}
+              />
+            ))}
+          </View>
+        ) : null}
       </View>
     </View>
+  );
+}
+
+function RoutePreviewHero({ path }: { path: string }) {
+  return (
+    <Svg width="100%" height="100%" viewBox="0 0 172 120" preserveAspectRatio="xMidYMid slice">
+      <Rect width="172" height="120" rx="0" fill="#F7F1E4" />
+      <Path d="M 0 0 C 34 16, 42 54, 26 120 L 0 120 Z" fill="#A9D5EB" />
+      <Path d="M 48 8 L 58 112" stroke="rgba(60,53,40,0.15)" strokeWidth={4} strokeLinecap="round" />
+      <Path d="M 78 6 L 88 114" stroke="rgba(60,53,40,0.12)" strokeWidth={3.5} strokeLinecap="round" />
+      <Path d="M 116 10 L 126 108" stroke="rgba(60,53,40,0.12)" strokeWidth={3.5} strokeLinecap="round" />
+      <Path d="M 26 30 C 58 18, 104 20, 150 30" stroke="rgba(60,53,40,0.12)" strokeWidth={4} strokeLinecap="round" fill="none" />
+      <Path d="M 24 60 C 66 48, 96 66, 158 52" stroke="rgba(60,53,40,0.1)" strokeWidth={3.5} strokeLinecap="round" fill="none" />
+      <Path d="M 22 90 C 70 78, 104 96, 160 84" stroke="rgba(60,53,40,0.12)" strokeWidth={3.5} strokeLinecap="round" fill="none" />
+      <Path d={path} stroke="#34B94A" strokeWidth={7} strokeLinecap="round" strokeLinejoin="round" fill="none" />
+    </Svg>
   );
 }
 
@@ -174,6 +203,12 @@ const styles = StyleSheet.create({
   imagePlaceholder: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: '#E5DED2',
+  },
+
+  mapHero: {
+    width: '100%',
+    height: '100%',
+    backgroundColor: '#F7F1E4',
   },
 
   overlay: {

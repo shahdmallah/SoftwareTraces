@@ -75,6 +75,8 @@ export type FeedItem =
       noteAr: string;
       peopleJoined: number;
       spotsLeft: number;
+      visibility?: 'public' | 'private';
+      invitedNames?: string[];
     };
 
 export const friends: Friend[] = [

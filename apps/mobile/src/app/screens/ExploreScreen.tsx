@@ -19,6 +19,7 @@ import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
 import { ExploreTrailCard } from '../components/ExploreTrailCard';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
+import { getTrailPhotos } from '../api/mediaApi';
 import { RootStackParamList } from '../navigation/types';
 import { theme } from '../theme';
 import { ltrRow, ltrText, rtlRow, rtlText } from '../utils/direction';
@@ -114,6 +115,7 @@ export function ExploreScreen() {
   const [showSortMenu, setShowSortMenu] = useState(false);
   const [sortBy, setSortBy] = useState<SortOptionId>('bestMatch');
   const [fetchedTrails, setFetchedTrails] = useState<Trail[]>([]);
+  const [trailMediaImages, setTrailMediaImages] = useState<Record<string, string[]>>({});
   const [savedTrailIds, setSavedTrailIds] = useState<Set<string>>(new Set());
   const [savingTrailIds, setSavingTrailIds] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -157,6 +159,42 @@ export function ExploreScreen() {
     const timeoutId = setTimeout(() => { void loadTrails(); }, 250);
     return () => { cancelled = true; clearTimeout(timeoutId); };
   }, [difficulty, length, refreshKey, search]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadTrailMediaImages = async () => {
+      if (!fetchedTrails.length) {
+        setTrailMediaImages({});
+        return;
+      }
+
+      const mediaEntries = await Promise.all(
+        fetchedTrails.map(async (trail) => {
+          try {
+            const photos = await getTrailPhotos(trail.id);
+            const urls = photos
+              .map((photo) => photo.url)
+              .filter((url, index, collection): url is string => Boolean(url) && collection.indexOf(url) === index);
+
+            return [trail.id, urls] as const;
+          } catch {
+            return [trail.id, []] as const;
+          }
+        }),
+      );
+
+      if (!cancelled) {
+        setTrailMediaImages(Object.fromEntries(mediaEntries));
+      }
+    };
+
+    void loadTrailMediaImages();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchedTrails]);
 
   useEffect(() => {
     let cancelled = false;
@@ -269,6 +307,7 @@ export function ExploreScreen() {
         isArabic={isArabic}
         isSaved={savedTrailIds.has(item.id)}
         isSaving={savingTrailIds.includes(item.id)}
+        mediaImages={trailMediaImages[item.id]}
         t={t}
         onOpen={() => navigation.navigate('TrailDetail', { trailId: item.id })}
         onOpenMap={() => handleOpenMap(item.id)}

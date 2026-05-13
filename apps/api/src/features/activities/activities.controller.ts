@@ -332,7 +332,7 @@ export async function shareActivity(req: Request, res: Response): Promise<void> 
 }
 
 export async function getUserActivities(req: Request, res: Response): Promise<void> {
-  const result = await pool.query("SELECT * FROM activities WHERE user_id = $1 ORDER BY start_time DESC", [req.params.userId]);
+  const result = await pool.query("SELECT * FROM activities WHERE user_id = $1 ORDER BY started_at DESC", [req.params.userId]);
   res.json({ data: result.rows });
 }
 

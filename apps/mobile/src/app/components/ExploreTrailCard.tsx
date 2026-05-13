@@ -3,10 +3,11 @@ import React from 'react';
 import { ActivityIndicator, Animated, Image, LayoutChangeEvent, Pressable, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { ScrollView as GestureScrollView } from 'react-native-gesture-handler';
-import Svg, { Path, Rect } from 'react-native-svg';
+import Svg, { Circle, Defs, LinearGradient, Path, Rect, Stop } from 'react-native-svg';
 
 import type { Trail } from '../api/trailsApi';
 import type { TranslationKey } from '../contexts/LanguageContext';
+import { buildMapImageUri } from '../config/mapConfig';
 import { theme } from '../theme';
 import { ltrRow, ltrText, rtlRow, rtlText } from '../utils/direction';
 import { exploreTrailCardStyles as styles } from './ExploreTrailCard.styles';
@@ -36,45 +37,21 @@ type ExploreTrailCardProps = {
   isArabic: boolean;
   isSaved: boolean;
   isSaving: boolean;
+  mediaImages?: string[];
   t: (key: TranslationKey) => string;
   onOpen: () => void;
   onOpenMap: () => void;
   onToggleSaved: () => void;
 };
 
-const galleryFallbackImages = [
-  'https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&w=1200',
-  'https://images.unsplash.com/photo-1506744038136-46273834b3fb?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&w=1200',
-  'https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&w=1200',
-];
-
-function buildGalleryImages(images: string[], fallbackImage: string) {
-  const mergedImages = [fallbackImage, ...images].filter(
+function buildGalleryImages(mediaImages: string[] = []) {
+  return mediaImages.filter(
     (imageUri, index, collection): imageUri is string =>
       Boolean(imageUri) && collection.indexOf(imageUri) === index,
   );
-
-  const nextImages = mergedImages.length ? [...mergedImages] : [galleryFallbackImages[0]];
-
-  // Pad with mock images so horizontal scrolling can still be tested with sparse trail data.
-  for (const mockImage of galleryFallbackImages) {
-    if (nextImages.length >= 3) {
-      break;
-    }
-
-    if (!nextImages.includes(mockImage)) {
-      nextImages.push(mockImage);
-    }
-  }
-
-  while (nextImages.length < 3) {
-    nextImages.push(galleryFallbackImages[nextImages.length % galleryFallbackImages.length]);
-  }
-
-  return nextImages;
 }
 
-function buildSmoothPath(points: Array<{ x: number; y: number }>) {
+function buildLinePath(points: Array<{ x: number; y: number }>) {
   if (!points.length) {
     return '';
   }
@@ -84,21 +61,26 @@ function buildSmoothPath(points: Array<{ x: number; y: number }>) {
     return `M ${point.x} ${point.y}`;
   }
 
-  return points.reduce((path, point, index, collection) => {
-    if (index === 0) {
-      return `M ${point.x} ${point.y}`;
-    }
-
-    const previous = collection[index - 1];
-    const controlX = (previous.x + point.x) / 2;
-
-    return `${path} C ${controlX} ${previous.y}, ${controlX} ${point.y}, ${point.x} ${point.y}`;
-  }, '');
+  return points.reduce((path, point, index) =>
+    index === 0 ? `M ${point.x} ${point.y}` : `${path} L ${point.x} ${point.y}`,
+    ''
+  );
 }
 
-function buildMiniRoutePreviewPath(coordinates?: [number, number][]) {
+function buildRoutePreviewPoints(coordinates?: [number, number][]) {
   if (!coordinates || coordinates.length < 2) {
-    return 'M 22 76 C 30 62, 24 46, 36 32 C 47 20, 62 24, 66 40 C 70 55, 58 66, 72 78';
+    return [
+      { x: 18, y: 96 },
+      { x: 40, y: 78 },
+      { x: 54, y: 40 },
+      { x: 74, y: 30 },
+      { x: 92, y: 22 },
+      { x: 110, y: 42 },
+      { x: 118, y: 58 },
+      { x: 126, y: 76 },
+      { x: 142, y: 88 },
+      { x: 154, y: 94 },
+    ];
   }
 
   const longitudes = coordinates.map((point) => point[0]);
@@ -109,13 +91,73 @@ function buildMiniRoutePreviewPath(coordinates?: [number, number][]) {
   const maxLat = Math.max(...latitudes);
   const lngRange = Math.max(0.0001, maxLng - minLng);
   const latRange = Math.max(0.0001, maxLat - minLat);
+  const scale = Math.min(140 / lngRange, 88 / latRange);
 
-  const previewPoints = coordinates.map(([lng, lat]) => ({
-    x: 16 + ((lng - minLng) / lngRange) * 64,
-    y: 16 + (1 - (lat - minLat) / latRange) * 64,
+  return coordinates.map(([lng, lat]) => ({
+    x: 16 + (lng - minLng) * scale,
+    y: 16 + (maxLat - lat) * scale,
   }));
+}
 
-  return buildSmoothPath(previewPoints);
+function RoutePreview({ path, points, mapImageUri }: { path: string; points: Array<{ x: number; y: number }>; mapImageUri: string }) {
+  const startPoint = points[0] ?? { x: 28, y: 92 };
+  const endPoint = points[points.length - 1] ?? { x: 140, y: 34 };
+
+  return (
+    <View style={styles.routePreview}>
+      {mapImageUri ? <Image source={{ uri: mapImageUri }} style={styles.routePreviewImage} resizeMode="cover" /> : null}
+      <Svg width="100%" height="100%" viewBox="0 0 170 120" style={styles.routePreviewOverlay}>
+        <Defs>
+          <LinearGradient id="exploreMapTerrain" x1="0" y1="0" x2="1" y2="1">
+            <Stop offset="0" stopColor="#F4EFE2" />
+            <Stop offset="0.52" stopColor="#ECE3D1" />
+            <Stop offset="1" stopColor="#E0D5BF" />
+          </LinearGradient>
+          <LinearGradient id="exploreMapWater" x1="0" y1="0" x2="1" y2="1">
+            <Stop offset="0" stopColor="#B8DCEC" />
+            <Stop offset="1" stopColor="#8EC2DD" />
+          </LinearGradient>
+        </Defs>
+
+        {!mapImageUri ? (
+          <>
+            <Rect width="170" height="170" fill="url(#exploreMapTerrain)" />
+            <Path
+              d="M -8 102 C 18 84, 58 74, 95 82 C 122 88, 148 104, 178 101 L 178 130 L -8 130 Z"
+              fill="rgba(114,156,106,0.22)"
+            />
+            <Path
+              d="M 108 -8 C 92 12, 89 28, 102 52 C 114 75, 138 97, 182 108 L 182 -8 Z"
+              fill="rgba(198,186,161,0.36)"
+            />
+            <Path
+              d="M -8 28 C 24 18, 56 20, 89 30 C 118 38, 144 35, 178 18 L 178 48 C 143 57, 118 60, 90 52 C 59 44, 28 42, -8 52 Z"
+              fill="url(#exploreMapWater)"
+              opacity={0.95}
+            />
+            <Path d="M -6 86 C 28 70, 56 68, 92 76 C 120 82, 147 76, 178 58" fill="none" stroke="#FAF8F2" strokeWidth={12} strokeLinecap="round" />
+            <Path d="M -6 86 C 28 70, 56 68, 92 76 C 120 82, 147 76, 178 58" fill="none" stroke="#D5C7AE" strokeWidth={4.5} strokeLinecap="round" />
+            <Path d="M 124 -8 C 112 14, 106 34, 106 60 C 108 84, 118 103, 140 128" fill="none" stroke="#FAF8F2" strokeWidth={10} strokeLinecap="round" />
+            <Path d="M 124 -8 C 112 14, 106 34, 106 60 C 108 84, 118 103, 140 128" fill="none" stroke="#D5C7AE" strokeWidth={4} strokeLinecap="round" />
+            <Path d="M 18 16 C 42 26, 74 20, 104 28 C 128 34, 146 52, 160 72" fill="none" stroke="rgba(110,101,79,0.16)" strokeWidth={1.5} strokeLinecap="round" />
+            <Path d="M 8 44 C 34 50, 62 48, 94 56 C 120 63, 142 80, 164 100" fill="none" stroke="rgba(110,101,79,0.12)" strokeWidth={1.5} strokeLinecap="round" />
+            <Path d="M 6 64 C 30 58, 54 60, 83 72 C 112 84, 132 90, 160 88" fill="none" stroke="rgba(110,101,79,0.10)" strokeWidth={1.2} strokeLinecap="round" />
+            <Path d="M 36 10 C 52 28, 48 44, 62 60" fill="none" stroke="rgba(110,101,79,0.18)" strokeWidth={2} strokeDasharray="5 6" strokeLinecap="round" />
+            <Rect x={18} y={72} width={16} height={10} rx={3} fill="rgba(255,255,255,0.74)" />
+            <Rect x={136} y={66} width={14} height={9} rx={3} fill="rgba(255,255,255,0.72)" />
+            <Rect x={118} y={86} width={20} height={10} rx={3} fill="rgba(255,255,255,0.72)" />
+          </>
+        ) : null}
+
+        <Path d={path} fill="none" stroke="rgba(255,255,255,0.96)" strokeWidth={6} strokeLinecap="round" strokeLinejoin="round" />
+        <Path d={path} fill="none" stroke="#2FAF62" strokeWidth={3} strokeLinecap="round" strokeLinejoin="round" />
+        <Circle cx={startPoint.x} cy={startPoint.y} r={5} fill="#FFFFFF" stroke="#1C1D18" strokeWidth={1.5} />
+        <Circle cx={startPoint.x} cy={startPoint.y} r={2.5} fill="#2FAF62" />
+        <Circle cx={endPoint.x} cy={endPoint.y} r={5} fill="#FFFFFF" stroke="#1C1D18" strokeWidth={1.5} />
+        <Circle cx={endPoint.x} cy={endPoint.y} r={2.5} fill="#7A1E1E" />
+      </Svg>
+    </View>
+  );
 }
 
 function buildTrailLabels(item: Trail, isArabic: boolean) {
@@ -134,14 +176,20 @@ export function ExploreTrailCard({
   isArabic,
   isSaved,
   isSaving,
+  mediaImages = [],
   t,
   onOpen,
   onOpenMap,
   onToggleSaved,
 }: ExploreTrailCardProps) {
   const scale = React.useRef(new Animated.Value(1)).current;
-  const trailImages = React.useMemo(() => buildGalleryImages(item.images, item.image), [item.image, item.images]);
-  const miniRoutePath = React.useMemo(() => buildMiniRoutePreviewPath(item.routeCoordinates), [item.routeCoordinates]);
+  const trailImages = React.useMemo(() => buildGalleryImages(mediaImages), [mediaImages]);
+  const routePreviewPoints = React.useMemo(() => buildRoutePreviewPoints(item.routeCoordinates), [item.routeCoordinates]);
+  const miniRoutePath = React.useMemo(() => buildLinePath(routePreviewPoints), [routePreviewPoints]);
+  const mapImageUri = React.useMemo(() => {
+    const [lat, lng] = item.coordinates;
+    return buildMapImageUri(lng, lat);
+  }, [item.coordinates]);
   const [cardImageWidth, setCardImageWidth] = React.useState(0);
   const [activeImageIndex, setActiveImageIndex] = React.useState(0);
   const locale = isArabic ? 'ar-PS' : 'en-US';
@@ -165,6 +213,10 @@ export function ExploreTrailCard({
   const ratingLabel = `${decimalFormatter.format(item.rating)} (${integerFormatter.format(item.reviews)})`;
   const distanceLabel = `${decimalFormatter.format(item.distance)} ${t('unitKm')}`;
   const trailLabels = React.useMemo(() => buildTrailLabels(item, isArabic), [isArabic, item]);
+
+  React.useEffect(() => {
+    setActiveImageIndex(0);
+  }, [trailImages]);
 
   const onPressIn = () =>
     Animated.spring(scale, { toValue: 0.98, useNativeDriver: true, speed: 30, bounciness: 6 }).start();
@@ -190,27 +242,39 @@ export function ExploreTrailCard({
     <Animated.View style={{ transform: [{ scale }] }}>
       <View style={styles.card}>
         <View style={styles.cardImageWrapper} onLayout={onImageLayout}>
-          <GestureScrollView
-            horizontal
-            nestedScrollEnabled
-            directionalLockEnabled
-            pagingEnabled
-            bounces={false}
-            decelerationRate="fast"
-            scrollEnabled={trailImages.length > 1}
-            showsHorizontalScrollIndicator={false}
-            onMomentumScrollEnd={(event) => {
-              handleImageScrollEnd(event.nativeEvent.contentOffset.x);
-            }}
-          >
-            {trailImages.map((imageUri, index) => (
-              <Image
-                key={`${item.id}-image-${index}-${imageUri}`}
-                source={{ uri: imageUri }}
-                style={[styles.cardImage, cardImageWidth ? { width: cardImageWidth } : null]}
-              />
-            ))}
-          </GestureScrollView>
+          {trailImages.length ? (
+            <GestureScrollView
+              horizontal
+              nestedScrollEnabled
+              directionalLockEnabled
+              pagingEnabled
+              bounces={false}
+              decelerationRate="fast"
+              scrollEnabled={trailImages.length > 1}
+              showsHorizontalScrollIndicator={false}
+              onMomentumScrollEnd={(event) => {
+                handleImageScrollEnd(event.nativeEvent.contentOffset.x);
+              }}
+            >
+              {trailImages.map((imageUri, index) => (
+                <Image
+                  key={`${item.id}-image-${index}-${imageUri}`}
+                  source={{ uri: imageUri }}
+                  style={[styles.cardImage, cardImageWidth ? { width: cardImageWidth } : null]}
+                />
+              ))}
+            </GestureScrollView>
+          ) : (
+            <Pressable
+              style={({ pressed }) => [styles.mapHeroPreview, pressed && styles.mapPreviewCardPressed]}
+              onPress={(e) => {
+                e.stopPropagation();
+                onOpenMap();
+              }}
+            >
+              <RoutePreview path={miniRoutePath} points={routePreviewPoints} mapImageUri={mapImageUri} />
+            </Pressable>
+          )}
 
           <Pressable
             style={({ pressed }) => [
@@ -231,62 +295,32 @@ export function ExploreTrailCard({
             )}
           </Pressable>
 
-          <Pressable
-            style={({ pressed }) => [
-              styles.mapPreviewCard,
-              isArabic ? styles.mapPreviewCardRtl : styles.mapPreviewCardLtr,
-              pressed && styles.mapPreviewCardPressed,
-            ]}
-            onPress={(e) => {
-              e.stopPropagation();
-              onOpenMap();
-            }}
-          >
-            <Svg width="100%" height="100%" viewBox="0 0 96 96">
-              <Rect width="96" height="96" rx="24" fill="#F7F1E4" />
-              <Path d="M 0 0 C 18 10, 26 44, 18 96 L 0 96 Z" fill="#A9D5EB" />
-              <Path d="M 34 6 L 42 94" stroke="rgba(60,53,40,0.15)" strokeWidth={3} strokeLinecap="round" />
-              <Path d="M 50 4 L 60 92" stroke="rgba(60,53,40,0.12)" strokeWidth={2.5} strokeLinecap="round" />
-              <Path
-                d="M 18 24 C 34 14, 60 16, 84 22"
-                stroke="rgba(60,53,40,0.12)"
-                strokeWidth={3}
-                strokeLinecap="round"
-                fill="none"
-              />
-              <Path
-                d="M 16 48 C 38 40, 56 54, 88 44"
-                stroke="rgba(60,53,40,0.1)"
-                strokeWidth={2.5}
-                strokeLinecap="round"
-                fill="none"
-              />
-              <Path
-                d="M 14 72 C 40 66, 58 78, 88 70"
-                stroke="rgba(60,53,40,0.12)"
-                strokeWidth={2.5}
-                strokeLinecap="round"
-                fill="none"
-              />
-              <Path
-                d={miniRoutePath}
-                stroke="#34B94A"
-                strokeWidth={5}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                fill="none"
-              />
-            </Svg>
-          </Pressable>
+          {trailImages.length ? (
+            <Pressable
+              style={({ pressed }) => [
+                styles.mapPreviewCard,
+                isArabic ? styles.mapPreviewCardRtl : styles.mapPreviewCardLtr,
+                pressed && styles.mapPreviewCardPressed,
+              ]}
+              onPress={(e) => {
+                e.stopPropagation();
+                onOpenMap();
+              }}
+            >
+              <RoutePreview path={miniRoutePath} points={routePreviewPoints} mapImageUri={mapImageUri} />
+            </Pressable>
+          ) : null}
 
-          <View style={styles.paginationDots}>
-            {trailImages.map((imageUri, index) => (
-              <View
-                key={`${imageUri}-${index}`}
-                style={[styles.paginationDot, index === activeImageIndex && styles.paginationDotActive]}
-              />
-            ))}
-          </View>
+          {trailImages.length > 1 ? (
+            <View style={styles.paginationDots}>
+              {trailImages.map((imageUri, index) => (
+                <View
+                  key={`${imageUri}-${index}`}
+                  style={[styles.paginationDot, index === activeImageIndex && styles.paginationDotActive]}
+                />
+              ))}
+            </View>
+          ) : null}
         </View>
 
         <Pressable onPress={onOpen} onPressIn={onPressIn} onPressOut={onPressOut} style={styles.cardInfo}>
