@@ -2,7 +2,7 @@ import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
-import { MotiView } from 'moti';
+import { AnimatedEntrance } from '../AnimatedUI';
 import { completionRadii, completionShadow, glass } from '../../features/trailCompletion/theme';
 import { ltrText, rtlText } from '../../utils/direction';
 
@@ -12,24 +12,34 @@ type Props = {
   stats: Stat[];
   achievementHints?: string[];
   isArabic: boolean;
+  isOwner?: boolean;
+  ownerName?: string;
   delay?: number;
 };
 
-export function TrailStatsCard({ stats, achievementHints, isArabic, delay = 160 }: Props) {
+export function TrailStatsCard({ stats, achievementHints, isArabic, isOwner = true, ownerName, delay = 160 }: Props) {
+  const displayName = ownerName?.trim() || 'Trail friend';
+  const title = isOwner
+    ? (isArabic ? 'ملخص رحلتك' : 'Your hike at a glance')
+    : (isArabic ? `ملخص رحلة ${displayName}` : `${displayName}'s hike at a glance`);
+  const subtitle = isOwner
+    ? (isArabic ? 'أرقام من هذه الجولة' : 'Real stats from this outing')
+    : (isArabic ? 'أرقام من الجولة المنشورة' : 'Stats from their published outing');
+
   return (
-    <MotiView
-      from={{ opacity: 0, translateY: 20 }}
-      animate={{ opacity: 1, translateY: 0 }}
-      transition={{ type: 'timing', duration: 480, delay }}
+    <AnimatedEntrance
+      fromY={20}
+      duration={480}
+      delay={delay}
       style={[styles.card, completionShadow.card]}
     >
       <View style={styles.glassHeader}>
         <BlurView intensity={28} tint="default" style={StyleSheet.absoluteFill} />
         <Text style={[styles.cardTitle, isArabic ? rtlText : ltrText]}>
-          {isArabic ? 'ملخص رحلتك' : 'Your hike at a glance'}
+          {title}
         </Text>
         <Text style={[styles.cardSubtitle, isArabic ? rtlText : ltrText]}>
-          {isArabic ? 'أرقام من هذه الجولة' : 'Real stats from this outing'}
+          {subtitle}
         </Text>
       </View>
 
@@ -61,7 +71,7 @@ export function TrailStatsCard({ stats, achievementHints, isArabic, delay = 160 
           ))}
         </View>
       ) : null}
-    </MotiView>
+    </AnimatedEntrance>
   );
 }
 

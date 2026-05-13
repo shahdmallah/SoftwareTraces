@@ -1,7 +1,7 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { MotiView } from 'moti';
+import { AnimatedEntrance } from '../AnimatedUI';
 import { completionRadii, completionShadow } from '../../features/trailCompletion/theme';
 import { ltrText, rtlText } from '../../utils/direction';
 
@@ -9,34 +9,39 @@ type Props = {
   rating: number;
   reviewText: string;
   isArabic: boolean;
+  isOwner?: boolean;
+  ownerName?: string;
   delay?: number;
 };
 
-export function ReviewSummary({ rating, reviewText, isArabic, delay = 260 }: Props) {
+export function ReviewSummary({ rating, reviewText, isArabic, isOwner = true, ownerName, delay = 260 }: Props) {
+  const displayName = ownerName?.trim() || 'Trail friend';
   const body =
     reviewText.trim() ||
-    (isArabic ? 'أكملت هذا المسار وتركت انطباعاً سريعاً بعد الرحلة.' : 'You wrapped this trail and left a quick note from the hike.');
+    (isOwner
+      ? (isArabic ? 'أكملت هذا المسار وتركت انطباعاً سريعاً بعد الرحلة.' : 'You wrapped this trail and left a quick note from the hike.')
+      : (isArabic ? 'لم يكتب صاحب الرحلة ملاحظة لهذه الجولة.' : `${displayName} did not add a note for this outing.`));
 
   return (
-    <MotiView
-      from={{ opacity: 0, translateY: 14 }}
-      animate={{ opacity: 1, translateY: 0 }}
-      transition={{ type: 'timing', duration: 440, delay }}
+    <AnimatedEntrance
+      fromY={14}
+      duration={440}
+      delay={delay}
       style={[styles.card, completionShadow.card]}
     >
       <Text style={[styles.sectionEyebrow, isArabic ? rtlText : ltrText]}>
-        {isArabic ? 'انطباعك' : 'Your words'}
+        {isOwner ? (isArabic ? 'انطباعك' : 'Your words') : (isArabic ? 'انطباع صاحب الرحلة' : `${displayName}'s words`)}
       </Text>
       <View style={styles.stars}>
         {[1, 2, 3, 4, 5].map((v) => (
           <Ionicons key={v} name={v <= rating ? 'star' : 'star-outline'} size={22} color="#D4A843" />
         ))}
         <Text style={[styles.ratingCaption, isArabic ? rtlText : ltrText]}>
-          {rating}/5 · {isArabic ? 'تقييمك' : 'Your rating'}
+          {rating}/5 · {isOwner ? (isArabic ? 'تقييمك' : 'Your rating') : (isArabic ? 'تقييمه' : 'Their rating')}
         </Text>
       </View>
       <Text style={[styles.quote, isArabic ? rtlText : ltrText]}>{body}</Text>
-    </MotiView>
+    </AnimatedEntrance>
   );
 }
 

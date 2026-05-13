@@ -1,7 +1,7 @@
 import React, { useMemo } from 'react';
 import { Dimensions, ImageBackground, StyleSheet, Text, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { MotiView } from 'moti';
+import { AnimatedEntrance } from '../AnimatedUI';
 import { completionRadii, completionShadow } from '../../features/trailCompletion/theme';
 import { formatCompletionDuration } from '../../features/trailCompletion/formatters';
 import { ltrText, rtlText } from '../../utils/direction';
@@ -27,10 +27,9 @@ export function SharePreviewCard({ trailName, heroUri, rating, reviewExcerpt, du
   const dur = formatCompletionDuration(durationMs, isArabic);
 
   return (
-    <MotiView
-      from={{ opacity: 0, scale: 0.97 }}
-      animate={{ opacity: 1, scale: 1 }}
-      transition={{ type: 'spring', damping: 16, delay }}
+    <AnimatedEntrance
+      fromScale={0.97}
+      delay={delay}
       style={[styles.wrap, completionShadow.lifted]}
     >
       <Text style={[styles.eyebrow, isArabic ? rtlText : ltrText]}>
@@ -79,7 +78,7 @@ export function SharePreviewCard({ trailName, heroUri, rating, reviewExcerpt, du
           </View>
         )}
       </View>
-    </MotiView>
+    </AnimatedEntrance>
   );
 }
 

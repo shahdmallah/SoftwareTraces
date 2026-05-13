@@ -4,6 +4,10 @@
  */
 export type TrailCompletionDraft = {
   activityId?: string;
+  publisherId?: string;
+  publisherName?: string;
+  publisherHandle?: string;
+  publisherAvatar?: string;
   trailId: string;
   trailName: string;
   trailNameAr?: string;

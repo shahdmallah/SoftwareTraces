@@ -29,6 +29,7 @@ import { useCompletionWeather } from '../features/trailCompletion/useCompletionW
 import { addLocalFeedItem, saveJournalEntry } from '../data/localSocial';
 import { RootStackParamList } from '../navigation/types';
 import { ltrRow, ltrText, rtlRow, rtlText } from '../utils/direction';
+import { useAuth } from '../contexts/AuthContext';
 
 type ShareNavigationProp = StackNavigationProp<RootStackParamList>;
 type ShareRouteProp = RouteProp<RootStackParamList, 'ActivityShare'>;
@@ -59,13 +60,16 @@ export function ActivityShareScreen() {
   const route = useRoute<ShareRouteProp>();
   const insets = useSafeAreaInsets();
   const { language } = useLanguage();
+  const { user } = useAuth();
   const isArabic = language === 'ar';
   const draft = route.params?.draft;
+  const isOwnDraft = !draft?.publisherId || draft.publisherId === user?.id;
+  const publisherName = draft?.publisherName?.trim() || (isOwnDraft ? user?.full_name : '') || 'Trail friend';
   const { weather } = useCompletionWeather(draft, isArabic ? 'ar' : 'en');
   const [achievementHints, setAchievementHints] = useState<string[]>([]);
 
   useEffect(() => {
-    if (!draft) {
+    if (!draft || !isOwnDraft) {
       setAchievementHints([]);
       return;
     }
@@ -86,7 +90,7 @@ export function ActivityShareScreen() {
     return () => {
       cancelled = true;
     };
-  }, [draft]);
+  }, [draft, isOwnDraft]);
 
   const weatherLine = useMemo(() => {
     if (!weather) return null;
@@ -153,11 +157,22 @@ export function ActivityShareScreen() {
             region={region}
             completedDateLabel={completedLabel}
             weatherLine={weatherLine}
+            statusLabel={
+              isOwnDraft
+                ? undefined
+                : (isArabic ? `أكمل ${publisherName} هذا المسار` : `${publisherName} completed this trail`)
+            }
             isArabic={isArabic}
             onBack={() => navigation.goBack()}
           />
 
-          <TrailStatsCard stats={stats} achievementHints={achievementHints} isArabic={isArabic} />
+          <TrailStatsCard
+            stats={stats}
+            achievementHints={isOwnDraft ? achievementHints : []}
+            isArabic={isArabic}
+            isOwner={isOwnDraft}
+            ownerName={publisherName}
+          />
 
           {draft.routePointCount > 0 ? (
             <JourneyTimeline
@@ -167,23 +182,38 @@ export function ActivityShareScreen() {
             />
           ) : null}
 
-          <ReviewSummary rating={draft.rating} reviewText={draft.review} isArabic={isArabic} />
-
-          <PhotoGalleryStrip photoUris={draft.photoUris} isArabic={isArabic} />
-
-          <SharePreviewCard
-            trailName={isArabic ? draft.trailNameAr ?? draft.trailName : draft.trailName}
-            heroUri={heroPhoto || draft.trailImage || ''}
+          <ReviewSummary
             rating={draft.rating}
-            reviewExcerpt={draft.review}
-            durationMs={draft.durationMs}
+            reviewText={draft.review}
             isArabic={isArabic}
+            isOwner={isOwnDraft}
+            ownerName={publisherName}
           />
+
+          <PhotoGalleryStrip
+            photoUris={draft.photoUris}
+            isArabic={isArabic}
+            isOwner={isOwnDraft}
+            ownerName={publisherName}
+          />
+
+          {isOwnDraft ? (
+            <SharePreviewCard
+              trailName={isArabic ? draft.trailNameAr ?? draft.trailName : draft.trailName}
+              heroUri={heroPhoto || draft.trailImage || ''}
+              rating={draft.rating}
+              reviewExcerpt={draft.review}
+              durationMs={draft.durationMs}
+              isArabic={isArabic}
+            />
+          ) : null}
 
           <ShareActions
             draft={draft}
             isArabic={isArabic}
             navigation={navigation}
+            isOwner={isOwnDraft}
+            ownerName={publisherName}
             onSaveJournal={handleJournalSave}
           />
 

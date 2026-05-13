@@ -1,12 +1,13 @@
 // Updated to request device location, load nearby trails from the backend, and render full trail previews with a neon green route line.
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, Pressable, ScrollView, StyleSheet, Dimensions } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { View, Text, Pressable, ScrollView, StyleSheet, Dimensions, Modal, FlatList, Image, Alert } from 'react-native';
 import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import * as Location from 'expo-location';
 import type { Feature, FeatureCollection, LineString } from 'geojson';
 import { AppTabParamList, RootStackParamList } from '../navigation/types';
 import { getNearbyTrails, getTrailById, type Trail } from '../api/trailsApi';
+import { getMapBubblePhotos, getMapBubbles, type MapBubble, type MapBubblePhoto } from '../api/mapApi';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useLanguage } from '../contexts/LanguageContext';
@@ -17,6 +18,12 @@ import { ltrRow, ltrText, rtlRow, rtlText } from '../utils/direction';
 type MapScreenNavigationProp = StackNavigationProp<RootStackParamList, 'TrailDetail'>;
 type MapScreenRouteProp = RouteProp<AppTabParamList, 'Map'>;
 type MapboxModule = typeof import('@rnmapbox/maps');
+type BubbleFeatureProperties = {
+  bubbleId: string;
+  count: number;
+  countLabel: string;
+  mediaIds: string;
+};
 
 const { width, height } = Dimensions.get('window');
 const MAPBOX_ACCESS_TOKEN = process.env.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN ?? '';
@@ -69,12 +76,59 @@ function toLineFeature(coordinates: [number, number][] | null): FeatureCollectio
   };
 }
 
+function toBubbleFeatureCollection(bubbles: MapBubble[]): FeatureCollection {
+  return {
+    type: 'FeatureCollection',
+    features: bubbles
+      .filter((bubble) => Number.isFinite(bubble.lat) && Number.isFinite(bubble.lng) && bubble.media_ids.length > 0)
+      .map((bubble, index) => ({
+        type: 'Feature',
+        properties: {
+          bubbleId: bubble.id ?? `bubble-${index}`,
+          count: bubble.count,
+          countLabel: String(bubble.count),
+          mediaIds: JSON.stringify(bubble.media_ids),
+        } satisfies BubbleFeatureProperties,
+        geometry: {
+          type: 'Point',
+          coordinates: [bubble.lng, bubble.lat],
+        },
+      })),
+  };
+}
+
+function photoUri(photo: MapBubblePhoto) {
+  return photo.url?.trim() || photo.public_url?.trim() || '';
+}
+
+function photoUploader(photo: MapBubblePhoto) {
+  return photo.uploader_name?.trim() || photo.uploaded_by?.trim() || 'Trail friend';
+}
+
+function photoDate(photo: MapBubblePhoto) {
+  const rawDate = photo.captured_at || photo.created_at;
+  if (!rawDate) return '';
+
+  const timestamp = new Date(rawDate);
+  if (Number.isNaN(timestamp.getTime())) return '';
+
+  return timestamp.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
 export function MapScreen() {
   const navigation = useNavigation<MapScreenNavigationProp>();
   const route = useRoute<MapScreenRouteProp>();
+  const mapRef = useRef<any>(null);
   const cameraRef = useRef<any>(null);
+  const bubbleFetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [selectedTrail, setSelectedTrail] = useState<Trail | null>(null);
   const [nearbyTrails, setNearbyTrails] = useState<Trail[]>([]);
+  const [mapBubbles, setMapBubbles] = useState<MapBubble[]>([]);
+  const [bubblePhotos, setBubblePhotos] = useState<MapBubblePhoto[]>([]);
+  const [selectedPhoto, setSelectedPhoto] = useState<MapBubblePhoto | null>(null);
+  const [isBubbleGalleryVisible, setIsBubbleGalleryVisible] = useState(false);
+  const [isBubbleLoading, setIsBubbleLoading] = useState(false);
+  const [bubbleError, setBubbleError] = useState<string | null>(null);
   const [userLocation, setUserLocation] = useState<[number, number] | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [locationMessage, setLocationMessage] = useState<string | null>(null);
@@ -95,6 +149,94 @@ export function MapScreen() {
     return selectedTrail.routeCoordinates ?? getTrailRouteCoordinates(selectedTrail.id);
   }, [selectedTrail]);
   const selectedTrailLine = useMemo(() => toLineFeature(selectedTrailRoute), [selectedTrailRoute]);
+  const bubbleCollection = useMemo(() => toBubbleFeatureCollection(mapBubbles), [mapBubbles]);
+
+  const fetchBubblesForViewport = useCallback(async () => {
+    if (!mapRef.current?.getVisibleBounds || !mapRef.current?.getZoom) {
+      return;
+    }
+
+    try {
+      const [bounds, zoom] = await Promise.all([
+        mapRef.current.getVisibleBounds(),
+        mapRef.current.getZoom(),
+      ]);
+      const points = Array.isArray(bounds) ? bounds.flat() : [];
+
+      if (points.length < 4) {
+        return;
+      }
+
+      const lngs = [Number(points[0]), Number(points[2])];
+      const lats = [Number(points[1]), Number(points[3])];
+      const ne_lat = Math.max(...lats);
+      const sw_lat = Math.min(...lats);
+      const ne_lng = Math.max(...lngs);
+      const sw_lng = Math.min(...lngs);
+
+      if (![ne_lat, sw_lat, ne_lng, sw_lng].every(Number.isFinite)) {
+        return;
+      }
+
+      setBubbleError(null);
+      const bubbles = await getMapBubbles({
+        ne_lat,
+        ne_lng,
+        sw_lat,
+        sw_lng,
+        zoom: Number.isFinite(Number(zoom)) ? Number(zoom) : zoomLevel,
+      });
+      setMapBubbles(bubbles);
+    } catch (error) {
+      setMapBubbles([]);
+      setBubbleError(error instanceof Error ? error.message : 'Unable to load photo bubbles.');
+    }
+  }, [zoomLevel]);
+
+  const scheduleBubbleFetch = useCallback(() => {
+    if (!canRenderMapbox) {
+      return;
+    }
+
+    if (bubbleFetchTimerRef.current) {
+      clearTimeout(bubbleFetchTimerRef.current);
+    }
+
+    bubbleFetchTimerRef.current = setTimeout(() => {
+      void fetchBubblesForViewport();
+    }, 350);
+  }, [canRenderMapbox, fetchBubblesForViewport]);
+
+  const handleBubblePress = useCallback(async (event: any) => {
+    const feature = event?.features?.[0];
+    const mediaIdsRaw = feature?.properties?.mediaIds;
+    let mediaIds: string[] = [];
+
+    try {
+      mediaIds = typeof mediaIdsRaw === 'string' ? JSON.parse(mediaIdsRaw) as string[] : [];
+    } catch {
+      mediaIds = [];
+    }
+
+    if (mediaIds.length === 0) {
+      return;
+    }
+
+    setIsBubbleLoading(true);
+    setBubbleError(null);
+    setIsBubbleGalleryVisible(true);
+    setBubblePhotos([]);
+    setSelectedPhoto(null);
+
+    try {
+      const photos = await getMapBubblePhotos(mediaIds);
+      setBubblePhotos(photos.filter((photo) => photoUri(photo)));
+    } catch (error) {
+      setBubbleError(error instanceof Error ? error.message : 'Unable to load photos for this area.');
+    } finally {
+      setIsBubbleLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -191,6 +333,20 @@ export function MapScreen() {
   }, [canRenderMapbox, isThreeD, zoomLevel]);
 
   useEffect(() => {
+    if (!canRenderMapbox) {
+      return;
+    }
+
+    scheduleBubbleFetch();
+
+    return () => {
+      if (bubbleFetchTimerRef.current) {
+        clearTimeout(bubbleFetchTimerRef.current);
+      }
+    };
+  }, [canRenderMapbox, scheduleBubbleFetch, userLocation]);
+
+  useEffect(() => {
     const selectedTrailId = route.params?.selectedTrailId;
 
     if (!selectedTrailId) {
@@ -257,6 +413,7 @@ export function MapScreen() {
     <AnimatedScreen style={styles.container}>
       {canRenderMapbox && Mapbox ? (
         <Mapbox.MapView
+          ref={mapRef}
           style={styles.map}
           styleURL={MAPBOX_STYLE_URL || Mapbox.StyleURL.Outdoors}
           compassEnabled={false}
@@ -265,6 +422,7 @@ export function MapScreen() {
           attributionEnabled={false}
           rotateEnabled
           pitchEnabled
+          onMapIdle={scheduleBubbleFetch}
         >
           <Mapbox.Camera
             ref={cameraRef}
@@ -290,6 +448,32 @@ export function MapScreen() {
               />
             </Mapbox.ShapeSource>
           ) : null}
+
+          <Mapbox.ShapeSource id="photo-bubbles-source" shape={bubbleCollection} onPress={handleBubblePress}>
+            <Mapbox.CircleLayer
+              id="photo-bubbles-circle"
+              style={{
+                circleRadius: ['interpolate', ['linear'], ['get', 'count'], 1, 17, 8, 24, 24, 32, 80, 44],
+                circleColor: ['step', ['get', 'count'], '#7A9A3A', 6, '#D4A843', 18, '#B34A2E', 48, '#BB2823'],
+                circleOpacity: 0.92,
+                circleStrokeColor: '#FFFEF9',
+                circleStrokeWidth: 2,
+                circlePitchAlignment: 'map',
+              }}
+            />
+            <Mapbox.SymbolLayer
+              id="photo-bubbles-count"
+              style={{
+                textField: ['get', 'countLabel'],
+                textSize: 12,
+                textColor: '#FFFFFF',
+                textHaloColor: 'rgba(44,36,24,0.28)',
+                textHaloWidth: 1,
+                textAllowOverlap: true,
+                textIgnorePlacement: true,
+              }}
+            />
+          </Mapbox.ShapeSource>
 
           {nearbyTrails.map((trail) => {
             const active = selectedTrail?.id === trail.id;
@@ -367,6 +551,12 @@ export function MapScreen() {
         {locationMessage ? (
           <View style={styles.infoBanner}>
             <Text style={[styles.infoBannerText, isArabic ? rtlText : ltrText]}>{locationMessage}</Text>
+          </View>
+        ) : null}
+
+        {bubbleError ? (
+          <View style={styles.infoBanner}>
+            <Text style={[styles.infoBannerText, isArabic ? rtlText : ltrText]}>{bubbleError}</Text>
           </View>
         ) : null}
       </AnimatedBlock>
@@ -491,6 +681,106 @@ export function MapScreen() {
           </>
         )}
       </AnimatedBlock>
+
+      <Modal
+        visible={isBubbleGalleryVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => {
+          setIsBubbleGalleryVisible(false);
+          setSelectedPhoto(null);
+        }}
+      >
+        <View style={styles.galleryBackdrop}>
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={() => {
+              setIsBubbleGalleryVisible(false);
+              setSelectedPhoto(null);
+            }}
+          />
+          <View style={[styles.gallerySheet, { paddingBottom: Math.max(insets.bottom + 16, 24) }]}>
+            <View style={[styles.galleryHeader, isArabic ? rtlRow : ltrRow]}>
+              <View>
+                <Text style={[styles.galleryTitle, isArabic ? rtlText : ltrText]}>
+                  {selectedPhoto ? (isArabic ? 'صورة المسار' : 'Trail photo') : (isArabic ? 'صور هذه المنطقة' : 'Photos in this area')}
+                </Text>
+                <Text style={[styles.gallerySubtitle, isArabic ? rtlText : ltrText]}>
+                  {isBubbleLoading ? (isArabic ? 'جار التحميل...' : 'Loading...') : `${bubblePhotos.length} photos`}
+                </Text>
+              </View>
+              <Pressable
+                style={styles.galleryCloseButton}
+                onPress={() => {
+                  setIsBubbleGalleryVisible(false);
+                  setSelectedPhoto(null);
+                }}
+              >
+                <Ionicons name="close" size={20} color="#2C2418" />
+              </Pressable>
+            </View>
+
+            {selectedPhoto ? (
+              <View style={styles.photoViewer}>
+                <Pressable style={styles.photoBackButton} onPress={() => setSelectedPhoto(null)}>
+                  <Ionicons name={isArabic ? 'chevron-forward' : 'chevron-back'} size={18} color="#2C2418" />
+                  <Text style={styles.photoBackText}>{isArabic ? 'الصور' : 'Gallery'}</Text>
+                </Pressable>
+                <Image source={{ uri: photoUri(selectedPhoto) }} style={styles.fullPhoto} resizeMode="cover" />
+                <View style={styles.photoMetaCard}>
+                  <Text style={[styles.photoCaption, isArabic ? rtlText : ltrText]}>
+                    {selectedPhoto.caption?.trim() || (isArabic ? 'بدون وصف' : 'No caption')}
+                  </Text>
+                  <Text style={[styles.photoMetaText, isArabic ? rtlText : ltrText]}>
+                    {photoUploader(selectedPhoto)}{photoDate(selectedPhoto) ? ` · ${photoDate(selectedPhoto)}` : ''}
+                  </Text>
+                  <View style={[styles.photoActionRow, isArabic ? rtlRow : ltrRow]}>
+                    {[
+                      { icon: 'heart-outline' as const, label: selectedPhoto.likes_count ? String(selectedPhoto.likes_count) : (isArabic ? 'إعجاب' : 'Like') },
+                      { icon: 'chatbubble-outline' as const, label: selectedPhoto.comments_count ? String(selectedPhoto.comments_count) : (isArabic ? 'تعليق' : 'Comment') },
+                      { icon: 'bookmark-outline' as const, label: isArabic ? 'حفظ' : 'Save' },
+                    ].map((action) => (
+                      <Pressable
+                        key={action.icon}
+                        style={[styles.photoActionButton, isArabic ? rtlRow : ltrRow]}
+                        onPress={() => Alert.alert(isArabic ? 'قريباً' : 'Coming soon', isArabic ? 'سيتم ربط هذا الخيار بالواجهة الخلفية لاحقاً.' : 'This action needs a matching media endpoint.')}
+                      >
+                        <Ionicons name={action.icon} size={16} color="#630E13" />
+                        <Text style={styles.photoActionText}>{action.label}</Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                </View>
+              </View>
+            ) : isBubbleLoading ? (
+              <View style={styles.galleryState}>
+                <Text style={styles.stateTitle}>{isArabic ? 'جار تحميل الصور...' : 'Loading photos...'}</Text>
+              </View>
+            ) : bubblePhotos.length === 0 ? (
+              <View style={styles.galleryState}>
+                <Text style={styles.stateTitle}>{isArabic ? 'لا توجد صور هنا.' : 'No photos found here.'}</Text>
+                <Text style={styles.stateText}>{isArabic ? 'جرّب تحريك الخريطة أو تكبيرها.' : 'Try panning or zooming the map.'}</Text>
+              </View>
+            ) : (
+              <FlatList
+                data={bubblePhotos}
+                keyExtractor={(photo) => photo.id}
+                numColumns={2}
+                columnWrapperStyle={styles.galleryGridRow}
+                contentContainerStyle={styles.galleryGrid}
+                renderItem={({ item }) => (
+                  <Pressable style={styles.photoTile} onPress={() => setSelectedPhoto(item)}>
+                    <Image source={{ uri: photoUri(item) }} style={styles.photoTileImage} resizeMode="cover" />
+                    <View style={styles.photoTileOverlay}>
+                      <Text style={styles.photoTileUploader} numberOfLines={1}>{photoUploader(item)}</Text>
+                    </View>
+                  </Pressable>
+                )}
+              />
+            )}
+          </View>
+        </View>
+      </Modal>
     </AnimatedScreen>
   );
 }
@@ -831,5 +1121,144 @@ const styles = StyleSheet.create({
   detailButtonText: {
     color: '#fff',
     fontWeight: '800',
+  },
+  galleryBackdrop: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(18,4,8,0.5)',
+  },
+  gallerySheet: {
+    maxHeight: height * 0.82,
+    minHeight: height * 0.42,
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    backgroundColor: '#EAE2CC',
+  },
+  galleryHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginBottom: 12,
+  },
+  galleryTitle: {
+    color: '#2C2418',
+    fontSize: 20,
+    fontWeight: '900',
+  },
+  gallerySubtitle: {
+    marginTop: 3,
+    color: '#6B5D4E',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  galleryCloseButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.72)',
+  },
+  galleryGrid: {
+    paddingBottom: 12,
+    gap: 10,
+  },
+  galleryGridRow: {
+    gap: 10,
+  },
+  photoTile: {
+    flex: 1,
+    minHeight: 180,
+    borderRadius: 20,
+    overflow: 'hidden',
+    backgroundColor: '#3D3428',
+  },
+  photoTileImage: {
+    width: '100%',
+    height: '100%',
+  },
+  photoTileOverlay: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    backgroundColor: 'rgba(18,4,8,0.58)',
+  },
+  photoTileUploader: {
+    color: '#FFFEF9',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  galleryState: {
+    flex: 1,
+    minHeight: 220,
+    justifyContent: 'center',
+    paddingHorizontal: 18,
+  },
+  photoViewer: {
+    gap: 12,
+  },
+  photoBackButton: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    backgroundColor: 'rgba(255,255,255,0.72)',
+  },
+  photoBackText: {
+    color: '#2C2418',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  fullPhoto: {
+    width: '100%',
+    height: height * 0.42,
+    borderRadius: 22,
+    backgroundColor: '#3D3428',
+  },
+  photoMetaCard: {
+    borderRadius: 22,
+    padding: 14,
+    backgroundColor: 'rgba(255,255,255,0.78)',
+  },
+  photoCaption: {
+    color: '#2C2418',
+    fontSize: 15,
+    lineHeight: 21,
+    fontWeight: '800',
+  },
+  photoMetaText: {
+    marginTop: 6,
+    color: '#6B5D4E',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  photoActionRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 14,
+  },
+  photoActionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    backgroundColor: 'rgba(99,14,19,0.08)',
+  },
+  photoActionText: {
+    color: '#630E13',
+    fontSize: 12,
+    fontWeight: '900',
   },
 });

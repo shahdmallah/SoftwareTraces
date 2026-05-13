@@ -1,31 +1,35 @@
 import React from 'react';
 import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { MotiView } from 'moti';
+import { AnimatedEntrance } from '../AnimatedUI';
 import { completionRadii, completionShadow } from '../../features/trailCompletion/theme';
 import { ltrText, rtlText } from '../../utils/direction';
 
 type Props = {
   photoUris: string[];
   isArabic: boolean;
+  isOwner?: boolean;
+  ownerName?: string;
   delay?: number;
   onOpenPhoto?: (uri: string) => void;
 };
 
-export function PhotoGalleryStrip({ photoUris, isArabic, delay = 300, onOpenPhoto }: Props) {
+export function PhotoGalleryStrip({ photoUris, isArabic, isOwner = true, ownerName, delay = 300, onOpenPhoto }: Props) {
+  const displayName = ownerName?.trim() || 'Trail friend';
+
   return (
-    <MotiView
-      from={{ opacity: 0, translateY: 14 }}
-      animate={{ opacity: 1, translateY: 0 }}
-      transition={{ type: 'timing', duration: 440, delay }}
+    <AnimatedEntrance
+      fromY={14}
+      duration={440}
+      delay={delay}
       style={[styles.section, completionShadow.card]}
     >
       <View style={styles.sectionHead}>
         <Text style={[styles.title, isArabic ? rtlText : ltrText]}>
-          {isArabic ? 'ذكرياتك من هذه الرحلة' : 'Your memories from this hike'}
+          {isOwner ? (isArabic ? 'ذكرياتك من هذه الرحلة' : 'Your memories from this hike') : (isArabic ? `صور رحلة ${displayName}` : `${displayName}'s hike photos`)}
         </Text>
         <Text style={[styles.sub, isArabic ? rtlText : ltrText]}>
-          {isArabic ? 'لقطات التقطتها أثناء المسار' : 'Moments you captured along the way'}
+          {isOwner ? (isArabic ? 'لقطات التقطتها أثناء المسار' : 'Moments you captured along the way') : (isArabic ? 'لقطات من الجولة المنشورة' : 'Moments from the published outing')}
         </Text>
       </View>
 
@@ -45,11 +49,13 @@ export function PhotoGalleryStrip({ photoUris, isArabic, delay = 300, onOpenPhot
         <View style={styles.empty}>
           <Ionicons name="images-outline" size={28} color="#8A7A6A" />
           <Text style={[styles.emptyText, isArabic ? rtlText : ltrText]}>
-            {isArabic ? 'لم تُضف صوراً هذه المرة — يمكنك مشاركة الملخص فقط.' : 'No photos this time — your recap still tells the story.'}
+            {isOwner
+              ? (isArabic ? 'لم تُضف صوراً هذه المرة — يمكنك مشاركة الملخص فقط.' : 'No photos this time — your recap still tells the story.')
+              : (isArabic ? 'لا توجد صور منشورة لهذه الجولة.' : 'No photos were published for this outing.')}
           </Text>
         </View>
       )}
-    </MotiView>
+    </AnimatedEntrance>
   );
 }
 

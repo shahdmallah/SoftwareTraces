@@ -83,7 +83,7 @@ export function ReviewsSection({
   const [sortBy, setSortBy] = useState<ReviewSort>('recent');
   const [isSortOpen, setIsSortOpen] = useState(false);
   const [expandedReviews, setExpandedReviews] = useState<Record<string, boolean>>({});
-  const [helpfulReviews, setHelpfulReviews] = useState<Record<string, boolean>>({});
+  const [helpfulReviews] = useState<Record<string, boolean>>({});
   const [reviewLikes, setReviewLikes] = useState<Record<string, { liked: boolean; count: number }>>({});
   const [reviewComments, setReviewComments] = useState<Record<string, { count: number; open: boolean; draft: string; loading: boolean; error: string }>>({});
   const [pendingReviewAction, setPendingReviewAction] = useState<string | null>(null);
@@ -399,8 +399,6 @@ export function ReviewsSection({
         visibleReviews.map((review) => {
           const isExpanded = !!expandedReviews[review.id];
           const isLong = review.content.length > 130;
-          const isHelpful = !!helpfulReviews[review.id];
-          const helpfulCount = getHelpfulSeed(review) + (isHelpful ? 1 : 0);
           const likeState = getLikeState(review);
           const commentState = getCommentState(review);
 
@@ -443,15 +441,6 @@ export function ReviewsSection({
                 </Text>
               ) : null}
 
-              <Pressable
-                style={[styles.helpfulButton, isHelpful && styles.helpfulButtonActive, isArabic ? rtlRow : ltrRow]}
-                onPress={() => setHelpfulReviews((current) => ({ ...current, [review.id]: !current[review.id] }))}
-              >
-                <Ionicons name={isHelpful ? 'thumbs-up' : 'thumbs-up-outline'} size={15} color={isHelpful ? '#fff' : '#630E13'} />
-                <Text style={[styles.helpfulText, isHelpful && styles.helpfulTextActive]}>
-                  {isArabic ? `مفيد (${helpfulCount})` : `Helpful (${helpfulCount})`}
-                </Text>
-              </Pressable>
               <View style={[styles.reviewSocialRow, isArabic ? rtlRow : ltrRow]}>
                 <Pressable
                   style={[styles.reviewSocialButton, likeState.liked && styles.reviewSocialButtonActive, isArabic ? rtlRow : ltrRow]}
@@ -778,28 +767,6 @@ const styles = StyleSheet.create({
     color: '#630E13',
     fontSize: 12,
     fontWeight: '800',
-  },
-  helpfulButton: {
-    alignSelf: 'flex-start',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginTop: 11,
-    borderRadius: 999,
-    paddingHorizontal: 11,
-    paddingVertical: 8,
-    backgroundColor: '#FFF8F1',
-  },
-  helpfulButtonActive: {
-    backgroundColor: '#630E13',
-  },
-  helpfulText: {
-    color: '#630E13',
-    fontSize: 12,
-    fontWeight: '900',
-  },
-  helpfulTextActive: {
-    color: '#fff',
   },
   reviewSocialRow: {
     flexDirection: 'row',

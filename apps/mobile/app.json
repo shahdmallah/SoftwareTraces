@@ -59,7 +59,8 @@
         {
           "motionPermission": "Allow Traces to access motion data so it can count your steps during a trail recording."
         }
-      ]
+      ],
+      "@react-native-community/datetimepicker"
     ]
   }
 }

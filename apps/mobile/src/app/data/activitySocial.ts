@@ -21,6 +21,15 @@ export type MessageThread = {
   unread: number;
 };
 
+export type FeedCommentPreview = {
+  id: string;
+  userId?: string;
+  user: string;
+  avatar: string;
+  body: string;
+  createdAt?: string;
+};
+
 export type FeedItem =
   | {
       id: string;
@@ -45,6 +54,7 @@ export type FeedItem =
       timeAr: string;
       likes: number;
       comments: number;
+      previewComments?: FeedCommentPreview[];
       distance: string;
     }
   | {

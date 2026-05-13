@@ -1,8 +1,8 @@
 import React from 'react';
 import { Alert, Pressable, Share, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { MotiView } from 'moti';
 import type { StackNavigationProp } from '@react-navigation/stack';
+import { AnimatedEntrance } from '../AnimatedUI';
 import { shareActivityPost } from '../../api/activitiesApi';
 import { addLocalFeedItem } from '../../data/localSocial';
 import { completionRadii } from '../../features/trailCompletion/theme';
@@ -17,11 +17,14 @@ type Props = {
   draft: TrailCompletionDraft;
   isArabic: boolean;
   navigation: Nav;
+  isOwner?: boolean;
+  ownerName?: string;
   delay?: number;
   onSaveJournal?: () => void;
 };
 
-export function ShareActions({ draft, isArabic, navigation, delay = 400, onSaveJournal }: Props) {
+export function ShareActions({ draft, isArabic, navigation, isOwner = true, ownerName, delay = 400, onSaveJournal }: Props) {
+  const displayName = ownerName?.trim() || draft.publisherName?.trim() || 'Trail friend';
   const saveJournal =
     onSaveJournal ??
     (() => {
@@ -32,6 +35,10 @@ export function ShareActions({ draft, isArabic, navigation, delay = 400, onSaveJ
       );
     });
   const shareRecap = async () => {
+    if (!isOwner) {
+      return;
+    }
+
     const dur = formatCompletionDuration(draft.durationMs, isArabic);
     const message = isArabic
       ? `أكملتُ «${draft.trailName}» على Traces — ${dur}\n${draft.review.trim().slice(0, 280)}`
@@ -90,38 +97,61 @@ export function ShareActions({ draft, isArabic, navigation, delay = 400, onSaveJ
   };
 
   return (
-    <MotiView
-      from={{ opacity: 0, translateY: 12 }}
-      animate={{ opacity: 1, translateY: 0 }}
-      transition={{ type: 'timing', duration: 420, delay }}
+    <AnimatedEntrance
+      fromY={12}
+      duration={420}
+      delay={delay}
       style={styles.wrap}
     >
       <Text style={[styles.sectionTitle, isArabic ? rtlText : ltrText]}>
-        {isArabic ? 'الخطوة التالية' : 'What’s next'}
+        {isOwner ? (isArabic ? 'الخطوة التالية' : 'What’s next') : (isArabic ? 'استكشف هذه الرحلة' : 'Explore this hike')}
       </Text>
       <Text style={[styles.sectionSub, isArabic ? rtlText : ltrText]}>
-        {isArabic ? 'بعد احتفالك بالرحلة، شارك بلطف أو خطط للقادم.' : 'After the celebration — share lightly, or plan what’s ahead.'}
+        {isOwner
+          ? (isArabic ? 'بعد احتفالك بالرحلة، شارك بلطف أو خطط للقادم.' : 'After the celebration — share lightly, or plan what’s ahead.')
+          : (isArabic ? `هذه رحلة نشرها ${displayName}. يمكنك مشاهدة الملف أو تفاصيل المسار.` : `This is ${displayName}'s published hike. You can view their profile or open the trail details.`)}
       </Text>
 
       <View style={styles.grid}>
-        <ActionChip
-          icon="share-outline"
-          label={isArabic ? 'مشاركة الملخص' : 'Share recap'}
-          onPress={shareRecap}
-          isArabic={isArabic}
-        />
-        <ActionChip
-          icon="people-outline"
-          label={isArabic ? 'ادعُ أصدقاءك لاحقاً' : 'Invite friends next time'}
-          onPress={() => navigation.navigate('ActivityShareComposer', { type: 'plan' })}
-          isArabic={isArabic}
-        />
-        <ActionChip
-          icon="book-outline"
-          label={isArabic ? 'حفظ في اليوميات' : 'Save to journal'}
-          onPress={saveJournal}
-          isArabic={isArabic}
-        />
+        {isOwner ? (
+          <>
+            <ActionChip
+              icon="share-outline"
+              label={isArabic ? 'مشاركة الملخص' : 'Share recap'}
+              onPress={shareRecap}
+              isArabic={isArabic}
+            />
+            <ActionChip
+              icon="people-outline"
+              label={isArabic ? 'ادعُ أصدقاءك لاحقاً' : 'Invite friends next time'}
+              onPress={() => navigation.navigate('ActivityShareComposer', { type: 'plan' })}
+              isArabic={isArabic}
+            />
+            <ActionChip
+              icon="book-outline"
+              label={isArabic ? 'حفظ في اليوميات' : 'Save to journal'}
+              onPress={saveJournal}
+              isArabic={isArabic}
+            />
+          </>
+        ) : (
+          <>
+            {draft.publisherId ? (
+              <ActionChip
+                icon="person-circle-outline"
+                label={isArabic ? `ملف ${displayName}` : `View ${displayName}'s profile`}
+                onPress={() => navigation.navigate('PublicProfile', { profileId: draft.publisherId! })}
+                isArabic={isArabic}
+              />
+            ) : null}
+            <ActionChip
+              icon="people-outline"
+              label={isArabic ? 'خطط لرحلتك الخاصة' : 'Plan your own hike'}
+              onPress={() => navigation.navigate('ActivityShareComposer', { type: 'plan', trailId: draft.trailId, trailName: draft.trailName })}
+              isArabic={isArabic}
+            />
+          </>
+        )}
         <ActionChip
           icon="map-outline"
           label={isArabic ? 'تفاصيل المسار' : 'View trail details'}
@@ -129,7 +159,7 @@ export function ShareActions({ draft, isArabic, navigation, delay = 400, onSaveJ
           isArabic={isArabic}
         />
       </View>
-    </MotiView>
+    </AnimatedEntrance>
   );
 }
 

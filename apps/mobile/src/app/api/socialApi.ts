@@ -31,6 +31,13 @@ type SocialFeedActivityStats = {
   elevation_gain_meters: number | null;
 } | null;
 
+export type SocialFeedComment = {
+  id: string;
+  body: string;
+  created_at: string;
+  user: SocialFeedUser;
+};
+
 export type SocialFeedReviewItem = {
   id: string;
   type: 'review';
@@ -48,6 +55,7 @@ export type SocialFeedReviewItem = {
   likes_count: number;
   comments_count: number;
   is_liked_by_user: boolean;
+  recent_comments?: SocialFeedComment[];
 };
 
 export type SocialFeedActivityItem = {
@@ -67,6 +75,7 @@ export type SocialFeedActivityItem = {
   likes_count: number;
   comments_count: number;
   is_liked_by_user: boolean;
+  recent_comments?: SocialFeedComment[];
 };
 
 export type SocialFeedItem = SocialFeedReviewItem | SocialFeedActivityItem;

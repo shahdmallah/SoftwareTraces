@@ -1,7 +1,7 @@
 import React, { useMemo } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { MotiView } from 'moti';
+import { AnimatedEntrance } from '../AnimatedUI';
 import { completionRadii, completionShadow } from '../../features/trailCompletion/theme';
 import { formatCompletionDuration } from '../../features/trailCompletion/formatters';
 import { ltrRow, ltrText, rtlRow, rtlText } from '../../utils/direction';
@@ -46,10 +46,10 @@ export function JourneyTimeline({ routePointCount, durationMs, isArabic, delay =
   const milestones = useMemo(() => buildMilestones(routePointCount, durationMs, isArabic), [routePointCount, durationMs, isArabic]);
 
   return (
-    <MotiView
-      from={{ opacity: 0, translateY: 16 }}
-      animate={{ opacity: 1, translateY: 0 }}
-      transition={{ type: 'timing', duration: 440, delay }}
+    <AnimatedEntrance
+      fromY={16}
+      duration={440}
+      delay={delay}
       style={[styles.card, completionShadow.card]}
     >
       <View style={[styles.header, isArabic ? rtlRow : ltrRow]}>
@@ -80,7 +80,7 @@ export function JourneyTimeline({ routePointCount, durationMs, isArabic, delay =
           </View>
         ))}
       </View>
-    </MotiView>
+    </AnimatedEntrance>
   );
 }
 

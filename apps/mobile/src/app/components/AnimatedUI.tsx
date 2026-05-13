@@ -1,32 +1,71 @@
-import React, { type ReactNode } from 'react';
-import { type StyleProp, type ViewStyle } from 'react-native';
-import { MotiView } from 'moti';
+import React, { useEffect, useRef, type ReactNode } from 'react';
+import { Animated, Easing, type StyleProp, type ViewStyle } from 'react-native';
 
 type AnimatedBlockProps = {
   children: ReactNode;
   delay?: number;
   duration?: number;
   fromY?: number;
+  fromScale?: number;
   style?: StyleProp<ViewStyle>;
 };
 
-export function AnimatedBlock({
+export function AnimatedEntrance({
   children,
   delay = 0,
   duration = 420,
-  fromY = 18,
+  fromY = 0,
+  fromScale = 1,
   style,
 }: AnimatedBlockProps) {
+  const progress = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    const animation = Animated.timing(progress, {
+      toValue: 1,
+      duration,
+      delay,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    });
+
+    animation.start();
+
+    return () => {
+      animation.stop();
+    };
+  }, [delay, duration, progress]);
+
   return (
-    <MotiView
-      from={{ opacity: 0, translateY: fromY, scale: 0.98 }}
-      animate={{ opacity: 1, translateY: 0, scale: 1 }}
-      transition={{ type: 'timing', duration, delay }}
-      style={style}
+    <Animated.View
+      style={[
+        style,
+        {
+          opacity: progress,
+          transform: [
+            {
+              translateY: progress.interpolate({
+                inputRange: [0, 1],
+                outputRange: [fromY, 0],
+              }),
+            },
+            {
+              scale: progress.interpolate({
+                inputRange: [0, 1],
+                outputRange: [fromScale, 1],
+              }),
+            },
+          ],
+        },
+      ]}
     >
       {children}
-    </MotiView>
+    </Animated.View>
   );
+}
+
+export function AnimatedBlock(props: AnimatedBlockProps) {
+  return <AnimatedEntrance fromY={18} fromScale={0.98} {...props} />;
 }
 
 type AnimatedScreenProps = {
@@ -35,14 +74,26 @@ type AnimatedScreenProps = {
 };
 
 export function AnimatedScreen({ children, style }: AnimatedScreenProps) {
+  const opacity = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    const animation = Animated.timing(opacity, {
+      toValue: 1,
+      duration: 260,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    });
+
+    animation.start();
+
+    return () => {
+      animation.stop();
+    };
+  }, [opacity]);
+
   return (
-    <MotiView
-      from={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      transition={{ type: 'timing', duration: 260 }}
-      style={style}
-    >
+    <Animated.View style={[style, { opacity }]}>
       {children}
-    </MotiView>
+    </Animated.View>
   );
 }

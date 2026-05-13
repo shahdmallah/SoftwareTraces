@@ -1,5 +1,5 @@
-import type { SocialFeedItem } from '../api/socialApi';
-import type { FeedItem } from '../data/activitySocial';
+import type { SocialFeedComment, SocialFeedItem } from '../api/socialApi';
+import type { FeedCommentPreview, FeedItem } from '../data/activitySocial';
 
 export function formatFeedRelativeTime(value: string) {
   const timestamp = new Date(value).getTime();
@@ -33,6 +33,17 @@ function formatDistanceKmFromMeters(meters: number | null | undefined): string {
   return `${(Number(meters) / 1000).toFixed(1)} km`;
 }
 
+function mapRecentComments(comments: SocialFeedComment[] | undefined): FeedCommentPreview[] {
+  return (comments ?? []).map((comment) => ({
+    id: comment.id,
+    userId: comment.user.id,
+    user: comment.user.full_name || 'Trail friend',
+    avatar: comment.user.avatar_url || '',
+    body: comment.body,
+    createdAt: comment.created_at,
+  }));
+}
+
 export function mapSocialFeedItemToFeedItem(item: SocialFeedItem): FeedItem {
   const userName = item.user.full_name || 'Trail friend';
   const handle = handleFromName(userName);
@@ -53,6 +64,10 @@ export function mapSocialFeedItemToFeedItem(item: SocialFeedItem): FeedItem {
       completionDraft: trailId
         ? {
             trailId,
+            publisherId: item.user.id,
+            publisherName: userName,
+            publisherHandle: handle,
+            publisherAvatar: item.user.avatar_url || '',
             trailName: item.trail.name ?? 'Trail',
             trailImage: photo || item.trail.image || undefined,
             rating: item.rating ?? 0,
@@ -78,6 +93,7 @@ export function mapSocialFeedItemToFeedItem(item: SocialFeedItem): FeedItem {
       timeAr: relAr,
       likes: item.likes_count,
       comments: item.comments_count,
+      previewComments: mapRecentComments(item.recent_comments),
       distance: ratingLabel,
     };
   }
@@ -99,6 +115,10 @@ export function mapSocialFeedItemToFeedItem(item: SocialFeedItem): FeedItem {
       ? {
           activityId: item.activity.id ?? undefined,
           trailId,
+          publisherId: item.user.id,
+          publisherName: userName,
+          publisherHandle: handle,
+          publisherAvatar: item.user.avatar_url || '',
           trailName: item.trail.name ?? 'Trail',
           trailImage: trailImage || undefined,
           rating: item.rating ?? 0,
@@ -126,6 +146,7 @@ export function mapSocialFeedItemToFeedItem(item: SocialFeedItem): FeedItem {
     timeAr: relAr,
     likes: item.likes_count,
     comments: item.comments_count,
+    previewComments: mapRecentComments(item.recent_comments),
     distance: distanceLabel,
   };
 }

@@ -3,8 +3,8 @@ import { Dimensions, ImageBackground, Pressable, StyleSheet, Text, View } from '
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { BlurView } from 'expo-blur';
-import { MotiView } from 'moti';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { AnimatedEntrance } from '../AnimatedUI';
 import { completionRadii } from '../../features/trailCompletion/theme';
 import { ltrRow, ltrText, rtlRow, rtlText } from '../../utils/direction';
 import { getWeatherVisual } from '../../utils/weatherUtils';
@@ -20,6 +20,7 @@ type Props = {
   region?: string;
   completedDateLabel: string;
   weatherLine?: string | null;
+  statusLabel?: string;
   isArabic: boolean;
   onBack: () => void;
 };
@@ -31,6 +32,7 @@ export function CompletionHero({
   region,
   completedDateLabel,
   weatherLine,
+  statusLabel,
   isArabic,
   onBack,
 }: Props) {
@@ -50,10 +52,9 @@ export function CompletionHero({
       </View>
 
       <View style={styles.bottom}>
-        <MotiView
-          from={{ opacity: 0, translateY: 16 }}
-          animate={{ opacity: 1, translateY: 0 }}
-          transition={{ type: 'spring', damping: 18, delay: 120 }}
+        <AnimatedEntrance
+          fromY={16}
+          delay={120}
           style={[styles.successPill, isArabic ? rtlRow : ltrRow]}
         >
           <BlurView intensity={40} tint="light" style={StyleSheet.absoluteFill} />
@@ -61,9 +62,9 @@ export function CompletionHero({
             <Ionicons name="checkmark" size={12} color="#fff" />
           </View>
           <Text style={[styles.successText, isArabic ? rtlText : ltrText]}>
-            {isArabic ? 'اكتمل المسار' : 'Trail completed'}
+            {statusLabel ?? (isArabic ? 'اكتمل المسار' : 'Trail completed')}
           </Text>
-        </MotiView>
+        </AnimatedEntrance>
 
         <Text style={[styles.trailTitle, isArabic ? rtlText : ltrText]} numberOfLines={2}>
           {trailName}
@@ -95,7 +96,7 @@ export function CompletionHero({
   );
 
   return (
-    <MotiView from={{ opacity: 0.85 }} animate={{ opacity: 1 }} transition={{ type: 'timing', duration: 520 }} style={styles.wrap}>
+    <AnimatedEntrance duration={520} style={styles.wrap}>
       {uri ? (
         <ImageBackground source={{ uri }} style={[styles.bg, { minHeight: HERO_MIN }]} resizeMode="cover">
           {inner}
@@ -103,7 +104,7 @@ export function CompletionHero({
       ) : (
         <View style={[styles.bg, styles.bgFallback, { minHeight: HERO_MIN }]}>{inner}</View>
       )}
-    </MotiView>
+    </AnimatedEntrance>
   );
 }
 
@@ -146,6 +147,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+    maxWidth: '100%',
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 999,
@@ -167,6 +169,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '800',
     letterSpacing: 0.3,
+    flexShrink: 1,
   },
   trailTitle: {
     color: '#FFFEF9',

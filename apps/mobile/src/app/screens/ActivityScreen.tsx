@@ -1,22 +1,191 @@
 import React, { memo, useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, FlatList, Image, ListRenderItem, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, FlatList, Image, ListRenderItem, Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
-import { addReviewComment, commentOnActivity, followUser, getFollowing, likeActivity, likeReview, unfollowUser, unlikeReview, getSocialFeed } from '../api/socialApi';
-import { type FeedItem } from '../data/activitySocial';
+import { addReviewComment, commentOnActivity, followUser, getFollowing, getReviewComments, likeActivity, likeReview, unfollowUser, unlikeReview, getSocialFeed, type ActivityComment, type ReviewComment } from '../api/socialApi';
+import { type FeedCommentPreview, type FeedItem } from '../data/activitySocial';
 import { mapSocialFeedItemToFeedItem } from '../utils/socialFeedMap';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { RootStackParamList } from '../navigation/types';
 import { ltrRow, ltrText, rtlRow, rtlText } from '../utils/direction';
 import { colors } from '../theme/colors';
-import DateTimePickerModal from 'react-native-modal-datetime-picker';
 
 type ActivityNavigationProp = StackNavigationProp<RootStackParamList>;
+type ActivityCalendarModalProps = {
+  visible: boolean;
+  isArabic: boolean;
+  onClose: () => void;
+  onApply: (date: Date) => void;
+};
+
+function startOfDay(date: Date) {
+  const value = new Date(date);
+  value.setHours(0, 0, 0, 0);
+  return value;
+}
+
+function sameDay(a: Date, b: Date) {
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  );
+}
+
+function hasImageUri(value: string | undefined | null): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function getInitials(name: string) {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  const first = parts[0]?.[0] ?? 'T';
+  const second = parts[1]?.[0] ?? '';
+  return `${first}${second}`.toUpperCase();
+}
+
+function reviewCommentToPreview(comment: ReviewComment): FeedCommentPreview {
+  return {
+    id: comment.id,
+    userId: comment.user.id,
+    user: comment.user.full_name || 'Trail friend',
+    avatar: comment.user.avatar_url || '',
+    body: comment.content,
+    createdAt: comment.created_at,
+  };
+}
+
+function activityCommentToPreview(
+  comment: ActivityComment,
+  fallbackUser: { id: string; full_name: string } | null | undefined,
+): FeedCommentPreview {
+  return {
+    id: comment.id,
+    userId: comment.user_id || fallbackUser?.id,
+    user: fallbackUser?.full_name || 'You',
+    avatar: '',
+    body: comment.body,
+    createdAt: comment.created_at,
+  };
+}
+
+function appendCommentPreview(existing: FeedCommentPreview[] | undefined, next: FeedCommentPreview): FeedCommentPreview[] {
+  const comments = [...(existing ?? []).filter((comment) => comment.id !== next.id), next];
+  return comments.slice(-3);
+}
+
+function ActivityCalendarModal({ visible, isArabic, onClose, onApply }: ActivityCalendarModalProps) {
+  const today = useMemo(() => startOfDay(new Date()), []);
+  const [viewDate, setViewDate] = useState(() => new Date(today));
+  const [selectedDate, setSelectedDate] = useState(() => new Date(today));
+
+  useEffect(() => {
+    if (visible) {
+      const now = startOfDay(new Date());
+      setViewDate(now);
+      setSelectedDate(now);
+    }
+  }, [visible]);
+
+  const monthStart = new Date(viewDate.getFullYear(), viewDate.getMonth(), 1);
+  const monthLabel = new Intl.DateTimeFormat(isArabic ? 'ar-SA' : 'en-US', {
+    month: 'long',
+    year: 'numeric',
+  }).format(monthStart);
+  const daysInMonth = new Date(viewDate.getFullYear(), viewDate.getMonth() + 1, 0).getDate();
+  const firstDay = monthStart.getDay();
+  const cells = [
+    ...Array(firstDay).fill(null),
+    ...Array.from({ length: daysInMonth }, (_, index) => index + 1),
+  ];
+
+  while (cells.length % 7 !== 0) {
+    cells.push(null);
+  }
+
+  const dayNames = isArabic
+    ? ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+    : ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+  const moveMonth = (direction: number) => {
+    setViewDate((current) => new Date(current.getFullYear(), current.getMonth() + direction, 1));
+  };
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" statusBarTranslucent onRequestClose={onClose}>
+      <View style={styles.calendarBackdrop}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
+        <AnimatedBlock fromY={18} fromScale={0.97} style={styles.calendarModalCard}>
+          <View style={styles.calendarBody}>
+            <View style={[styles.calendarMonthRow, isArabic ? rtlRow : ltrRow]}>
+              <Pressable style={styles.calendarNavButton} onPress={() => moveMonth(-1)}>
+                <Ionicons name={isArabic ? 'chevron-forward' : 'chevron-back'} size={18} color="#630E13" />
+              </Pressable>
+              <Text style={styles.calendarMonthLabel}>{monthLabel}</Text>
+              <Pressable style={styles.calendarNavButton} onPress={() => moveMonth(1)}>
+                <Ionicons name={isArabic ? 'chevron-back' : 'chevron-forward'} size={18} color="#630E13" />
+              </Pressable>
+            </View>
+
+            <View style={styles.calendarWeekRow}>
+              {dayNames.map((day) => (
+                <Text key={day} style={styles.calendarWeekday}>{day.slice(0, 2)}</Text>
+              ))}
+            </View>
+
+            <View style={styles.calendarGrid}>
+              {cells.map((day, index) => {
+                if (!day) {
+                  return <View key={`empty-${index}`} style={styles.calendarDayCell} />;
+                }
+
+                const cellDate = new Date(viewDate.getFullYear(), viewDate.getMonth(), day);
+                const isToday = sameDay(cellDate, today);
+                const isSelected = sameDay(cellDate, selectedDate);
+
+                return (
+                  <Pressable
+                    key={`${viewDate.getFullYear()}-${viewDate.getMonth()}-${day}`}
+                    style={styles.calendarDayCell}
+                    onPress={() => setSelectedDate(cellDate)}
+                  >
+                    <View style={[
+                      styles.calendarDayCircle,
+                      isToday && styles.calendarDayToday,
+                      isSelected && styles.calendarDaySelected,
+                    ]}>
+                      <Text style={[
+                        styles.calendarDayText,
+                        isToday && styles.calendarDayTextToday,
+                        isSelected && styles.calendarDayTextSelected,
+                      ]}>
+                        {day}
+                      </Text>
+                    </View>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            <View style={[styles.calendarActions, isArabic ? rtlRow : ltrRow]}>
+              <Pressable style={styles.calendarSecondaryButton} onPress={onClose}>
+                <Text style={styles.calendarSecondaryText}>{isArabic ? 'Cancel' : 'Cancel'}</Text>
+              </Pressable>
+              <Pressable style={styles.calendarPrimaryButton} onPress={() => onApply(selectedDate)}>
+                <Ionicons name="search-outline" size={16} color="#fff" />
+                <Text style={styles.calendarPrimaryText}>{isArabic ? 'Apply' : 'Apply'}</Text>
+              </Pressable>
+            </View>
+          </View>
+        </AnimatedBlock>
+      </View>
+    </Modal>
+  );
+}
 
 function normalize(value: string): string {
   return value.trim().toLocaleLowerCase();
@@ -212,7 +381,13 @@ const CardHeader = memo(function CardHeader({
   return (
     <View style={[styles.cardHeader, isArabic ? rtlRow : ltrRow]}>
       <Pressable style={[styles.userRow, isArabic ? rtlRow : ltrRow]} onPress={onOpenProfile}>
-        <Image source={{ uri: avatar }} style={styles.avatar} />
+        {hasImageUri(avatar) ? (
+          <Image source={{ uri: avatar.trim() }} style={styles.avatar} />
+        ) : (
+          <View style={[styles.avatar, styles.avatarFallback]}>
+            <Text style={styles.avatarFallbackText}>{getInitials(user)}</Text>
+          </View>
+        )}
         <View style={styles.userInfo}>
           <Text style={[styles.userName, isArabic ? rtlText : ltrText]} numberOfLines={1}>
             {user}
@@ -262,6 +437,8 @@ const RecapCard = memo(function RecapCard({
   const [commentDraft, setCommentDraft] = useState('');
   const [commentOpen, setCommentOpen] = useState(false);
   const [pendingAction, setPendingAction] = useState<'like' | 'comment' | 'follow' | null>(null);
+  const imageUri = hasImageUri(item.image) ? item.image.trim() : null;
+  const visibleComments = item.previewComments ?? [];
 
   const handleLike = async () => {
     setPendingAction('like');
@@ -338,7 +515,14 @@ const RecapCard = memo(function RecapCard({
       />
 
       <View style={styles.mediaWrap}>
-        <Image source={{ uri: item.image }} style={styles.media} resizeMode="cover" />
+        {imageUri ? (
+          <Image source={{ uri: imageUri }} style={styles.media} resizeMode="cover" />
+        ) : (
+          <View style={[styles.media, styles.mediaFallback]}>
+            <Ionicons name="trail-sign-outline" size={30} color="#D7BDA7" />
+            <Text style={styles.mediaFallbackText}>{isArabic ? 'Trail moment' : 'Trail moment'}</Text>
+          </View>
+        )}
         <LinearGradient colors={['transparent', 'rgba(0,0,0,0.62)']} style={styles.mediaOverlay}>
           <View style={styles.mediaTags}>
             <View style={styles.mediaTag}>
@@ -406,6 +590,27 @@ const RecapCard = memo(function RecapCard({
             {isArabic ? item.regionAr : item.regionEn}
           </Text>
         </View>
+        {visibleComments.length > 0 ? (
+          <View style={styles.commentPreviewList}>
+            {visibleComments.map((comment) => (
+              <View key={comment.id} style={[styles.commentPreviewRow, isArabic ? rtlRow : ltrRow]}>
+                {hasImageUri(comment.avatar) ? (
+                  <Image source={{ uri: comment.avatar.trim() }} style={styles.commentPreviewAvatar} />
+                ) : (
+                  <View style={[styles.commentPreviewAvatar, styles.commentPreviewAvatarFallback]}>
+                    <Text style={styles.commentPreviewAvatarText}>{getInitials(comment.user)}</Text>
+                  </View>
+                )}
+                <View style={styles.commentPreviewBubble}>
+                  <Text style={[styles.commentPreviewText, isArabic ? rtlText : ltrText, { textAlign: isArabic ? 'right' : 'left' }]} numberOfLines={2}>
+                    <Text style={styles.commentPreviewUser}>{comment.user} </Text>
+                    {comment.body}
+                  </Text>
+                </View>
+              </View>
+            ))}
+          </View>
+        ) : null}
         {commentOpen ? (
           <View style={[styles.commentComposer, isArabic ? rtlRow : ltrRow]}>
             <TextInput
@@ -446,6 +651,8 @@ const PlanCard = memo(function PlanCard({
   isArabic: boolean;
   onOpenPlan: (item: PlanItem) => void;
 }) {
+  const coverUri = hasImageUri(item.cover) ? item.cover.trim() : null;
+
   return (
     <Pressable style={styles.card} onPress={() => onOpenPlan(item)}>
       <CardHeader
@@ -461,7 +668,11 @@ const PlanCard = memo(function PlanCard({
 
       {/* Full-bleed cover with event details overlaid */}
       <View style={styles.meetupCover}>
-        <Image source={{ uri: item.cover }} style={styles.meetupImage} resizeMode="cover" />
+        {coverUri ? (
+          <Image source={{ uri: coverUri }} style={styles.meetupImage} resizeMode="cover" />
+        ) : (
+          <View style={[styles.meetupImage, styles.meetupImageFallback]} />
+        )}
         <LinearGradient colors={['rgba(15,10,7,0.05)', 'rgba(15,10,7,0.78)']} style={styles.meetupOverlay}>
           <View style={styles.meetupBody}>
             <Text style={[styles.meetupTitle, isArabic ? rtlText : ltrText, { textAlign: isArabic ? 'right' : 'left' }]} numberOfLines={2}>
@@ -529,9 +740,50 @@ export function ActivityScreen() {
       setIsFeedLoading(true);
       try {
         const response = await getSocialFeed({ page: 1, limit: 30 });
+        const mappedItems = response.data.map(mapSocialFeedItemToFeedItem);
         if (!cancelled) {
-          setRemoteRecaps(response.data.map(mapSocialFeedItemToFeedItem));
+          setRemoteRecaps(mappedItems);
           setFeedError('');
+        }
+
+        const reviewItems = mappedItems.filter(
+          (item): item is RecapItem => item.kind === 'recap' && item.sourceType === 'review' && item.comments > 0,
+        );
+
+        if (reviewItems.length > 0) {
+          const commentResults = await Promise.all(
+            reviewItems.map(async (item) => {
+              try {
+                const comments = await getReviewComments(item.id, { page: 1, limit: 3 });
+                return {
+                  id: item.id,
+                  previewComments: comments.data.map(reviewCommentToPreview),
+                };
+              } catch {
+                return null;
+              }
+            }),
+          );
+
+          if (!cancelled) {
+            const commentsByItemId = commentResults.reduce<Record<string, FeedCommentPreview[]>>((acc, result) => {
+              if (result) {
+                acc[result.id] = result.previewComments;
+              }
+              return acc;
+            }, {});
+
+            setRemoteRecaps((items) => items.map((item) => {
+              if (item.kind !== 'recap' || !commentsByItemId[item.id]) {
+                return item;
+              }
+
+              return {
+                ...item,
+                previewComments: commentsByItemId[item.id],
+              };
+            }));
+          }
         }
       } catch {
         if (!cancelled) {
@@ -582,6 +834,7 @@ export function ActivityScreen() {
       if (item.sourceType === 'activity' && wasLiked) {
         return;
       }
+
       updateRecap(item.id, (current) => ({
         ...current,
         isLiked: !wasLiked,
@@ -609,17 +862,26 @@ export function ActivityScreen() {
   const handleSendComment = useCallback(
     async (item: RecapItem, body: string) => {
       try {
+        let previewComment: FeedCommentPreview | null = null;
+
         if (item.sourceType === 'review') {
-          await addReviewComment(item.id, body);
+          previewComment = reviewCommentToPreview(await addReviewComment(item.id, body));
         } else if (item.sourceType === 'activity' && item.activityId) {
-          await commentOnActivity(item.activityId, body);
+          previewComment = activityCommentToPreview(await commentOnActivity(item.activityId, body), user ?? null);
         }
-        updateRecap(item.id, (current) => ({ ...current, comments: current.comments + 1 }));
+
+        updateRecap(item.id, (current) => ({
+          ...current,
+          comments: current.comments + 1,
+          previewComments: previewComment
+            ? appendCommentPreview(current.previewComments, previewComment)
+            : current.previewComments,
+        }));
       } catch (error) {
         Alert.alert(isArabic ? 'تعذر إرسال التعليق' : 'Unable to comment', error instanceof Error ? error.message : 'Please try again.');
       }
     },
-    [isArabic, updateRecap],
+    [isArabic, updateRecap, user],
   );
 
   const handleToggleFollow = useCallback(
@@ -663,6 +925,10 @@ export function ActivityScreen() {
         draft: {
           activityId: item.activityId,
           trailId: item.trailId,
+          publisherId: item.userId,
+          publisherName: item.user,
+          publisherHandle: item.handle,
+          publisherAvatar: item.avatar,
           trailName: item.trailNameEn,
           trailNameAr: item.trailNameAr,
           trailImage: item.image,
@@ -770,16 +1036,14 @@ export function ActivityScreen() {
           </AnimatedBlock>
         ) : null}
         
-        <DateTimePickerModal
-          isVisible={calendarVisible}
-          mode="date"
-          display="calendar"
-          onConfirm={(date: Date) => {
+        <ActivityCalendarModal
+          visible={calendarVisible}
+          isArabic={isArabic}
+          onClose={() => setCalendarVisible(false)}
+          onApply={(date: Date) => {
             setCalendarVisible(false);
-            const formatted = `${date.getMonth() + 1}/${date.getDate()}`;
-            setSearchQuery(formatted);
+            setSearchQuery(`${date.getMonth() + 1}/${date.getDate()}`);
           }}
-          onCancel={() => setCalendarVisible(false)}
         />
         
         {feedError ? (
@@ -916,6 +1180,145 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: '#630E13',
   },
+  calendarBackdrop: {
+    flex: 1,
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+    backgroundColor: 'rgba(22, 18, 14, 0.58)',
+  },
+  calendarModalCard: {
+    borderRadius: 28,
+    backgroundColor: '#FFF8F1',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 248, 241, 0.62)',
+    shadowColor: '#000',
+    shadowOpacity: 0.22,
+    shadowOffset: { width: 0, height: 18 },
+    shadowRadius: 32,
+    elevation: 12,
+  },
+  calendarBody: {
+    padding: 18,
+    borderRadius: 28,
+    backgroundColor: '#FFF8F1',
+  },
+  calendarMonthRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+  },
+  calendarNavButton: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E7D8C3',
+  },
+  calendarMonthLabel: {
+    flex: 1,
+    textAlign: 'center',
+    color: '#2C2418',
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  calendarWeekRow: {
+    flexDirection: 'row',
+    marginBottom: 8,
+  },
+  calendarWeekday: {
+    width: `${100 / 7}%`,
+    textAlign: 'center',
+    color: '#8A7A6A',
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  calendarGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    rowGap: 6,
+  },
+  calendarDayCell: {
+    width: `${100 / 7}%`,
+    aspectRatio: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  calendarDayCircle: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 0,
+    backgroundColor: 'transparent',
+  },
+  calendarDayToday: {
+    borderWidth: 1,
+    borderColor: '#D7BDA7',
+  },
+  calendarDaySelected: {
+    backgroundColor: '#630E13',
+    borderColor: '#630E13',
+  },
+  calendarDayText: {
+    color: '#2C2418',
+    fontSize: 13,
+    lineHeight: 16,
+    fontWeight: '800',
+    textAlign: 'center',
+    textAlignVertical: 'center',
+    includeFontPadding: false,
+  },
+  calendarDayTextToday: {
+    color: '#630E13',
+  },
+  calendarDayTextSelected: {
+    color: '#fff',
+    fontWeight: '900',
+  },
+  calendarActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 10,
+    marginTop: 18,
+  },
+  calendarSecondaryButton: {
+    height: 42,
+    minWidth: 96,
+    borderRadius: 21,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E7D8C3',
+  },
+  calendarSecondaryText: {
+    color: '#6B5D4E',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  calendarPrimaryButton: {
+    height: 42,
+    minWidth: 112,
+    borderRadius: 21,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+    paddingHorizontal: 18,
+    backgroundColor: '#630E13',
+  },
+  calendarPrimaryText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '900',
+  },
 
   // ─── Unified card shell ────────────────────────────────────────────────────
   card: {
@@ -980,6 +1383,18 @@ const styles = StyleSheet.create({
     borderRadius: 19,
     backgroundColor: '#E7D8C3',
   },
+  avatarFallback: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F6E9DE',
+    borderWidth: 1,
+    borderColor: '#E7D8C3',
+  },
+  avatarFallbackText: {
+    color: '#630E13',
+    fontSize: 12,
+    fontWeight: '900',
+  },
   userInfo: {
     flex: 1,
     minWidth: 0,
@@ -1038,6 +1453,17 @@ const styles = StyleSheet.create({
   media: {
     width: '100%',
     height: '100%',
+  },
+  mediaFallback: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#3A2E22',
+  },
+  mediaFallbackText: {
+    color: '#F6E9DE',
+    fontSize: 12,
+    fontWeight: '900',
   },
   mediaOverlay: {
     ...StyleSheet.absoluteFillObject,
@@ -1111,6 +1537,50 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: 12,
     marginTop: 9,
+  },
+  commentPreviewList: {
+    gap: 8,
+    marginTop: 12,
+  },
+  commentPreviewRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+  },
+  commentPreviewAvatar: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: '#E7D8C3',
+  },
+  commentPreviewAvatarFallback: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F6E9DE',
+    borderWidth: 1,
+    borderColor: '#E7D8C3',
+  },
+  commentPreviewAvatarText: {
+    color: '#630E13',
+    fontSize: 9,
+    fontWeight: '900',
+  },
+  commentPreviewBubble: {
+    flex: 1,
+    minWidth: 0,
+    borderRadius: 14,
+    paddingHorizontal: 11,
+    paddingVertical: 8,
+    backgroundColor: '#F8F1E8',
+  },
+  commentPreviewText: {
+    color: '#43382C',
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  commentPreviewUser: {
+    color: '#2C2418',
+    fontWeight: '900',
   },
   commentComposer: {
     flexDirection: 'row',
@@ -1187,6 +1657,9 @@ const styles = StyleSheet.create({
   meetupImage: {
     width: '100%',
     height: '100%',
+  },
+  meetupImageFallback: {
+    backgroundColor: '#3A2E22',
   },
   meetupOverlay: {
     ...StyleSheet.absoluteFillObject,
