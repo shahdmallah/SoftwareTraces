@@ -40,9 +40,12 @@ export function ShareActions({ draft, isArabic, navigation, isOwner = true, owne
     }
 
     const dur = formatCompletionDuration(draft.durationMs, isArabic);
+    const postCaption = draft.postCaption?.trim() || draft.review.trim();
+    const postPhotos = draft.postPhotoUris?.length ? draft.postPhotoUris : draft.photoUris;
+    const postVisibility = draft.postVisibility === 'friends' ? 'friends' : 'public';
     const message = isArabic
-      ? `أكملتُ «${draft.trailName}» على Traces — ${dur}\n${draft.review.trim().slice(0, 280)}`
-      : `Finished "${draft.trailName}" on Traces — ${dur}\n${draft.review.trim().slice(0, 280)}`;
+      ? `أكملتُ «${draft.trailName}» على Traces — ${dur}\n${postCaption.slice(0, 280)}`
+      : `Finished "${draft.trailName}" on Traces — ${dur}\n${postCaption.slice(0, 280)}`;
 
     const item = {
       id: `local-recap-${Date.now()}`,
@@ -53,13 +56,13 @@ export function ShareActions({ draft, isArabic, navigation, isOwner = true, owne
       user: 'You',
       handle: '@you',
       avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?crop=faces&fit=crop&w=240&h=240',
-      image: draft.photoUris[0] ?? draft.trailImage ?? 'https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=1200&q=80',
+      image: postPhotos[0] ?? draft.trailImage ?? 'https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=1200&q=80',
       trailNameEn: draft.trailName,
       trailNameAr: draft.trailName,
       regionEn: isArabic ? 'Your trail' : 'Your route',
       regionAr: isArabic ? 'رحلتك' : 'Your route',
-      captionEn: draft.review.trim() || message,
-      captionAr: draft.review.trim() || message,
+      captionEn: postCaption || message,
+      captionAr: postCaption || message,
       timeEn: 'Just now',
       timeAr: 'الآن',
       likes: 1,
@@ -70,8 +73,8 @@ export function ShareActions({ draft, isArabic, navigation, isOwner = true, owne
     if (draft.activityId) {
       try {
         await shareActivityPost(draft.activityId, {
-          visibility: 'public',
-          caption: draft.review.trim() || message,
+          visibility: postVisibility,
+          caption: postCaption || message,
         });
       } catch (error) {
         Alert.alert(

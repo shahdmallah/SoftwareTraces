@@ -327,6 +327,7 @@ export async function getNearbyTrails(req: Request, res: Response): Promise<void
         ) AS distance_meters
       FROM trails
       WHERE is_active = true
+        AND status = 'published'
         AND deleted_at IS NULL
         AND ST_DWithin(
           geometry,
@@ -370,6 +371,7 @@ export async function searchTrails(req: Request, res: Response): Promise<void> {
         ${getTrailSelectFields()}
       FROM trails
       WHERE is_active = true
+        AND status = 'published'
         AND deleted_at IS NULL
         AND (
           name ILIKE $1
@@ -419,6 +421,7 @@ export async function getAllTrails(req: Request, res: Response): Promise<void> {
         ${getTrailSelectFields()}
       FROM trails
       WHERE is_active = true
+        AND status = 'published'
         AND deleted_at IS NULL
       ORDER BY created_at DESC
     `;
@@ -602,13 +605,15 @@ export async function createTrail(req: Request, res: Response): Promise<void> {
       start_point,
       geometry,
       user_id,
-      is_active
+      is_active,
+      status
     ) VALUES (
       $1, $2, $3, $4, $5, $6, $7, $8,
       ST_GeomFromText($9, 4326),
       ST_GeogFromText($10),
       $11,
-      $12
+      $12,
+      $13
     ) RETURNING id`;
 
     const queryValues = [
@@ -624,6 +629,7 @@ export async function createTrail(req: Request, res: Response): Promise<void> {
       linestring,
       userId,
       true,
+      "draft",
     ];
 
     console.error("[createTrail] insert query:", insertQuery);

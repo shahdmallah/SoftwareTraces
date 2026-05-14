@@ -1,15 +1,36 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
 import { useNavigation } from '@react-navigation/native';
 import type { StackNavigationProp } from '@react-navigation/stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { addTrailReview, saveBookmark } from '../api/trailsApi';
+import { addTrailReview, saveBookmark, type ReactNativeFile } from '../api/trailsApi';
 import { useTrailTracking } from '../contexts/TrailTrackingContext';
+import { saveJournalEntry } from '../data/localSocial';
 import type { TrailCompletionDraft } from '../features/trailCompletion/types';
 import type { RootStackParamList } from '../navigation/types';
 
 type TrailReviewNavigationProp = StackNavigationProp<RootStackParamList>;
+type PhotoTarget = 'review' | 'post';
+type FinishStep = 'post' | 'review';
+type PostVisibility = 'public' | 'friends' | 'private';
+
+function toReactNativeFile(uri: string): ReactNativeFile {
+  const filename = uri.split('/').pop()?.split('?')[0] || `hike-photo-${Date.now()}.jpg`;
+  const extension = filename.split('.').pop()?.toLowerCase() || 'jpg';
+  const mimeExtension = extension === 'jpg' ? 'jpeg' : extension;
+
+  return {
+    uri,
+    name: filename,
+    type: `image/${mimeExtension}`,
+  };
+}
+
+function mergeUniquePhotos(current: string[], incoming: string[]) {
+  return Array.from(new Set([...current, ...incoming])).slice(0, 6);
+}
 
 export function TrailReviewScreen() {
   const navigation = useNavigation<TrailReviewNavigationProp>();
@@ -17,10 +38,29 @@ export function TrailReviewScreen() {
   const { finishedSession, clearFinishedSession } = useTrailTracking();
   const [rating, setRating] = useState(5);
   const [review, setReview] = useState('');
-  const [visibility, setVisibility] = useState<'public' | 'private'>('public');
+  const [postCaption, setPostCaption] = useState('');
+  const [reviewPhotoUris, setReviewPhotoUris] = useState<string[]>([]);
+  const [postPhotoUris, setPostPhotoUris] = useState<string[]>([]);
+  const [visibility, setVisibility] = useState<PostVisibility>('public');
+  const [step, setStep] = useState<FinishStep>('post');
   const [isSaving, setIsSaving] = useState(false);
+  const scrollRef = useRef<ScrollView>(null);
 
   const trailName = finishedSession?.trail?.name ?? 'This trail';
+  const capturedPhotoUris = useMemo(
+    () => finishedSession?.sessionPhotos.map((photo) => photo.uri) ?? [],
+    [finishedSession?.sessionPhotos],
+  );
+
+  useEffect(() => {
+    setReviewPhotoUris(capturedPhotoUris.slice(0, 6));
+    setPostPhotoUris(capturedPhotoUris.slice(0, 6));
+  }, [capturedPhotoUris]);
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ y: 0, animated: false });
+  }, [step]);
+
   const summary = useMemo(() => {
     if (!finishedSession) {
       return 'No completed hike was found.';
@@ -29,6 +69,51 @@ export function TrailReviewScreen() {
     const minutes = Math.max(1, Math.round(finishedSession.elapsedMs / 60000));
     return `${minutes} min, ${finishedSession.stepCount} steps, ${finishedSession.sessionPhotos.length} photos`;
   }, [finishedSession]);
+
+  const handlePickPhoto = async (target: PhotoTarget) => {
+    const selectedCount = target === 'review' ? reviewPhotoUris.length : postPhotoUris.length;
+    const remainingSlots = Math.max(0, 6 - selectedCount);
+
+    if (!remainingSlots) {
+      Alert.alert('Photo limit reached', 'You can attach up to 6 photos.');
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsMultipleSelection: true,
+      selectionLimit: remainingSlots,
+      quality: 0.85,
+    });
+
+    if (result.canceled) {
+      return;
+    }
+
+    const nextUris = result.assets.map((asset) => asset.uri).filter(Boolean);
+    if (target === 'review') {
+      setReviewPhotoUris((current) => mergeUniquePhotos(current, nextUris));
+    } else {
+      setPostPhotoUris((current) => mergeUniquePhotos(current, nextUris));
+    }
+  };
+
+  const handleRemovePhoto = (target: PhotoTarget, uri: string) => {
+    if (target === 'review') {
+      setReviewPhotoUris((current) => current.filter((item) => item !== uri));
+    } else {
+      setPostPhotoUris((current) => current.filter((item) => item !== uri));
+    }
+  };
+
+  const handleBack = () => {
+    if (step === 'review') {
+      setStep('post');
+      return;
+    }
+
+    navigation.goBack();
+  };
 
   const handleSubmit = async () => {
     if (!finishedSession?.trailId) {
@@ -45,9 +130,12 @@ export function TrailReviewScreen() {
         await addTrailReview(finishedSession.trailId, {
           rating,
           content: review.trim() || 'Completed this trail and shared a quick review from the hike.',
+          photos: reviewPhotoUris.map(toReactNativeFile),
         });
       }
 
+      const trimmedReview = review.trim();
+      const trimmedPostCaption = postCaption.trim();
       const draft: TrailCompletionDraft = {
         activityId: finishedSession.activityId,
         trailId: finishedSession.trailId,
@@ -57,8 +145,12 @@ export function TrailReviewScreen() {
         region: finishedSession.trail?.region,
         regionAr: finishedSession.trail?.regionAr,
         rating,
-        review: review.trim(),
-        photoUris: finishedSession.sessionPhotos.map((photo) => photo.uri),
+        review: trimmedReview,
+        reviewPhotoUris,
+        postCaption: trimmedPostCaption,
+        postPhotoUris,
+        postVisibility: visibility,
+        photoUris: postPhotoUris,
         completedAtIso: new Date().toISOString(),
         durationMs: finishedSession.elapsedMs,
         stepCount: finishedSession.stepCount,
@@ -70,17 +162,30 @@ export function TrailReviewScreen() {
 
       clearFinishedSession();
 
-      if (visibility === 'public') {
+      if (visibility !== 'private') {
         navigation.replace('ActivityShare', { draft });
       } else {
-        Alert.alert('Saved privately', 'Your review was saved and the hike was kept private.');
-        navigation.reset({
-          index: 1,
-          routes: [
-            { name: 'AppTabs', params: { screen: 'Explore' } },
-            { name: 'TrailDetail', params: { trailId: finishedSession.trailId } },
-          ],
+        saveJournalEntry({
+          type: 'journal',
+          trail: trailName,
+          note: trimmedPostCaption || trimmedReview || 'Private hike post',
+          date: draft.completedAtIso,
+          photoUris: postPhotoUris,
         });
+        Alert.alert('Saved privately', 'Your private post was saved to your journal.', [
+          {
+            text: 'Open journal',
+            onPress: () => {
+              navigation.reset({
+                index: 1,
+                routes: [
+                  { name: 'AppTabs', params: { screen: 'Explore' } },
+                  { name: 'Journal' },
+                ],
+              });
+            },
+          },
+        ]);
       }
     } catch (error) {
       Alert.alert('Unable to save', error instanceof Error ? error.message : 'Please try again.');
@@ -103,6 +208,7 @@ export function TrailReviewScreen() {
   return (
     <View style={styles.container}>
       <ScrollView
+        ref={scrollRef}
         contentContainerStyle={{
           paddingTop: Math.max(insets.top + 10, 18),
           paddingBottom: Math.max(insets.bottom + 24, 28),
@@ -111,12 +217,22 @@ export function TrailReviewScreen() {
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.header}>
-          <Pressable style={styles.iconButton} onPress={() => navigation.goBack()}>
+          <Pressable style={styles.iconButton} onPress={handleBack}>
             <Ionicons name="chevron-back" size={20} color="#2C2418" />
           </Pressable>
           <View style={styles.headerCopy}>
-            <Text style={styles.title}>Finish your hike</Text>
+            <Text style={styles.title}>{step === 'post' ? 'Share your hike' : 'Review the trail'}</Text>
             <Text style={styles.subtitle}>{trailName}</Text>
+          </View>
+        </View>
+
+        <View style={styles.stepRow}>
+          <View style={[styles.stepPill, styles.stepPillActive]}>
+            <Text style={styles.stepPillTextActive}>1 Post</Text>
+          </View>
+          <View style={styles.stepLine} />
+          <View style={[styles.stepPill, step === 'review' && styles.stepPillActive]}>
+            <Text style={step === 'review' ? styles.stepPillTextActive : styles.stepPillText}>2 Review</Text>
           </View>
         </View>
 
@@ -140,57 +256,171 @@ export function TrailReviewScreen() {
           )}
         </ScrollView>
 
-        <Text style={styles.sectionTitle}>Your review</Text>
-        <View style={styles.starsRow}>
-          {[1, 2, 3, 4, 5].map((value) => (
-            <Pressable key={value} onPress={() => setRating(value)} style={styles.starButton}>
-              <Ionicons name={value <= rating ? 'star' : 'star-outline'} size={28} color="#D4A843" />
+        {step === 'post' ? (
+          <>
+            <Text style={styles.sectionTitle}>Activity post</Text>
+            <TextInput
+              value={postCaption}
+              onChangeText={setPostCaption}
+              multiline
+              placeholder="Write a caption for your public post."
+              placeholderTextColor="#9B8B78"
+              style={styles.reviewInput}
+            />
+
+            <PhotoPicker
+              title="Post pictures"
+              hint="These photos appear on the Activity post."
+              photos={postPhotoUris}
+              target="post"
+              onAdd={handlePickPhoto}
+              onRemove={handleRemovePhoto}
+            />
+
+            <Text style={styles.sectionTitle}>Privacy</Text>
+            <View style={styles.visibilityRow}>
+              <VisibilityOption
+                visibility="public"
+                activeVisibility={visibility}
+                icon="megaphone-outline"
+                title="Public"
+                description="Share this hike with everyone in Activity."
+                onPress={setVisibility}
+              />
+              <VisibilityOption
+                visibility="friends"
+                activeVisibility={visibility}
+                icon="people-outline"
+                title="Friends only"
+                description="Share this hike only with people who follow you."
+                onPress={setVisibility}
+              />
+              <VisibilityOption
+                visibility="private"
+                activeVisibility={visibility}
+                icon="lock-closed-outline"
+                title="Keep private"
+                description="Save the post to your journal instead of Activity."
+                onPress={setVisibility}
+              />
+            </View>
+
+            <Pressable style={styles.submitButton} onPress={() => setStep('review')}>
+              <Text style={styles.submitButtonText}>Continue to review</Text>
             </Pressable>
+          </>
+        ) : (
+          <>
+            <Text style={styles.sectionTitle}>Your review</Text>
+            <View style={styles.starsRow}>
+              {[1, 2, 3, 4, 5].map((value) => (
+                <Pressable key={value} onPress={() => setRating(value)} style={styles.starButton}>
+                  <Ionicons name={value <= rating ? 'star' : 'star-outline'} size={28} color="#D4A843" />
+                </Pressable>
+              ))}
+            </View>
+
+            <TextInput
+              value={review}
+              onChangeText={setReview}
+              multiline
+              placeholder="How was the trail, the route, and the overall experience?"
+              placeholderTextColor="#9B8B78"
+              style={styles.reviewInput}
+            />
+
+            <PhotoPicker
+              title="Review pictures"
+              hint="These photos attach to your trail review."
+              photos={reviewPhotoUris}
+              target="review"
+              onAdd={handlePickPhoto}
+              onRemove={handleRemovePhoto}
+            />
+
+            <Pressable style={[styles.submitButton, isSaving && styles.submitButtonDisabled]} onPress={handleSubmit} disabled={isSaving}>
+              {isSaving ? <ActivityIndicator color="#fff" /> : <Text style={styles.submitButtonText}>Save hike</Text>}
+            </Pressable>
+          </>
+        )}
+      </ScrollView>
+    </View>
+  );
+}
+
+function VisibilityOption({
+  visibility,
+  activeVisibility,
+  icon,
+  title,
+  description,
+  onPress,
+}: {
+  visibility: PostVisibility;
+  activeVisibility: PostVisibility;
+  icon: keyof typeof Ionicons.glyphMap;
+  title: string;
+  description: string;
+  onPress: (visibility: PostVisibility) => void;
+}) {
+  const active = activeVisibility === visibility;
+
+  return (
+    <Pressable style={[styles.visibilityCard, active && styles.visibilityCardActive]} onPress={() => onPress(visibility)}>
+      <Ionicons name={icon} size={18} color={active ? '#fff' : '#630E13'} />
+      <View style={styles.visibilityCopy}>
+        <Text style={[styles.visibilityTitle, active && styles.visibilityTitleActive]}>{title}</Text>
+        <Text style={[styles.visibilityText, active && styles.visibilityTextActive]}>{description}</Text>
+      </View>
+    </Pressable>
+  );
+}
+
+function PhotoPicker({
+  title,
+  hint,
+  photos,
+  target,
+  onAdd,
+  onRemove,
+}: {
+  title: string;
+  hint: string;
+  photos: string[];
+  target: PhotoTarget;
+  onAdd: (target: PhotoTarget) => void;
+  onRemove: (target: PhotoTarget, uri: string) => void;
+}) {
+  return (
+    <View style={styles.pickerBlock}>
+      <View style={styles.pickerHeader}>
+        <View style={styles.pickerCopy}>
+          <Text style={styles.pickerTitle}>{title}</Text>
+          <Text style={styles.pickerHint}>{hint}</Text>
+        </View>
+        <Pressable style={styles.addPhotoButton} onPress={() => onAdd(target)}>
+          <Ionicons name="add" size={18} color="#630E13" />
+          <Text style={styles.addPhotoText}>Add</Text>
+        </Pressable>
+      </View>
+
+      {photos.length ? (
+        <View style={styles.pickerGrid}>
+          {photos.map((uri) => (
+            <View key={uri} style={styles.pickerPhotoWrap}>
+              <Image source={{ uri }} style={styles.pickerPhoto} />
+              <Pressable style={styles.removePhotoButton} onPress={() => onRemove(target, uri)}>
+                <Ionicons name="close-circle" size={22} color="#FFFFFF" />
+              </Pressable>
+            </View>
           ))}
         </View>
-
-        <TextInput
-          value={review}
-          onChangeText={setReview}
-          multiline
-          placeholder="How was the trail, the route, and the overall experience?"
-          placeholderTextColor="#9B8B78"
-          style={styles.reviewInput}
-        />
-
-        <Text style={styles.sectionTitle}>Privacy</Text>
-        <View style={styles.visibilityRow}>
-          <Pressable
-            style={[styles.visibilityCard, visibility === 'public' && styles.visibilityCardActive]}
-            onPress={() => setVisibility('public')}
-          >
-            <Ionicons name="megaphone-outline" size={18} color={visibility === 'public' ? '#fff' : '#630E13'} />
-            <View style={styles.visibilityCopy}>
-              <Text style={[styles.visibilityTitle, visibility === 'public' && styles.visibilityTitleActive]}>Make it a post</Text>
-              <Text style={[styles.visibilityText, visibility === 'public' && styles.visibilityTextActive]}>
-                Send this hike to the share flow with your review and photos.
-              </Text>
-            </View>
-          </Pressable>
-
-          <Pressable
-            style={[styles.visibilityCard, visibility === 'private' && styles.visibilityCardActive]}
-            onPress={() => setVisibility('private')}
-          >
-            <Ionicons name="lock-closed-outline" size={18} color={visibility === 'private' ? '#fff' : '#630E13'} />
-            <View style={styles.visibilityCopy}>
-              <Text style={[styles.visibilityTitle, visibility === 'private' && styles.visibilityTitleActive]}>Keep it private</Text>
-              <Text style={[styles.visibilityText, visibility === 'private' && styles.visibilityTextActive]}>
-                Save the completion and review without creating a public post.
-              </Text>
-            </View>
-          </Pressable>
-        </View>
-
-        <Pressable style={[styles.submitButton, isSaving && styles.submitButtonDisabled]} onPress={handleSubmit} disabled={isSaving}>
-          {isSaving ? <ActivityIndicator color="#fff" /> : <Text style={styles.submitButtonText}>Save hike</Text>}
+      ) : (
+        <Pressable style={styles.emptyPicker} onPress={() => onAdd(target)}>
+          <Ionicons name="images-outline" size={22} color="#8A7A6A" />
+          <Text style={styles.emptyPhotosText}>Add pictures from this hike or your library.</Text>
         </Pressable>
-      </ScrollView>
+      )}
     </View>
   );
 }
@@ -226,6 +456,41 @@ const styles = StyleSheet.create({
     marginTop: 4,
     fontSize: 14,
     color: '#7B6D5A',
+  },
+  stepRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  stepPill: {
+    minHeight: 34,
+    borderRadius: 17,
+    paddingHorizontal: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E7D8C3',
+  },
+  stepPillActive: {
+    backgroundColor: '#630E13',
+    borderColor: '#630E13',
+  },
+  stepPillText: {
+    color: '#7B6D5A',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  stepPillTextActive: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  stepLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: '#E7D8C3',
+    marginHorizontal: 8,
   },
   summaryCard: {
     borderRadius: 24,
@@ -298,6 +563,82 @@ const styles = StyleSheet.create({
     color: '#2C2418',
     fontSize: 15,
     lineHeight: 22,
+  },
+  pickerBlock: {
+    marginTop: 14,
+    borderRadius: 22,
+    padding: 14,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E7D8C3',
+  },
+  pickerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  pickerCopy: {
+    flex: 1,
+  },
+  pickerTitle: {
+    color: '#2C2418',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  pickerHint: {
+    marginTop: 3,
+    color: '#7B6D5A',
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  addPhotoButton: {
+    minHeight: 40,
+    borderRadius: 16,
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: '#F6E9DE',
+  },
+  addPhotoText: {
+    color: '#630E13',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  pickerGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 12,
+  },
+  pickerPhotoWrap: {
+    width: '30.5%',
+    aspectRatio: 1,
+    borderRadius: 14,
+    overflow: 'hidden',
+    backgroundColor: '#EADFD1',
+  },
+  pickerPhoto: {
+    width: '100%',
+    height: '100%',
+  },
+  removePhotoButton: {
+    position: 'absolute',
+    top: 4,
+    right: 4,
+  },
+  emptyPicker: {
+    minHeight: 84,
+    marginTop: 12,
+    borderRadius: 18,
+    borderWidth: 1.5,
+    borderColor: '#E7D8C3',
+    borderStyle: 'dashed',
+    backgroundColor: '#FFF8F1',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 14,
+    gap: 6,
   },
   visibilityRow: {
     gap: 12,

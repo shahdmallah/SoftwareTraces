@@ -37,11 +37,14 @@ type ExploreTrailCardProps = {
   isArabic: boolean;
   isSaved: boolean;
   isSaving: boolean;
+  isDownloaded: boolean;
+  isDownloading: boolean;
   mediaImages?: string[];
   t: (key: TranslationKey) => string;
   onOpen: () => void;
   onOpenMap: () => void;
   onToggleSaved: () => void;
+  onDownload: () => void;
 };
 
 function buildGalleryImages(mediaImages: string[] = []) {
@@ -176,11 +179,14 @@ export function ExploreTrailCard({
   isArabic,
   isSaved,
   isSaving,
+  isDownloaded,
+  isDownloading,
   mediaImages = [],
   t,
   onOpen,
   onOpenMap,
   onToggleSaved,
+  onDownload,
 }: ExploreTrailCardProps) {
   const scale = React.useRef(new Animated.Value(1)).current;
   const trailImages = React.useMemo(() => buildGalleryImages(mediaImages), [mediaImages]);
@@ -335,13 +341,26 @@ export function ExploreTrailCard({
             </View>
 
             <Pressable
-              style={({ pressed }) => [styles.cardMapAction, pressed && styles.cardActionIconPressed]}
+              style={({ pressed }) => [
+                styles.cardMapAction,
+                isDownloaded && styles.cardMapActionDownloaded,
+                pressed && styles.cardActionIconPressed,
+              ]}
+              disabled={isDownloading}
               onPress={(e) => {
                 e.stopPropagation();
-                onOpenMap();
+                onDownload();
               }}
             >
-              <Ionicons name="cloud-download-sharp" size={36} color="#630E13" />
+              {isDownloading ? (
+                <ActivityIndicator color="#630E13" />
+              ) : (
+                <Ionicons
+                  name={isDownloaded ? 'cloud-done' : 'cloud-download-sharp'}
+                  size={36}
+                  color={isDownloaded ? '#1E7A46' : '#630E13'}
+                />
+              )}
             </Pressable>
           </View>
 

@@ -282,6 +282,18 @@ export async function getFeed(req: Request, res: Response): Promise<void> {
         SELECT ap.id
         FROM activity_posts ap
         WHERE ap.visibility = 'public'
+           OR (
+             ap.visibility = 'friends'
+             AND (
+               ap.user_id = $1::uuid
+               OR EXISTS (
+                 SELECT 1
+                 FROM user_follows activity_post_follow
+                 WHERE activity_post_follow.follower_id = $1::uuid
+                   AND activity_post_follow.following_id = ap.user_id
+               )
+             )
+           )
       )
       SELECT COUNT(*) AS count
       FROM feed_rows
@@ -385,6 +397,18 @@ export async function getFeed(req: Request, res: Response): Promise<void> {
         JOIN profiles p ON p.id = ap.user_id
         LEFT JOIN trails t ON t.id = a.trail_id
         WHERE ap.visibility = 'public'
+           OR (
+             ap.visibility = 'friends'
+             AND (
+               ap.user_id = $1::uuid
+               OR EXISTS (
+                 SELECT 1
+                 FROM user_follows activity_post_follow
+                 WHERE activity_post_follow.follower_id = $1::uuid
+                   AND activity_post_follow.following_id = ap.user_id
+               )
+             )
+           )
       )
       SELECT *
       FROM feed_rows

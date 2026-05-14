@@ -130,11 +130,18 @@ export const exploreTrailCardStyles = StyleSheet.create({
     letterSpacing: -0.4,
   },
   cardMapAction: {
-  padding: 6,        
-  marginLeft: 8,
-  borderRadius: 0,   
-  backgroundColor: 'transparent',
-},
+    minWidth: 48,
+    minHeight: 48,
+    padding: 6,
+    marginLeft: 8,
+    borderRadius: 24,
+    backgroundColor: 'transparent',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cardMapActionDownloaded: {
+    backgroundColor: '#E8F3EC',
+  },
   cardActionIconPressed: {
     opacity: 0.7,
   },

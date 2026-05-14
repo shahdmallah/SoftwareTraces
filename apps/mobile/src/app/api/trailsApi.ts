@@ -215,7 +215,7 @@ function toApiDifficulty(value: TrailDifficulty): TrailDifficultyApi {
   return value.toLowerCase() as TrailDifficultyApi;
 }
 
-function normalizeTrail(trail: Trail): Trail {
+export function normalizeTrail(trail: Trail): Trail {
   return {
     ...trail,
     difficulty: normalizeDifficulty(trail.difficulty),
@@ -231,17 +231,11 @@ function normalizeTrail(trail: Trail): Trail {
 
 export async function createTrail(payload: {
   name: string;
-  name_ar?: string;
   description?: string;
-  description_ar?: string;
-  region: string;
-  region_ar?: string;
-  features?: string[];
-  features_ar?: string[];
   coordinates: [number, number][];
   stats: TrailStatsResponse;
 }) {
-  return apiRequest<Envelope<{ id: string }>>('/api/trails', {
+  return apiRequest<Envelope<Trail>>('/api/trails', {
     method: 'POST',
     body: JSON.stringify(payload),
   });

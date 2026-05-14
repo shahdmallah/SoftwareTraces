@@ -6,7 +6,7 @@ import Mapbox from '@rnmapbox/maps';
 import type { Feature, FeatureCollection, LineString, Point } from 'geojson';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { createTrail, uploadTrailPhoto, getTrailStats, type TrailStatsResponse } from '../api/trailsApi';
+import { createTrail, uploadTrailPhoto, getTrailStats, publishTrail, type TrailStatsResponse } from '../api/trailsApi';
 import { setTrailRouteCoordinates } from '../state/trailRoutes';
 
 type LngLat = [number, number];
@@ -14,13 +14,7 @@ type DrawingStage = 'start' | 'middle' | 'end';
 
 type SaveTrailBody = {
   name: string;
-  name_ar?: string;
-  description: string;
-  description_ar?: string;
-  region: string;
-  region_ar?: string;
-  features: string[];
-  features_ar?: string[];
+  description?: string;
   coordinates: LngLat[];
   stats: TrailStatsResponse;
 };
@@ -39,7 +33,7 @@ export type TrailCreatorProps = {
   styleURL?: string;
   initialCenter?: LngLat;
   initialZoom?: number;
-  onSaved?: (payload: SaveTrailBody & { id?: string }) => void;
+  onSaved?: (payload: SaveTrailBody & { id?: string; status: 'draft' | 'published' }) => void;
 };
 
 const MAPBOX_ACCESS_TOKEN = process.env.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN ?? '';
@@ -61,23 +55,6 @@ function formatDuration(minutes: number) {
   const m = Math.round(minutes % 60);
   if (h <= 0) return `${m}m`;
   return `${h}h ${m}m`;
-}
-
-async function translateText(text: string, from: string, to: string): Promise<string> {
-  if (!text.trim()) return text;
-  try {
-    const response = await fetch(`https://translate.googleapis.com/translate_a/single?client=gtx&sl=${from}&tl=${to}&dt=t&q=${encodeURIComponent(text)}`);
-    const data = await response.json();
-    return data[0][0][0];
-  } catch (error) {
-    console.warn('Translation failed:', error);
-    return text; // Fallback to original text
-  }
-}
-
-function isArabic(text: string): boolean {
-  const arabicRegex = /[\u0600-\u06FF]/;
-  return arabicRegex.test(text);
 }
 
 async function pickTrailImage(): Promise<string | null> {
@@ -301,7 +278,7 @@ export function TrailCreator({
   const [features, setFeatures] = useState<string[]>([]);
   const [trailImage, setTrailImage] = useState<string | null>(null);
   const [isPickingImage, setIsPickingImage] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
+  const [savingMode, setSavingMode] = useState<'draft' | 'published' | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState<string | null>(null);
 
@@ -447,47 +424,24 @@ export function TrailCreator({
     }
   };
 
-  const save = async () => {
+  const save = async (status: 'draft' | 'published') => {
     if (!isFinished || !stats) return;
     if (!name.trim()) {
       Alert.alert('Missing name', 'Please enter a trail name.');
       return;
     }
-    if (isRegionLoading) {
-      Alert.alert('Waiting for region', 'Please wait until the start point region is determined.');
-      return;
-    }
-    if (!region.trim()) {
-      Alert.alert('Missing region', 'Could not determine region from the start point. Please try a different start location.');
+    if (status === 'published' && !description.trim()) {
+      Alert.alert('Missing description', 'Please add a description before publishing this trail.');
       return;
     }
 
-    setIsSaving(true);
+    setSavingMode(status);
     setSaveError(null);
     setSaveSuccess(null);
     try {
-      // Handle translations
-      const nameAr = isArabic(name) ? name : await translateText(name, 'en', 'ar');
-      const nameEn = isArabic(name) ? await translateText(name, 'ar', 'en') : name;
-      
-      const descAr = isArabic(description) ? description : await translateText(description, 'en', 'ar');
-      const descEn = isArabic(description) ? await translateText(description, 'ar', 'en') : description;
-      
-      const regionAr = isArabic(region) ? region : await translateText(region, 'en', 'ar');
-      const regionEn = isArabic(region) ? await translateText(region, 'ar', 'en') : region;
-      
-      const featuresAr = await Promise.all(features.map(async f => isArabic(f) ? f : await translateText(f, 'en', 'ar')));
-      const featuresEn = await Promise.all(features.map(async f => isArabic(f) ? await translateText(f, 'ar', 'en') : f));
-
       const payload: SaveTrailBody = {
-        name: nameEn,
-        name_ar: nameAr,
-        description: descEn,
-        description_ar: descAr,
-        region: regionEn,
-        region_ar: regionAr,
-        features: featuresEn,
-        features_ar: featuresAr,
+        name: name.trim(),
+        description: description.trim() || undefined,
         coordinates: routeCoordinates,
         stats,
       };
@@ -501,13 +455,17 @@ export function TrailCreator({
         }
       }
 
+      if (status === 'published') {
+        await publishTrail(json.data.id);
+      }
+
       setTrailRouteCoordinates(json.data.id, routeCoordinates);
-      setSaveSuccess('Saved!');
-      onSaved?.({ ...payload, id: json.data.id });
+      setSaveSuccess(status === 'published' ? 'Published!' : 'Draft saved!');
+      onSaved?.({ ...payload, id: json.data.id, status });
     } catch (e) {
-      setSaveError(e instanceof Error ? e.message : 'Failed to save trail.');
+      setSaveError(e instanceof Error ? e.message : status === 'published' ? 'Failed to publish trail.' : 'Failed to save draft.');
     } finally {
-      setIsSaving(false);
+      setSavingMode(null);
     }
   };
 
@@ -850,16 +808,30 @@ export function TrailCreator({
                 {saveSuccess ? <Text style={styles.successText}>{saveSuccess}</Text> : null}
 
                 <Pressable
-                  style={[styles.saveButton, (!stats || isSaving) && { opacity: 0.7 }]}
-                  disabled={!stats || isSaving}
-                  onPress={save}
+                  style={[styles.saveButton, (!stats || Boolean(savingMode)) && { opacity: 0.7 }]}
+                  disabled={!stats || Boolean(savingMode)}
+                  onPress={() => void save('draft')}
                 >
-                  {isSaving ? (
+                  {savingMode === 'draft' ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <>
+                      <Ionicons name="document-text-outline" size={18} color="#fff" />
+                      <Text style={styles.saveButtonText}>Save draft</Text>
+                    </>
+                  )}
+                </Pressable>
+                <Pressable
+                  style={[styles.publishButton, (!stats || Boolean(savingMode)) && { opacity: 0.7 }]}
+                  disabled={!stats || Boolean(savingMode)}
+                  onPress={() => void save('published')}
+                >
+                  {savingMode === 'published' ? (
                     <ActivityIndicator color="#fff" />
                   ) : (
                     <>
                       <Ionicons name="cloud-upload-outline" size={18} color="#fff" />
-                      <Text style={styles.saveButtonText}>Save trail</Text>
+                      <Text style={styles.saveButtonText}>Publish</Text>
                     </>
                   )}
                 </Pressable>
@@ -1135,6 +1107,16 @@ const styles = StyleSheet.create({
   saveButton: {
     marginTop: 12,
     backgroundColor: '#630E13',
+    borderRadius: 16,
+    paddingVertical: 12,
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  publishButton: {
+    marginTop: 10,
+    backgroundColor: '#0F5A38',
     borderRadius: 16,
     paddingVertical: 12,
     alignItems: 'center',

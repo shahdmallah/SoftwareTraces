@@ -30,12 +30,14 @@ type SettingItem = {
 };
 
 type ProfileLinkItem = {
-  id: 'history' | 'journal';
+  id: 'myTrails' | 'trailDrafts' | 'offlineDownloads' | 'history' | 'journal';
   icon: string;
-  labelKey: TranslationKey;
+  labelKey?: TranslationKey;
+  labelEn?: string;
+  labelAr?: string;
   subtitleEn: string;
   subtitleAr: string;
-  route: 'History' | 'Journal';
+  route: 'MyTrails' | 'TrailDrafts' | 'OfflineDownloads' | 'History' | 'Journal';
 };
 
 const settings: SettingItem[] = [
@@ -43,6 +45,33 @@ const settings: SettingItem[] = [
 ];
 
 const profileLinks: ProfileLinkItem[] = [
+  {
+    id: 'myTrails',
+    icon: 'trail-sign-outline',
+    labelEn: 'My trails',
+    labelAr: 'مساراتي',
+    subtitleEn: 'Manage published trails you created',
+    subtitleAr: 'إدارة المسارات المنشورة التي أنشأتها',
+    route: 'MyTrails',
+  },
+  {
+    id: 'trailDrafts',
+    icon: 'create-outline',
+    labelEn: 'Trail drafts',
+    labelAr: 'مسودات المسارات',
+    subtitleEn: 'Finish, publish, or delete draft trails',
+    subtitleAr: 'أكمل المسودات أو انشرها أو احذفها',
+    route: 'TrailDrafts',
+  },
+  {
+    id: 'offlineDownloads',
+    icon: 'cloud-download-outline',
+    labelEn: 'Offline downloads',
+    labelAr: 'تنزيلات بلا إنترنت',
+    subtitleEn: 'Maps and sync tools for low-signal hikes',
+    subtitleAr: 'خرائط ومزامنة للرحلات دون اتصال قوي',
+    route: 'OfflineDownloads',
+  },
   {
     id: 'history',
     icon: 'time-outline',
@@ -423,8 +452,16 @@ export function ProfileScreen() {
           </View>
         </AnimatedBlock>
 
-        {/* Journal & History */}
+        {/* Trail workspace */}
         <AnimatedBlock delay={200} style={styles.section}>
+          <View style={[styles.sectionHeader, isArabic && styles.rowReverse]}>
+            <View style={[styles.sectionTitleRow, isArabic && styles.rowReverse]}>
+              <Ionicons name="trail-sign-outline" size={20} color="#630E13" />
+              <Text style={[styles.sectionTitle, isArabic && styles.textRight, isArabic && styles.textRtl]}>
+                {isArabic ? 'مساحة المسارات' : 'Trail workspace'}
+              </Text>
+            </View>
+          </View>
           <View style={styles.profileLinksPanel}>
             {profileLinks.map((item, index) => (
               <Pressable
@@ -439,12 +476,12 @@ export function ProfileScreen() {
               >
                 <View style={styles.settingIconWrapper}>
                   <View style={styles.settingIconGradient}>
-                    <Ionicons name={item.icon as any} size={18} color="#630E13" />
-                  </View>
+                  <Ionicons name={item.icon as any} size={18} color="#630E13" />
                 </View>
-                <View style={[styles.settingTextWrapper, isArabic && styles.settingTextWrapperRtl]}>
-                  <Text style={[styles.settingTitle, isArabic && styles.textRight, isArabic && styles.textRtl]}>
-                    {t(item.labelKey)}
+              </View>
+              <View style={[styles.settingTextWrapper, isArabic && styles.settingTextWrapperRtl]}>
+                <Text style={[styles.settingTitle, isArabic && styles.textRight, isArabic && styles.textRtl]}>
+                    {item.labelKey ? t(item.labelKey) : isArabic ? item.labelAr : item.labelEn}
                   </Text>
                   <Text style={[styles.settingSubtitle, isArabic && styles.textRight, isArabic && styles.textRtl]}>
                     {isArabic ? item.subtitleAr : item.subtitleEn}

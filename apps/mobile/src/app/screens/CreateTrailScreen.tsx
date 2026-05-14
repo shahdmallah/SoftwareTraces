@@ -4,6 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { RootStackParamList } from '../navigation/types';
+import { trackOwnedTrail } from '../state/ownedTrails';
 
 const MAPBOX_STYLE_URL =
   process.env.EXPO_PUBLIC_MAPBOX_STYLE_URL ?? 'mapbox://styles/shahdmallah/cmnqgt687000h01s66inve68a';
@@ -33,7 +34,12 @@ export function CreateTrailScreen() {
           styleURL={MAPBOX_STYLE_URL}
           onSaved={(payload) => {
             if (payload.id) {
-              navigation.replace('TrailDetail', { trailId: payload.id });
+              trackOwnedTrail(payload.id, payload.status);
+              if (payload.status === 'draft') {
+                navigation.replace('TrailDrafts');
+              } else {
+                navigation.replace('TrailDetail', { trailId: payload.id });
+              }
             }
           }}
         />

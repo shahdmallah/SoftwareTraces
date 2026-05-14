@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { FlatList, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { useNavigation } from '@react-navigation/native';
@@ -83,11 +83,19 @@ export function JournalScreen() {
                 <Text style={[styles.groupTitle, isArabic ? rtlText : ltrText]}>{group}</Text>
                 {entryGroups[group].map((item) => (
                   <AnimatedBlock key={item.id} delay={40} style={styles.entryCard}>
+                    {item.photoUris?.[0] ? (
+                      <Image source={{ uri: item.photoUris[0] }} style={styles.entryImage} resizeMode="cover" />
+                    ) : null}
                     <View style={styles.entryHeader}>
                       <Text style={[styles.entryTrail, isArabic ? rtlText : ltrText]}>{item.trail}</Text>
                       <Text style={[styles.entryDate, isArabic ? rtlText : ltrText]}>{new Date(item.createdAt).toLocaleDateString(isArabic ? 'ar' : 'en-US')}</Text>
                     </View>
                     <Text style={[styles.entryNote, isArabic ? rtlText : ltrText]}>{item.note}</Text>
+                    {item.photoUris && item.photoUris.length > 1 ? (
+                      <Text style={[styles.entryMeta, isArabic ? rtlText : ltrText]}>
+                        {isArabic ? `${item.photoUris.length} صور محفوظة` : `${item.photoUris.length} saved photos`}
+                      </Text>
+                    ) : null}
                     {item.date ? (
                       <Text style={[styles.entryMeta, isArabic ? rtlText : ltrText]}>{isArabic ? 'تاريخ الرحلة: ' : 'Trail date: '}{item.date}</Text>
                     ) : null}
@@ -133,6 +141,7 @@ const styles = StyleSheet.create({
   groupSection: { marginBottom: 18 },
   groupTitle: { marginHorizontal: 16, marginBottom: 10, fontSize: 16, fontWeight: '900', color: '#2C2418' },
   entryCard: { marginBottom: 14, marginHorizontal: 16, borderRadius: 24, padding: 18, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#EEE5DA' },
+  entryImage: { height: 180, borderRadius: 18, marginBottom: 14, backgroundColor: '#E7D8C3' },
   entryHeader: { marginBottom: 10 },
   entryTrail: { fontSize: 16, fontWeight: '900', color: '#2C2418' },
   entryDate: { marginTop: 4, fontSize: 12, color: '#8A7A6A' },

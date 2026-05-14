@@ -1,6 +1,6 @@
 /**
- * Payload passed from TrailReview → ActivityShare after a completed hike.
- * Maps to session data, trail API models, and review submission — no fabricated fields.
+ * Payload passed from TrailReview -> ActivityShare after a completed hike.
+ * Review fields are for the trail review; post fields are for the Activity recap.
  */
 export type TrailCompletionDraft = {
   activityId?: string;
@@ -16,6 +16,10 @@ export type TrailCompletionDraft = {
   regionAr?: string;
   rating: number;
   review: string;
+  reviewPhotoUris?: string[];
+  postCaption?: string;
+  postPhotoUris?: string[];
+  postVisibility?: 'public' | 'friends' | 'private';
   photoUris: string[];
   completedAtIso: string;
   durationMs: number;

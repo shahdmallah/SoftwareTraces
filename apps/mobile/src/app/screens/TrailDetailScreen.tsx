@@ -371,6 +371,7 @@ export function TrailDetailScreen() {
             isSaved={isSaved}
             isSaving={isSaving}
             miniRoutePath={miniRoutePath}
+            mapImageUri={mapImageUri}
           />
         </AnimatedBlock>
 

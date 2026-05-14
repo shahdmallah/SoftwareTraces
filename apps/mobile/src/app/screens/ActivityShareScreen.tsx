@@ -138,7 +138,10 @@ export function ActivityShareScreen() {
   };
 
   if (draft) {
-    const heroPhoto = draft.photoUris[0] ?? '';
+    const reviewPhotos = draft.reviewPhotoUris ?? draft.photoUris;
+    const postPhotos = draft.postPhotoUris ?? draft.photoUris;
+    const postCaption = draft.postCaption?.trim() || draft.review;
+    const heroPhoto = postPhotos[0] ?? reviewPhotos[0] ?? '';
     const region = isArabic ? draft.regionAr ?? draft.region : draft.region;
     const completedLabel = formatCompletionDate(draft.completedAtIso, isArabic);
 
@@ -191,7 +194,7 @@ export function ActivityShareScreen() {
           />
 
           <PhotoGalleryStrip
-            photoUris={draft.photoUris}
+            photoUris={reviewPhotos}
             isArabic={isArabic}
             isOwner={isOwnDraft}
             ownerName={publisherName}
@@ -202,7 +205,7 @@ export function ActivityShareScreen() {
               trailName={isArabic ? draft.trailNameAr ?? draft.trailName : draft.trailName}
               heroUri={heroPhoto || draft.trailImage || ''}
               rating={draft.rating}
-              reviewExcerpt={draft.review}
+              reviewExcerpt={postCaption}
               durationMs={draft.durationMs}
               isArabic={isArabic}
             />

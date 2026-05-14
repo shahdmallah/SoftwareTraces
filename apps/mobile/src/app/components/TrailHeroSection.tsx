@@ -26,6 +26,7 @@ interface TrailHeroSectionProps {
   isSaved: boolean;
   isSaving: boolean;
   miniRoutePath: string;
+  mapImageUri: string;
 }
 
 export function TrailHeroSection({
@@ -39,6 +40,7 @@ export function TrailHeroSection({
   isSaved,
   isSaving,
   miniRoutePath,
+  mapImageUri,
 }: TrailHeroSectionProps) {
   const [loadedImages, setLoadedImages] = useState<Record<number, boolean>>({});
 
@@ -73,7 +75,7 @@ export function TrailHeroSection({
           </ScrollView>
         ) : (
           <Pressable style={styles.mapHero} onPress={onMapPress}>
-            <RoutePreviewHero path={miniRoutePath} />
+            <RoutePreviewHero path={miniRoutePath} mapImageUri={mapImageUri} />
           </Pressable>
         )}
 
@@ -122,19 +124,27 @@ export function TrailHeroSection({
   );
 }
 
-function RoutePreviewHero({ path }: { path: string }) {
+function RoutePreviewHero({ path, mapImageUri }: { path: string; mapImageUri: string }) {
   return (
-    <Svg width="100%" height="100%" viewBox="0 0 172 120" preserveAspectRatio="xMidYMid slice">
-      <Rect width="172" height="120" rx="0" fill="#F7F1E4" />
-      <Path d="M 0 0 C 34 16, 42 54, 26 120 L 0 120 Z" fill="#A9D5EB" />
-      <Path d="M 48 8 L 58 112" stroke="rgba(60,53,40,0.15)" strokeWidth={4} strokeLinecap="round" />
-      <Path d="M 78 6 L 88 114" stroke="rgba(60,53,40,0.12)" strokeWidth={3.5} strokeLinecap="round" />
-      <Path d="M 116 10 L 126 108" stroke="rgba(60,53,40,0.12)" strokeWidth={3.5} strokeLinecap="round" />
-      <Path d="M 26 30 C 58 18, 104 20, 150 30" stroke="rgba(60,53,40,0.12)" strokeWidth={4} strokeLinecap="round" fill="none" />
-      <Path d="M 24 60 C 66 48, 96 66, 158 52" stroke="rgba(60,53,40,0.1)" strokeWidth={3.5} strokeLinecap="round" fill="none" />
-      <Path d="M 22 90 C 70 78, 104 96, 160 84" stroke="rgba(60,53,40,0.12)" strokeWidth={3.5} strokeLinecap="round" fill="none" />
-      <Path d={path} stroke="#34B94A" strokeWidth={7} strokeLinecap="round" strokeLinejoin="round" fill="none" />
-    </Svg>
+    <View style={styles.routePreviewHero}>
+      {mapImageUri ? <Image source={{ uri: mapImageUri }} style={styles.mapHeroImage} resizeMode="cover" /> : null}
+      <Svg width="100%" height="100%" viewBox="0 0 172 120" preserveAspectRatio="xMidYMid slice" style={styles.mapHeroOverlay}>
+        {!mapImageUri ? (
+          <>
+            <Rect width="172" height="120" rx="0" fill="#F7F1E4" />
+            <Path d="M 0 0 C 34 16, 42 54, 26 120 L 0 120 Z" fill="#A9D5EB" />
+            <Path d="M 48 8 L 58 112" stroke="rgba(60,53,40,0.15)" strokeWidth={4} strokeLinecap="round" />
+            <Path d="M 78 6 L 88 114" stroke="rgba(60,53,40,0.12)" strokeWidth={3.5} strokeLinecap="round" />
+            <Path d="M 116 10 L 126 108" stroke="rgba(60,53,40,0.12)" strokeWidth={3.5} strokeLinecap="round" />
+            <Path d="M 26 30 C 58 18, 104 20, 150 30" stroke="rgba(60,53,40,0.12)" strokeWidth={4} strokeLinecap="round" fill="none" />
+            <Path d="M 24 60 C 66 48, 96 66, 158 52" stroke="rgba(60,53,40,0.1)" strokeWidth={3.5} strokeLinecap="round" fill="none" />
+            <Path d="M 22 90 C 70 78, 104 96, 160 84" stroke="rgba(60,53,40,0.12)" strokeWidth={3.5} strokeLinecap="round" fill="none" />
+          </>
+        ) : null}
+        <Path d={path} stroke="rgba(255,255,255,0.95)" strokeWidth={10} strokeLinecap="round" strokeLinejoin="round" fill="none" />
+        <Path d={path} stroke="#34B94A" strokeWidth={6} strokeLinecap="round" strokeLinejoin="round" fill="none" />
+      </Svg>
+    </View>
   );
 }
 
@@ -209,6 +219,17 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
     backgroundColor: '#F7F1E4',
+  },
+  routePreviewHero: {
+    width: '100%',
+    height: '100%',
+    position: 'relative',
+  },
+  mapHeroImage: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  mapHeroOverlay: {
+    ...StyleSheet.absoluteFillObject,
   },
 
   overlay: {

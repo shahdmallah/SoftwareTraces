@@ -7,6 +7,7 @@ export type JournalEntry = {
   trail: string;
   note: string;
   date?: string;
+  photoUris?: string[];
 };
 
 const localFeedItems: FeedItem[] = [];
