@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   Image,
   Keyboard,
@@ -25,14 +26,17 @@ import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { addLocalFeedItem } from '../data/localSocial';
 import { getFollowers, getFollowing, type SocialProfile } from '../api/socialApi';
+import { getWeatherForecast, type WeatherForecast } from '../api/weatherApi';
 import { RootStackParamList } from '../navigation/types';
 import { ltrRow, ltrText, rtlRow, rtlText } from '../utils/direction';
+import { formatPercent, formatTemperature, formatWind, getWeatherVisual } from '../utils/weatherUtils';
 
 type ComposerRouteProp = RouteProp<RootStackParamList, 'ActivityShareComposer'>;
 type ComposerNavigationProp = StackNavigationProp<RootStackParamList, 'ActivityShareComposer'>;
 type MapboxModule = typeof import('@rnmapbox/maps');
 type LngLat = [number, number];
 type PlanVisibility = 'public' | 'private';
+type DeparturePeriod = 'AM' | 'PM';
 
 const MAPBOX_ACCESS_TOKEN = process.env.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN ?? '';
 const MAPBOX_STYLE_URL =
@@ -44,15 +48,35 @@ const BRING_OPTIONS = [
   { en: 'Hat', ar: 'قبعة' },
   { en: 'Sunscreen', ar: 'واقي شمس' },
   { en: 'Light jacket', ar: 'معطف خفيف' },
+  { en: 'Warm layer', ar: 'طبقة دافئة' },
+  { en: 'Rain jacket', ar: 'معطف مطر' },
   { en: 'Snacks', ar: 'وجبات خفيفة' },
+  { en: 'Lunch', ar: 'غداء' },
+  { en: 'Electrolytes', ar: 'أملاح وسوائل' },
   { en: 'First aid kit', ar: 'حقيبة إسعاف' },
   { en: 'Power bank', ar: 'شاحن متنقل' },
+  { en: 'Headlamp', ar: 'مصباح رأس' },
+  { en: 'Trekking poles', ar: 'عصي مشي' },
+  { en: 'Offline map', ar: 'خريطة بدون إنترنت' },
+  { en: 'ID or permit', ar: 'هوية أو تصريح' },
+  { en: 'Personal medication', ar: 'أدوية شخصية' },
   { en: 'Comfortable shoes', ar: 'حذاء مريح' },
 ];
 
 const TRIP_DESCRIPTION_OPTIONS = [
+  { en: 'Adults only', ar: 'للبالغين فقط' },
+  { en: 'Kids welcome', ar: 'الأطفال مرحب بهم' },
+  { en: 'Teen friendly', ar: 'مناسب للمراهقين' },
+  { en: 'Family friendly', ar: 'مناسب للعائلة' },
+  { en: 'Beginner friendly', ar: 'مناسب للمبتدئين' },
+  { en: 'Some hiking experience', ar: 'يحتاج خبرة مشي بسيطة' },
+  { en: 'Experienced hikers', ar: 'للمتمرسين' },
   { en: 'Easy pace', ar: 'وتيرة سهلة' },
   { en: 'Moderate pace', ar: 'وتيرة متوسطة' },
+  { en: 'Strong pace', ar: 'وتيرة قوية' },
+  { en: 'Low intensity', ar: 'جهد خفيف' },
+  { en: 'Moderate fitness needed', ar: 'يحتاج لياقة متوسطة' },
+  { en: 'High stamina needed', ar: 'يحتاج تحمل عالي' },
   { en: 'Challenging climbs', ar: 'صعود صعب' },
   { en: 'Photo stops', ar: 'توقفات للتصوير' },
   { en: 'Coffee stop', ar: 'استراحة قهوة' },
@@ -158,15 +182,166 @@ const pillStyles = StyleSheet.create({
 
 // ─── Reusable bottom-sheet modal ──────────────────────────────────────────────
 
+function formatDepartureTime(hour: number, minute: number, period: DeparturePeriod) {
+  return `${hour}:${String(minute).padStart(2, '0')} ${period}`;
+}
+
+type DepartureTimePickerProps = {
+  visible: boolean;
+  hour: number;
+  minute: number;
+  period: DeparturePeriod;
+  isArabic: boolean;
+  onClose: () => void;
+  onConfirm: (hour: number, minute: number, period: DeparturePeriod) => void;
+};
+
+function DepartureTimePicker({ visible, hour, minute, period, isArabic, onClose, onConfirm }: DepartureTimePickerProps) {
+  const [draftHour, setDraftHour] = useState(hour);
+  const [draftMinute, setDraftMinute] = useState(minute);
+  const [draftPeriod, setDraftPeriod] = useState<DeparturePeriod>(period);
+
+  useEffect(() => {
+    if (!visible) return;
+    setDraftHour(hour);
+    setDraftMinute(minute);
+    setDraftPeriod(period);
+  }, [hour, minute, period, visible]);
+
+  const bumpHour = (delta: number) => {
+    setDraftHour((current) => {
+      const next = current + delta;
+      if (next > 12) return 1;
+      if (next < 1) return 12;
+      return next;
+    });
+  };
+
+  const bumpMinute = (delta: number) => {
+    setDraftMinute((current) => {
+      const next = current + delta;
+      if (next >= 60) return 0;
+      if (next < 0) return 55;
+      return next;
+    });
+  };
+
+  const quickTimes: Array<{ hour: number; minute: number; period: DeparturePeriod; icon: keyof typeof Ionicons.glyphMap }> = [
+    { hour: 5, minute: 30, period: 'AM', icon: 'sunny-outline' },
+    { hour: 6, minute: 0, period: 'AM', icon: 'partly-sunny-outline' },
+    { hour: 4, minute: 30, period: 'PM', icon: 'cloudy-night-outline' },
+    { hour: 7, minute: 0, period: 'PM', icon: 'moon-outline' },
+  ];
+
+  return (
+    <PickerModal visible={visible} title={isArabic ? 'وقت الانطلاق' : 'Departure time'} onClose={onClose} hideDone>
+      <View style={timePickerStyles.face}>
+        <Text style={timePickerStyles.preview}>{formatDepartureTime(draftHour, draftMinute, draftPeriod)}</Text>
+        <View style={[timePickerStyles.columns, isArabic && timePickerStyles.columnsRtl]}>
+          <View style={timePickerStyles.column}>
+            <Pressable style={timePickerStyles.stepBtn} onPress={() => bumpHour(1)}>
+              <Ionicons name="chevron-up" size={22} color="#630E13" />
+            </Pressable>
+            <Text style={timePickerStyles.number}>{String(draftHour).padStart(2, '0')}</Text>
+            <Pressable style={timePickerStyles.stepBtn} onPress={() => bumpHour(-1)}>
+              <Ionicons name="chevron-down" size={22} color="#630E13" />
+            </Pressable>
+          </View>
+          <Text style={timePickerStyles.separator}>:</Text>
+          <View style={timePickerStyles.column}>
+            <Pressable style={timePickerStyles.stepBtn} onPress={() => bumpMinute(5)}>
+              <Ionicons name="chevron-up" size={22} color="#630E13" />
+            </Pressable>
+            <Text style={timePickerStyles.number}>{String(draftMinute).padStart(2, '0')}</Text>
+            <Pressable style={timePickerStyles.stepBtn} onPress={() => bumpMinute(-5)}>
+              <Ionicons name="chevron-down" size={22} color="#630E13" />
+            </Pressable>
+          </View>
+        </View>
+        <View style={timePickerStyles.periodRow}>
+          {(['AM', 'PM'] as DeparturePeriod[]).map((option) => {
+            const active = draftPeriod === option;
+            return (
+              <Pressable
+                key={option}
+                style={[timePickerStyles.periodBtn, active && timePickerStyles.periodBtnActive]}
+                onPress={() => setDraftPeriod(option)}
+              >
+                <Text style={[timePickerStyles.periodText, active && timePickerStyles.periodTextActive]}>{option}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      </View>
+
+      <View style={timePickerStyles.quickRow}>
+        {quickTimes.map((option) => {
+          const label = formatDepartureTime(option.hour, option.minute, option.period);
+          const active = draftHour === option.hour && draftMinute === option.minute && draftPeriod === option.period;
+          return (
+            <Pressable
+              key={label}
+              style={[timePickerStyles.quickBtn, active && timePickerStyles.quickBtnActive]}
+              onPress={() => {
+                setDraftHour(option.hour);
+                setDraftMinute(option.minute);
+                setDraftPeriod(option.period);
+              }}
+            >
+              <Ionicons name={option.icon} size={16} color={active ? '#fff' : '#630E13'} />
+              <Text style={[timePickerStyles.quickText, active && timePickerStyles.quickTextActive]}>{label}</Text>
+            </Pressable>
+          );
+        })}
+      </View>
+
+      <Pressable
+        style={timePickerStyles.confirmBtn}
+        onPress={() => {
+          onConfirm(draftHour, draftMinute, draftPeriod);
+          onClose();
+        }}
+      >
+        <Ionicons name="alarm-outline" size={18} color="#fff" />
+        <Text style={timePickerStyles.confirmText}>{isArabic ? 'تأكيد الوقت' : 'Set departure time'}</Text>
+      </Pressable>
+    </PickerModal>
+  );
+}
+
+const timePickerStyles = StyleSheet.create({
+  face: { borderRadius: 22, backgroundColor: '#FFF8F1', padding: 16, alignItems: 'center' },
+  preview: { fontSize: 34, fontWeight: '900', color: '#2C2418', marginBottom: 12 },
+  columns: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 14 },
+  columnsRtl: { flexDirection: 'row-reverse' },
+  column: { width: 82, borderRadius: 20, backgroundColor: '#FFFFFF', alignItems: 'center', paddingVertical: 8 },
+  stepBtn: { width: 54, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
+  number: { fontSize: 38, fontWeight: '900', color: '#630E13', fontVariant: ['tabular-nums'] },
+  separator: { fontSize: 34, fontWeight: '900', color: '#8A7A6A' },
+  periodRow: { flexDirection: 'row', gap: 8, marginTop: 14 },
+  periodBtn: { minWidth: 74, borderRadius: 999, paddingVertical: 10, alignItems: 'center', backgroundColor: '#FFFFFF' },
+  periodBtnActive: { backgroundColor: '#630E13' },
+  periodText: { fontSize: 13, fontWeight: '900', color: '#630E13' },
+  periodTextActive: { color: '#fff' },
+  quickRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12 },
+  quickBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 9, backgroundColor: '#F6E9DE' },
+  quickBtnActive: { backgroundColor: '#630E13' },
+  quickText: { fontSize: 12, fontWeight: '800', color: '#630E13' },
+  quickTextActive: { color: '#fff' },
+  confirmBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 14, borderRadius: 16, paddingVertical: 14, backgroundColor: '#630E13' },
+  confirmText: { color: '#fff', fontSize: 14, fontWeight: '900' },
+});
+
 type PickerModalProps = {
   visible: boolean;
   title: string;
   onClose: () => void;
   children: React.ReactNode;
   large?: boolean;
+  hideDone?: boolean;
 };
 
-function PickerModal({ visible, title, onClose, children, large }: PickerModalProps) {
+function PickerModal({ visible, title, onClose, children, large, hideDone }: PickerModalProps) {
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <Pressable style={modalStyles.backdrop} onPress={onClose} />
@@ -174,9 +349,11 @@ function PickerModal({ visible, title, onClose, children, large }: PickerModalPr
         <View style={modalStyles.handle} />
         <Text style={modalStyles.title}>{title}</Text>
         {children}
-        <Pressable style={modalStyles.closeBtn} onPress={onClose}>
-          <Text style={modalStyles.closeBtnText}>Done</Text>
-        </Pressable>
+        {!hideDone && (
+          <Pressable style={modalStyles.closeBtn} onPress={onClose}>
+            <Text style={modalStyles.closeBtnText}>Done</Text>
+          </Pressable>
+        )}
       </View>
     </Modal>
   );
@@ -400,16 +577,8 @@ type MapPickerModalProps = {
   onConfirm: (label: string, coords: { lat: number; lng: number }) => void;
   isArabic: boolean;
   initialCoords?: { lat: number; lng: number } | null;
+  initialLabel?: string;
 };
-
-const LOCATION_PRESETS = [
-  { labelEn: 'Main park entrance', labelAr: 'بوابة الحديقة الرئيسية', lat: 31.9, lng: 35.2 },
-  { labelEn: 'Trailhead parking', labelAr: 'موقف السيارات عند بداية المسار', lat: 31.85, lng: 35.15 },
-  { labelEn: 'Visitor center', labelAr: 'مركز الزوار', lat: 31.92, lng: 35.22 },
-  { labelEn: 'Summit pavilion', labelAr: 'منصة القمة', lat: 31.88, lng: 35.18 },
-  { labelEn: 'Wadi Qelt trailhead', labelAr: 'بداية مسار وادي قلط', lat: 31.84, lng: 35.41 },
-  { labelEn: 'Makhrour Valley gate', labelAr: 'بوابة وادي مخرور', lat: 31.72, lng: 35.14 },
-];
 
 function toPointFeature(coordinate: LngLat | null): FeatureCollection<Point> {
   const features: Feature<Point>[] = coordinate
@@ -431,16 +600,62 @@ function toPointFeature(coordinate: LngLat | null): FeatureCollection<Point> {
   };
 }
 
-function formatCoordinateLabel(coordinate: LngLat) {
-  return `${coordinate[1].toFixed(5)}, ${coordinate[0].toFixed(5)}`;
+async function reverseGeocodeMeetingPlace(coordinate: LngLat, isArabic: boolean): Promise<string> {
+  if (!MAPBOX_ACCESS_TOKEN) {
+    return '';
+  }
+
+  try {
+    const url = new URL(`https://api.mapbox.com/geocoding/v5/mapbox.places/${coordinate[0]},${coordinate[1]}.json`);
+    url.searchParams.set('access_token', MAPBOX_ACCESS_TOKEN);
+    url.searchParams.set('types', 'poi,address,place,locality,neighborhood,district');
+    url.searchParams.set('language', isArabic ? 'ar' : 'en');
+    url.searchParams.set('limit', '1');
+
+    const res = await fetch(url.toString());
+    if (!res.ok) {
+      return '';
+    }
+
+    const data = await res.json() as {
+      features?: Array<{
+        text?: string;
+        place_name?: string;
+        place_type?: string[];
+        context?: Array<{ text?: string; id?: string }>;
+      }>;
+    };
+    const feature = data.features?.[0];
+    if (!feature) {
+      return '';
+    }
+
+    const primary = feature.text?.trim();
+    const neighborhood = feature.context?.find((item) => item.id?.startsWith('neighborhood') || item.id?.startsWith('district'))?.text?.trim();
+    const city = feature.context?.find((item) => item.id?.startsWith('place') || item.id?.startsWith('locality'))?.text?.trim();
+
+    if (primary && city && primary.toLowerCase() !== city.toLowerCase()) {
+      return `${primary}, ${city}`;
+    }
+
+    if (primary && neighborhood && primary.toLowerCase() !== neighborhood.toLowerCase()) {
+      return `${primary}, ${neighborhood}`;
+    }
+
+    return primary || feature.place_name?.split(',')[0]?.trim() || '';
+  } catch {
+    return '';
+  }
 }
 
-function MapPickerModal({ visible, onClose, onConfirm, isArabic, initialCoords }: MapPickerModalProps) {
-  const [selected, setSelected] = useState<typeof LOCATION_PRESETS[0] | null>(null);
+function MapPickerModal({ visible, onClose, onConfirm, isArabic, initialCoords, initialLabel }: MapPickerModalProps) {
   const [customText, setCustomText] = useState('');
+  const [isResolvingPlace, setIsResolvingPlace] = useState(false);
+  const [placeLookupFailed, setPlaceLookupFailed] = useState(false);
   const [pickedCoordinate, setPickedCoordinate] = useState<LngLat | null>(
     initialCoords ? [initialCoords.lng, initialCoords.lat] : null,
   );
+  const geocodeRequestRef = useRef(0);
 
   useEffect(() => {
     if (!visible) {
@@ -448,11 +663,37 @@ function MapPickerModal({ visible, onClose, onConfirm, isArabic, initialCoords }
     }
 
     setPickedCoordinate(initialCoords ? [initialCoords.lng, initialCoords.lat] : null);
-  }, [initialCoords, visible]);
+    setCustomText(initialLabel ?? '');
+    setIsResolvingPlace(false);
+    setPlaceLookupFailed(false);
+  }, [initialCoords, initialLabel, visible]);
 
-  const selectedCoordinate = pickedCoordinate ?? (selected ? [selected.lng, selected.lat] as LngLat : null);
-  const selectedLabel = customText.trim() || (selected ? (isArabic ? selected.labelAr : selected.labelEn) : '');
+  const selectedCoordinate = pickedCoordinate;
+  const selectedLabel = customText.trim();
   const canRenderMap = Boolean(Mapbox && !mapboxLoadError && MAPBOX_ACCESS_TOKEN);
+  const canConfirmLocation = Boolean(selectedCoordinate && selectedLabel);
+
+  const resolvePickedPlace = useCallback(async (coordinate: LngLat) => {
+    const requestId = geocodeRequestRef.current + 1;
+    geocodeRequestRef.current = requestId;
+    setPickedCoordinate(coordinate);
+    setCustomText('');
+    setPlaceLookupFailed(false);
+    setIsResolvingPlace(true);
+
+    const placeName = await reverseGeocodeMeetingPlace(coordinate, isArabic);
+
+    if (geocodeRequestRef.current !== requestId) {
+      return;
+    }
+
+    setIsResolvingPlace(false);
+    if (placeName) {
+      setCustomText(placeName);
+    } else {
+      setPlaceLookupFailed(true);
+    }
+  }, [isArabic]);
 
   return (
     <PickerModal
@@ -473,11 +714,7 @@ function MapPickerModal({ visible, onClose, onConfirm, isArabic, initialCoords }
             onPress={(e) => {
               const coord = (e.geometry?.coordinates ?? null) as unknown as LngLat | null;
               if (coord && coord.length === 2) {
-                setSelected(null);
-                setPickedCoordinate(coord);
-                if (!customText.trim()) {
-                  setCustomText(formatCoordinateLabel(coord));
-                }
+                void resolvePickedPlace(coord);
               }
             }}
           >
@@ -506,48 +743,41 @@ function MapPickerModal({ visible, onClose, onConfirm, isArabic, initialCoords }
         )}
         {selectedCoordinate && (
           <View style={mapStyles.pin}>
-            <Ionicons name="location" size={22} color="#630E13" />
-            <Text style={mapStyles.pinLabel} numberOfLines={1}>{selectedLabel || formatCoordinateLabel(selectedCoordinate)}</Text>
+            {isResolvingPlace ? (
+              <ActivityIndicator size="small" color="#630E13" />
+            ) : (
+              <Ionicons name="location" size={22} color="#630E13" />
+            )}
+            <Text style={mapStyles.pinLabel} numberOfLines={1}>
+              {selectedLabel || (isResolvingPlace
+                ? isArabic ? 'جارٍ العثور على اسم المكان...' : 'Finding place name...'
+                : isArabic ? 'اكتب اسم المكان أدناه' : 'Type the place name below')}
+            </Text>
           </View>
         )}
       </View>
 
-      <Text style={mapStyles.orLabel}>{isArabic ? 'أو اختر من القائمة' : 'Or pick from list'}</Text>
-      <ScrollView style={{ maxHeight: 200 }} showsVerticalScrollIndicator={false}>
-        {LOCATION_PRESETS.map((loc) => {
-          const label = isArabic ? loc.labelAr : loc.labelEn;
-          return (
-            <OptionRow
-              key={loc.labelEn}
-              label={label}
-              selected={selected?.labelEn === loc.labelEn}
-              onPress={() => {
-                setSelected(loc);
-                setPickedCoordinate([loc.lng, loc.lat]);
-                setCustomText('');
-              }}
-              checkmark
-            />
-          );
-        })}
-      </ScrollView>
-
       <TextInput
         value={customText}
         onChangeText={setCustomText}
-        placeholder={isArabic ? 'أو اكتب موقعاً مخصصاً...' : 'Or type a custom location...'}
+        placeholder={isArabic ? 'اسم المكان، مثل: مدخل المسار أو المقهى القريب' : 'Place name, e.g. trail gate or nearby cafe'}
         placeholderTextColor="#A18F7A"
         style={mapStyles.customInput}
       />
+      {placeLookupFailed ? (
+        <Text style={mapStyles.lookupHint}>
+          {isArabic ? 'لم نتمكن من معرفة اسم المكان تلقائياً. اكتب الاسم لتأكيده.' : 'Could not find a place name automatically. Type one to confirm it.'}
+        </Text>
+      ) : null}
 
       <Pressable
-        style={[mapStyles.confirmBtn, !selectedCoordinate && !customText.trim() && mapStyles.confirmBtnDisabled]}
+        style={[mapStyles.confirmBtn, !canConfirmLocation && mapStyles.confirmBtnDisabled]}
         onPress={() => {
           const coordinate = selectedCoordinate ?? DEFAULT_MEETING_COORDINATE;
-          const label = selectedLabel || formatCoordinateLabel(coordinate);
+          const label = selectedLabel;
           if (label) { onConfirm(label, { lat: coordinate[1], lng: coordinate[0] }); onClose(); }
         }}
-        disabled={!selectedCoordinate && !customText.trim()}
+        disabled={!canConfirmLocation}
       >
         <Ionicons name="checkmark-circle-outline" size={18} color="#fff" />
         <Text style={mapStyles.confirmBtnText}>{isArabic ? 'تأكيد الموقع' : 'Confirm location'}</Text>
@@ -572,8 +802,8 @@ const mapStyles = StyleSheet.create({
   mapHint: { fontSize: 12, color: '#8A7A6A' },
   pin: { position: 'absolute', bottom: 12, flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#fff', borderRadius: 999, paddingHorizontal: 12, paddingVertical: 6 },
   pinLabel: { fontSize: 13, fontWeight: '700', color: '#2C2418' },
-  orLabel: { fontSize: 12, fontWeight: '800', color: '#8A7A6A', marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0.4 },
   customInput: { minHeight: 46, borderRadius: 14, paddingHorizontal: 14, backgroundColor: '#FFF8F1', color: '#2C2418', fontSize: 14, marginTop: 10, marginBottom: 4 },
+  lookupHint: { marginTop: 4, fontSize: 12, fontWeight: '700', color: '#8A7A6A', lineHeight: 17 },
   confirmBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 12, borderRadius: 16, paddingVertical: 14, backgroundColor: '#630E13' },
   confirmBtnDisabled: { opacity: 0.4 },
   confirmBtnText: { color: '#fff', fontSize: 14, fontWeight: '900' },
@@ -599,6 +829,9 @@ export function ActivityShareComposerScreen() {
   const [selectedDateIso, setSelectedDateIso] = useState('');
   const [selectedDateLabel, setSelectedDateLabel] = useState('');
   const [timeText, setTimeText] = useState('');
+  const [departureHour, setDepartureHour] = useState(6);
+  const [departureMinute, setDepartureMinute] = useState(0);
+  const [departurePeriod, setDeparturePeriod] = useState<DeparturePeriod>('AM');
   const [meetingPlace, setMeetingPlace] = useState('');
   const [meetingCoords, setMeetingCoords] = useState<{ lat: number; lng: number } | null>(
     typeof route.params.initialMeetingLat === 'number' && typeof route.params.initialMeetingLng === 'number'
@@ -615,9 +848,12 @@ export function ActivityShareComposerScreen() {
   const [customDescription, setCustomDescription] = useState('');
   const [friendSearch, setFriendSearch] = useState('');
   const [contacts, setContacts] = useState<SocialProfile[]>([]);
+  const [meetupWeather, setMeetupWeather] = useState<WeatherForecast | null>(null);
+  const [isMeetupWeatherLoading, setIsMeetupWeatherLoading] = useState(false);
+  const [meetupWeatherError, setMeetupWeatherError] = useState<string | null>(null);
 
   // Modal visibility
-  const [showCalendar, setShowCalendar] = useState(false);
+  const [showTimePicker, setShowTimePicker] = useState(false);
   const [showMap, setShowMap] = useState(false);
   const [showFriends, setShowFriends] = useState(false);
   const [showBringPicker, setShowBringPicker] = useState(false);
@@ -661,6 +897,60 @@ export function ActivityShareComposerScreen() {
   );
 
   useEffect(() => {
+    if (!isPlan) return;
+    setTimeText(formatDepartureTime(departureHour, departureMinute, departurePeriod));
+  }, [departureHour, departureMinute, departurePeriod, isPlan]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!isPlan || !selectedDateIso || !meetingCoords) {
+      setMeetupWeather(null);
+      setMeetupWeatherError(null);
+      setIsMeetupWeatherLoading(false);
+      return;
+    }
+
+    const loadWeather = async () => {
+      setIsMeetupWeatherLoading(true);
+      setMeetupWeatherError(null);
+
+      try {
+        const date = selectedDateIso.slice(0, 10);
+        const forecast = await getWeatherForecast({
+          lat: meetingCoords.lat,
+          lng: meetingCoords.lng,
+          date,
+        });
+
+        if (!cancelled) {
+          setMeetupWeather(forecast);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setMeetupWeather(null);
+          setMeetupWeatherError(error instanceof Error ? error.message : 'Unable to load weather.');
+        }
+      } finally {
+        if (!cancelled) {
+          setIsMeetupWeatherLoading(false);
+        }
+      }
+    };
+
+    void loadWeather();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isPlan, meetingCoords, selectedDateIso]);
+
+  const meetupWeatherVisual = meetupWeather ? getWeatherVisual(meetupWeather.condition, meetupWeather.is_daytime) : null;
+  const meetupWeatherSummary = meetupWeather
+    ? `${meetupWeather.condition}, ${formatTemperature(meetupWeather.high_c)}/${formatTemperature(meetupWeather.low_c)}, ${formatPercent(meetupWeather.precipitation_probability)} rain`
+    : '';
+
+  useEffect(() => {
     setBringItems([...selectedBringItems, customBringItem.trim()].filter(Boolean).join(', '));
   }, [selectedBringItems, customBringItem]);
 
@@ -696,10 +986,9 @@ export function ActivityShareComposerScreen() {
     const joined = Math.max(1, 1 + selectedFriends.length);
     const spotsLeft = Math.max(0, headcount - joined);
     const meetingSummary = meetingPlace
-      ? `${isArabic ? 'نقطة اللقاء' : 'Meet'}: ${meetingPlace}${
-          meetingCoords ? ` (${meetingCoords.lat.toFixed(5)}, ${meetingCoords.lng.toFixed(5)})` : ''
-        }`
+      ? `${isArabic ? 'نقطة اللقاء' : 'Meet'}: ${meetingPlace}`
       : null;
+    const weatherSummary = meetupWeatherSummary ? `Weather: ${meetupWeatherSummary}` : null;
 
     const item = isPlan
       ? {
@@ -716,8 +1005,8 @@ export function ActivityShareComposerScreen() {
           dateAr: [selectedDateLabel, timeText].filter(Boolean).join(' · ') || 'قريباً',
           vibeEn: trimmedNote,
           vibeAr: trimmedNote,
-          noteEn: [trimmedNote, meetingSummary, bringItems ? `Bring: ${bringItems}` : null].filter(Boolean).join(' · '),
-          noteAr: [trimmedNote, meetingSummary, bringItems ? `أحضر: ${bringItems}` : null].filter(Boolean).join(' · '),
+          noteEn: [trimmedNote, meetingSummary, weatherSummary, bringItems ? `Bring: ${bringItems}` : null].filter(Boolean).join(' · '),
+          noteAr: [trimmedNote, meetingSummary, weatherSummary, bringItems ? `أحضر: ${bringItems}` : null].filter(Boolean).join(' · '),
           peopleJoined: joined,
           spotsLeft,
           visibility: planVisibility,
@@ -828,13 +1117,12 @@ export function ActivityShareComposerScreen() {
 
               {/* ── Time ── */}
               <FieldRow icon="time-outline" label={isArabic ? 'وقت الانطلاق' : 'Departure time'} isArabic={isArabic}>
-                <TextInput
+                <SelectPill
                   value={timeText}
-                  onChangeText={setTimeText}
                   placeholder={isArabic ? 'مثال: 6:00 صباحاً' : 'e.g. 6:00 AM'}
-                  placeholderTextColor="#A18F7A"
-                  style={[styles.input, isArabic ? rtlText : ltrText]}
-                  keyboardType="default"
+                  isArabic={isArabic}
+                  onPress={() => setShowTimePicker(true)}
+                  iconRight="alarm-outline"
                 />
               </FieldRow>
 
@@ -848,6 +1136,36 @@ export function ActivityShareComposerScreen() {
                   iconRight="map-outline"
                 />
               </FieldRow>
+
+              {isMeetupWeatherLoading || meetupWeatherError || (meetupWeather && meetupWeatherVisual) ? (
+                <FieldRow icon="partly-sunny-outline" label={isArabic ? 'توقعات الطقس' : 'Weather prediction'} isArabic={isArabic}>
+                  <View style={[styles.weatherPreview, { backgroundColor: meetupWeatherVisual?.tint ?? '#FFF8F1' }]}>
+                    {isMeetupWeatherLoading ? (
+                      <ActivityIndicator color="#630E13" />
+                    ) : meetupWeatherError ? (
+                      <Text style={[styles.weatherMeta, isArabic ? rtlText : ltrText]}>{meetupWeatherError}</Text>
+                    ) : meetupWeather && meetupWeatherVisual ? (
+                      <>
+                        <View style={[styles.weatherIconBubble, { backgroundColor: meetupWeatherVisual.accent }]}>
+                          <Text style={styles.weatherEmoji}>{meetupWeatherVisual.emoji}</Text>
+                        </View>
+                        <View style={styles.weatherCopy}>
+                          <Text style={[styles.weatherCondition, isArabic ? rtlText : ltrText]}>
+                            {meetupWeather.condition}
+                          </Text>
+                          <Text style={[styles.weatherMeta, isArabic ? rtlText : ltrText]}>
+                            {formatTemperature(meetupWeather.high_c)} / {formatTemperature(meetupWeather.low_c)}
+                            {'  '}·{'  '}
+                            {formatPercent(meetupWeather.precipitation_probability)} rain
+                            {'  '}·{'  '}
+                            {formatWind(meetupWeather.wind_kph)}
+                          </Text>
+                        </View>
+                      </>
+                    ) : null}
+                  </View>
+                </FieldRow>
+              ) : null}
 
               {/* ── Invite friends (multi-select dropdown) ── */}
               <FieldRow icon="people-outline" label={isArabic ? 'ادعُ الأصدقاء' : 'Invite friends'} isArabic={isArabic}>
@@ -954,7 +1272,7 @@ export function ActivityShareComposerScreen() {
               <>
                 <SelectPill
                   value={note}
-                  placeholder={isArabic ? 'اختر الأجواء والوتيرة أو أضف غير ذلك' : 'Choose vibe and pace or add other'}
+                  placeholder={isArabic ? 'اختر العمر والقدرة والوتيرة أو أضف غير ذلك' : 'Choose age, ability, pace, and strength'}
                   isArabic={isArabic}
                   onPress={() => setShowDescriptionPicker(true)}
                 />
@@ -986,6 +1304,20 @@ export function ActivityShareComposerScreen() {
         </AnimatedBlock>
       </ScrollView>
 
+      <DepartureTimePicker
+        visible={showTimePicker}
+        hour={departureHour}
+        minute={departureMinute}
+        period={departurePeriod}
+        isArabic={isArabic}
+        onClose={() => setShowTimePicker(false)}
+        onConfirm={(hour, minute, period) => {
+          setDepartureHour(hour);
+          setDepartureMinute(minute);
+          setDeparturePeriod(period);
+        }}
+      />
+
       {/* ── Map picker modal ── */}
       <MapPickerModal
         visible={showMap}
@@ -993,6 +1325,7 @@ export function ActivityShareComposerScreen() {
         onConfirm={(label, coords) => { setMeetingPlace(label); setMeetingCoords(coords); }}
         isArabic={isArabic}
         initialCoords={meetingCoords}
+        initialLabel={meetingPlace}
       />
 
       {/* ── Friends multi-select modal ── */}
@@ -1173,6 +1506,28 @@ const styles = StyleSheet.create({
     textAlign: 'center', fontSize: 18, fontWeight: '900', color: '#2C2418',
   },
   counterSuffix: { fontSize: 13, color: '#8A7A6A', fontWeight: '600' },
+
+  weatherPreview: {
+    minHeight: 70,
+    borderRadius: 18,
+    padding: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(99,14,19,0.08)',
+  },
+  weatherIconBubble: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  weatherEmoji: { fontSize: 22 },
+  weatherCopy: { flex: 1 },
+  weatherCondition: { fontSize: 14, fontWeight: '900', color: '#2C2418' },
+  weatherMeta: { marginTop: 4, fontSize: 12, fontWeight: '700', color: '#6B5D4E', lineHeight: 17 },
 
   chipScroll: { marginTop: 10 },
   chip: {

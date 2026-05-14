@@ -13,17 +13,12 @@ import { Ionicons } from '@expo/vector-icons';
 import { useLanguage } from '../contexts/LanguageContext';
 import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
 import { getTrailRouteCoordinates } from '../state/trailRoutes';
+import { theme } from '../theme';
 import { ltrRow, ltrText, rtlRow, rtlText } from '../utils/direction';
 
 type MapScreenNavigationProp = StackNavigationProp<RootStackParamList, 'TrailDetail'>;
 type MapScreenRouteProp = RouteProp<AppTabParamList, 'Map'>;
 type MapboxModule = typeof import('@rnmapbox/maps');
-type BubbleFeatureProperties = {
-  bubbleId: string;
-  count: number;
-  countLabel: string;
-  mediaIds: string;
-};
 
 const { width, height } = Dimensions.get('window');
 const MAPBOX_ACCESS_TOKEN = process.env.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN ?? '';
@@ -76,33 +71,12 @@ function toLineFeature(coordinates: [number, number][] | null): FeatureCollectio
   };
 }
 
-function toBubbleFeatureCollection(bubbles: MapBubble[]): FeatureCollection {
-  return {
-    type: 'FeatureCollection',
-    features: bubbles
-      .filter((bubble) => Number.isFinite(bubble.lat) && Number.isFinite(bubble.lng) && bubble.media_ids.length > 0)
-      .map((bubble, index) => ({
-        type: 'Feature',
-        properties: {
-          bubbleId: bubble.id ?? `bubble-${index}`,
-          count: bubble.count,
-          countLabel: String(bubble.count),
-          mediaIds: JSON.stringify(bubble.media_ids),
-        } satisfies BubbleFeatureProperties,
-        geometry: {
-          type: 'Point',
-          coordinates: [bubble.lng, bubble.lat],
-        },
-      })),
-  };
-}
-
 function photoUri(photo: MapBubblePhoto) {
-  return photo.url?.trim() || photo.public_url?.trim() || '';
+  return photo.url?.trim() || photo.public_url?.trim() || photo.thumbnail_url?.trim() || '';
 }
 
 function photoUploader(photo: MapBubblePhoto) {
-  return photo.uploader_name?.trim() || photo.uploaded_by?.trim() || 'Trail friend';
+  return photo.uploader_name?.trim() || photo.uploaded_by?.trim() || photo.user?.full_name?.trim() || 'Trail friend';
 }
 
 function photoDate(photo: MapBubblePhoto) {
@@ -113,6 +87,24 @@ function photoDate(photo: MapBubblePhoto) {
   if (Number.isNaN(timestamp.getTime())) return '';
 
   return timestamp.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function bubblePreviewUri(bubble: MapBubble) {
+  return bubble.preview_images.find((uri) => typeof uri === 'string' && uri.trim())?.trim() ?? '';
+}
+
+function bubbleMarkerSize(count: number) {
+  if (count >= 48) return 72;
+  if (count >= 18) return 62;
+  if (count >= 6) return 54;
+  return 48;
+}
+
+function bubbleOutlineColor(count: number) {
+  if (count >= 48) return theme.colors.difficulty.expert;
+  if (count >= 18) return theme.colors.difficulty.hard;
+  if (count >= 6) return theme.colors.difficulty.moderate;
+  return theme.colors.difficulty.easy;
 }
 
 export function MapScreen() {
@@ -149,8 +141,6 @@ export function MapScreen() {
     return selectedTrail.routeCoordinates ?? getTrailRouteCoordinates(selectedTrail.id);
   }, [selectedTrail]);
   const selectedTrailLine = useMemo(() => toLineFeature(selectedTrailRoute), [selectedTrailRoute]);
-  const bubbleCollection = useMemo(() => toBubbleFeatureCollection(mapBubbles), [mapBubbles]);
-
   const fetchBubblesForViewport = useCallback(async () => {
     if (!mapRef.current?.getVisibleBounds || !mapRef.current?.getZoom) {
       return;
@@ -207,17 +197,7 @@ export function MapScreen() {
     }, 350);
   }, [canRenderMapbox, fetchBubblesForViewport]);
 
-  const handleBubblePress = useCallback(async (event: any) => {
-    const feature = event?.features?.[0];
-    const mediaIdsRaw = feature?.properties?.mediaIds;
-    let mediaIds: string[] = [];
-
-    try {
-      mediaIds = typeof mediaIdsRaw === 'string' ? JSON.parse(mediaIdsRaw) as string[] : [];
-    } catch {
-      mediaIds = [];
-    }
-
+  const openBubbleGallery = useCallback(async (mediaIds: string[]) => {
     if (mediaIds.length === 0) {
       return;
     }
@@ -409,6 +389,43 @@ export function MapScreen() {
     setZoomLevel((current) => Math.max(current - 0.7, 3));
   };
 
+  const handleCenterMap = () => {
+    if (!canRenderMapbox || !cameraRef.current) {
+      return;
+    }
+
+    if (selectedTrailRoute && selectedTrailRoute.length >= 2) {
+      const longitudes = selectedTrailRoute.map((point) => point[0]);
+      const latitudes = selectedTrailRoute.map((point) => point[1]);
+
+      cameraRef.current.fitBounds(
+        [Math.max(...longitudes), Math.max(...latitudes)],
+        [Math.min(...longitudes), Math.min(...latitudes)],
+        80,
+        700,
+      );
+      setZoomLevel(selectedTrail ? 8.8 : zoomLevel);
+      setTimeout(scheduleBubbleFetch, 800);
+      return;
+    }
+
+    const centerCoordinate: [number, number] = selectedTrail
+      ? toMapboxCoordinate(selectedTrail)
+      : userLocation
+        ? [userLocation[1], userLocation[0]]
+        : fallbackCenter;
+    const nextZoomLevel = selectedTrail ? 10.8 : userLocation ? 13 : 7.6;
+
+    cameraRef.current.setCamera({
+      centerCoordinate,
+      zoomLevel: nextZoomLevel,
+      pitch: isThreeD ? 48 : 0,
+      animationDuration: 700,
+    });
+    setZoomLevel(nextZoomLevel);
+    setTimeout(scheduleBubbleFetch, 800);
+  };
+
   return (
     <AnimatedScreen style={styles.container}>
       {canRenderMapbox && Mapbox ? (
@@ -449,31 +466,66 @@ export function MapScreen() {
             </Mapbox.ShapeSource>
           ) : null}
 
-          <Mapbox.ShapeSource id="photo-bubbles-source" shape={bubbleCollection} onPress={handleBubblePress}>
-            <Mapbox.CircleLayer
-              id="photo-bubbles-circle"
-              style={{
-                circleRadius: ['interpolate', ['linear'], ['get', 'count'], 1, 17, 8, 24, 24, 32, 80, 44],
-                circleColor: ['step', ['get', 'count'], '#7A9A3A', 6, '#D4A843', 18, '#B34A2E', 48, '#BB2823'],
-                circleOpacity: 0.92,
-                circleStrokeColor: '#FFFEF9',
-                circleStrokeWidth: 2,
-                circlePitchAlignment: 'map',
-              }}
-            />
-            <Mapbox.SymbolLayer
-              id="photo-bubbles-count"
-              style={{
-                textField: ['get', 'countLabel'],
-                textSize: 12,
-                textColor: '#FFFFFF',
-                textHaloColor: 'rgba(44,36,24,0.28)',
-                textHaloWidth: 1,
-                textAllowOverlap: true,
-                textIgnorePlacement: true,
-              }}
-            />
-          </Mapbox.ShapeSource>
+          {mapBubbles.filter((bubble) => Number.isFinite(bubble.lat) && Number.isFinite(bubble.lng)).map((bubble, index) => {
+            const size = bubbleMarkerSize(bubble.count);
+            const outlineColor = bubbleOutlineColor(bubble.count);
+            const previewUri = bubblePreviewUri(bubble);
+            const bubbleId = bubble.id ?? `bubble-${index}`;
+
+            return (
+              <Mapbox.MarkerView
+                key={bubbleId}
+                coordinate={[bubble.lng, bubble.lat]}
+                anchor={{ x: 0.5, y: 0.5 }}
+                allowOverlap
+              >
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`${bubble.count} photos`}
+                  onPress={() => void openBubbleGallery(bubble.media_ids)}
+                  style={[
+                    styles.photoBubbleMarker,
+                    {
+                      width: size,
+                      height: size,
+                      borderRadius: size / 2,
+                      borderColor: outlineColor,
+                    },
+                  ]}
+                >
+                  {previewUri ? (
+                    <Image
+                      source={{ uri: previewUri }}
+                      style={[
+                        styles.photoBubbleImage,
+                        {
+                          width: size - 8,
+                          height: size - 8,
+                          borderRadius: (size - 8) / 2,
+                        },
+                      ]}
+                    />
+                  ) : (
+                    <View
+                      style={[
+                        styles.photoBubbleFallback,
+                        {
+                          width: size - 8,
+                          height: size - 8,
+                          borderRadius: (size - 8) / 2,
+                        },
+                      ]}
+                    />
+                  )}
+                  {bubble.count > 1 ? (
+                    <View style={[styles.photoBubbleCountBadge, { backgroundColor: outlineColor }]}>
+                      <Text style={styles.photoBubbleCountText}>{bubble.count}</Text>
+                    </View>
+                  ) : null}
+                </Pressable>
+              </Mapbox.MarkerView>
+            );
+          })}
 
           {nearbyTrails.map((trail) => {
             const active = selectedTrail?.id === trail.id;
@@ -667,7 +719,7 @@ export function MapScreen() {
                 </Text>
 
                 <View style={[styles.cardActions, isArabic ? rtlRow : ltrRow]}>
-                  <Pressable style={styles.secondaryButton} onPress={() => handleTrailPress(selectedTrail)}>
+                  <Pressable style={styles.secondaryButton} onPress={handleCenterMap}>
                     <Ionicons name="locate-outline" size={16} color="#2C2418" />
                     <Text style={styles.secondaryButtonText}>Center</Text>
                   </Pressable>
@@ -940,6 +992,43 @@ const styles = StyleSheet.create({
     width: 8,
     height: 8,
     borderRadius: 4,
+  },
+  photoBubbleMarker: {
+    backgroundColor: '#FFFEF9',
+    borderWidth: 3,
+    borderColor: '#FFFEF9',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOpacity: 0.24,
+    shadowOffset: { width: 0, height: 6 },
+    shadowRadius: 12,
+    elevation: 7,
+  },
+  photoBubbleImage: {
+    backgroundColor: '#EAE2CC',
+  },
+  photoBubbleFallback: {
+    backgroundColor: '#7A9A3A',
+  },
+  photoBubbleCountBadge: {
+    position: 'absolute',
+    right: -3,
+    bottom: -3,
+    minWidth: 22,
+    height: 22,
+    borderRadius: 11,
+    paddingHorizontal: 6,
+    backgroundColor: '#630E13',
+    borderWidth: 2,
+    borderColor: '#FFFEF9',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  photoBubbleCountText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '800',
   },
   zoomControls: {
     position: 'absolute',

@@ -3,18 +3,19 @@ const { getDefaultConfig } = require('expo/metro-config');
 
 const projectRoot = __dirname;
 const workspaceRoot = path.resolve(projectRoot, '../..');
+const workspaceNodeModules = path.resolve(workspaceRoot, 'node_modules');
 const mobileReactNativeRoot = path.resolve(projectRoot, 'node_modules/react-native');
 const config = getDefaultConfig(projectRoot);
 
 config.resolver.disableHierarchicalLookup = true;
 config.resolver.nodeModulesPaths = [
   path.resolve(projectRoot, 'node_modules'),
-  path.resolve(workspaceRoot, 'node_modules'),
+  workspaceNodeModules,
 ];
 config.resolver.extraNodeModules = {
   ...config.resolver.extraNodeModules,
-  buffer: path.resolve(workspaceRoot, 'node_modules/safe-buffer'),
-  react: path.resolve(workspaceRoot, 'node_modules/react'),
+  buffer: path.resolve(workspaceNodeModules, 'safe-buffer'),
+  react: path.resolve(workspaceNodeModules, 'react'),
   'react-native': mobileReactNativeRoot,
 };
 
@@ -42,8 +43,8 @@ config.serializer = {
   },
 };
 
-// Fix for Windows file watching issues
-config.watchFolders = [workspaceRoot];
+// Resolve hoisted workspace dependencies explicitly; avoid crawling unrelated apps.
+config.watchFolders = [workspaceNodeModules];
 config.watcher = {
   usePolling: true,
 };
@@ -51,7 +52,11 @@ config.watcher = {
 // Ignore gradle build artifacts Metro shouldn't watch
 config.resolver.blockList = [
   /.*\.gradle.*/,
+  /[/\\]node_modules[/\\].*[/\\]android[/\\].*[/\\]build([/\\].*)?$/,
+  /[/\\]node_modules[/\\].*[/\\]android[/\\].*[/\\]\.gradle([/\\].*)?$/,
   /.*expo-module-gradle-plugin.*/,
+  /.*expo-gradle-plugin.*/,
+  /[/\\]node_modules[/\\]\.[^/\\]+-[^/\\]+([/\\].*)?$/,
 ];
 
 module.exports = config;

@@ -1,13 +1,14 @@
 import React, { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Alert, FlatList, Image, ListRenderItem, Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
 import { addReviewComment, commentOnActivity, followUser, getFollowing, getReviewComments, likeActivity, likeReview, unfollowUser, unlikeReview, getSocialFeed, type ActivityComment, type ReviewComment } from '../api/socialApi';
 import { type FeedCommentPreview, type FeedItem } from '../data/activitySocial';
+import { getLocalFeedItems } from '../data/localSocial';
 import { mapSocialFeedItemToFeedItem } from '../utils/socialFeedMap';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
@@ -715,6 +716,7 @@ export function ActivityScreen() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [remoteRecaps, setRemoteRecaps] = useState<FeedItem[]>([]);
+  const [localFeedItems, setLocalFeedItems] = useState<FeedItem[]>([]);
   const [feedError, setFeedError] = useState('');
   const [isFeedLoading, setIsFeedLoading] = useState(false);
   const [followedUsers, setFollowedUsers] = useState<Record<string, boolean>>({});
@@ -723,9 +725,15 @@ export function ActivityScreen() {
   const normalizedQuery = useMemo(() => normalize(searchQuery), [searchQuery]);
 
   const feedData = useMemo(() => {
-    if (!isAuthenticated) return [];
-    return remoteRecaps;
-  }, [isAuthenticated, remoteRecaps]);
+    if (!isAuthenticated) return localFeedItems;
+    return [...localFeedItems, ...remoteRecaps];
+  }, [isAuthenticated, localFeedItems, remoteRecaps]);
+
+  useFocusEffect(
+    useCallback(() => {
+      setLocalFeedItems(getLocalFeedItems());
+    }, []),
+  );
 
   useEffect(() => {
     let cancelled = false;
