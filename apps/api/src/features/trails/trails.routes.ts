@@ -19,6 +19,7 @@ import {
   getTrailReviews,
   getSavedTrails,
   publishTrail,
+  recalculateTrailReviewStats,
   saveTrail,
   searchTrails,
   setPrimaryPhoto,
@@ -57,6 +58,7 @@ router.get("/:id", asyncHandler(getTrailById));
 router.patch("/:id/publish", authenticate, asyncHandler(publishTrail));
 router.get("/:id/reviews", asyncHandler(getTrailReviews));
 router.post("/:id/reviews", authenticate, upload.array("photos", 10), asyncHandler(createTrailReview));
+router.post("/:id/reviews/recalculate", authenticate, asyncHandler(recalculateTrailReviewStats));
 router.get("/:id/conditions", asyncHandler(getTrailConditions));
 router.post("/:id/conditions", authenticate, validate(z.object({ condition_type: z.enum(['snow', 'ice', 'mud', 'flood', 'fallen_trees', 'wildfire', 'closure', 'good', 'fair']), severity: z.enum(['low', 'medium', 'high', 'extreme']).optional(), description: z.string().optional() })), asyncHandler(createTrailCondition));
 router.post("/:id/photos", authenticate, upload.single("photo"), asyncHandler(uploadTrailPhoto));

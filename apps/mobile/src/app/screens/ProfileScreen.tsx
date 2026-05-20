@@ -185,7 +185,7 @@ export function ProfileScreen() {
     return () => {
       cancelled = true;
     };
-  }, [user?.id]);
+  }, [user?.id, user?.full_name, user?.avatar_url, user?.bio, user?.location]);
 
   const earnedCount = achievements.filter((a) => a.earned).length;
   const progress = achievements.length ? (earnedCount / achievements.length) * 100 : 0;
@@ -270,7 +270,7 @@ export function ProfileScreen() {
                 )}
               </View>
               <View style={styles.statusDot} />
-              <Pressable style={styles.changePhotoButton}>
+              <Pressable style={styles.changePhotoButton} onPress={() => navigation.navigate('EditProfile')}>
                 <Ionicons name="camera" size={12} color="white" />
               </Pressable>
             </View>

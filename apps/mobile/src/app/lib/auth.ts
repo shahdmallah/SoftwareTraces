@@ -8,6 +8,9 @@ export type AuthUser = {
   email: string;
   full_name: string;
   role: string;
+  avatar_url?: string | null;
+  bio?: string | null;
+  location?: string | null;
 };
 
 export type AuthSession = {
@@ -166,6 +169,7 @@ const AUTO_DETECTED_API_URL = getAutoDetectedApiUrl();
 const API_BASE_URL = (EXPLICIT_API_URL || AUTO_DETECTED_API_URL || DEFAULT_API_URL || 'http://localhost:3001').replace(/\/$/, '');
 const IS_USING_FALLBACK_API_URL = !EXPLICIT_API_URL;
 const AUTH_SESSION_KEY = 'traces.auth.session';
+let activeSession: AuthSession | null = null;
 
 if (__DEV__ && IS_USING_FALLBACK_API_URL) {
   console.warn(
@@ -276,6 +280,8 @@ export function getApiBaseUrl() {
 }
 
 export async function persistSession(session: AuthSession | null) {
+  activeSession = session;
+
   if (!session) {
     await SecureStore.deleteItemAsync(AUTH_SESSION_KEY);
     return;
@@ -288,22 +294,26 @@ export async function getStoredSession(): Promise<AuthSession | null> {
   const rawValue = await SecureStore.getItemAsync(AUTH_SESSION_KEY);
 
   if (!rawValue) {
+    activeSession = null;
     return null;
   }
 
   try {
-    return JSON.parse(rawValue) as AuthSession;
+    activeSession = JSON.parse(rawValue) as AuthSession;
+    return activeSession;
   } catch {
+    activeSession = null;
     await SecureStore.deleteItemAsync(AUTH_SESSION_KEY);
     return null;
   }
 }
 
 export async function clearStoredSession() {
+  activeSession = null;
   await SecureStore.deleteItemAsync(AUTH_SESSION_KEY);
 }
 
 export async function getAccessToken() {
-  const session = await getStoredSession();
+  const session = activeSession ?? await getStoredSession();
   return session?.token ?? null;
 }

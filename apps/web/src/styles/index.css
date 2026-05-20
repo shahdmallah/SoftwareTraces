@@ -1,6 +1,7 @@
 @import './fonts.css';
 @import './tailwind.css';
 @import './theme.css';
+@import './web.css';
 
 * {
   -webkit-tap-highlight-color: transparent;
@@ -8,13 +9,23 @@
 
 body {
   font-family: 'Cairo', 'Inter', sans-serif;
-  background: #1a1a2e;
+  background: #f5f0e4;
   margin: 0;
   padding: 0;
 }
 
-::-webkit-scrollbar {
-  display: none;
+html,
+body,
+#root {
+  min-height: 100%;
 }
 
-scrollbar-width: none;
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(79, 56, 38, 0.22);
+  border-radius: 999px;
+}

@@ -55,8 +55,41 @@ export type ProfilePhoto = {
   trail_name?: string;
 };
 
+export type UpdateProfilePayload = {
+  full_name: string;
+  bio?: string | null;
+  location?: string | null;
+  avatar_url?: string | null;
+};
+
 export async function getProfile(profileId: string) {
   const response = await apiRequest<Envelope<Profile>>(`/api/profiles/${profileId}`);
+  return response.data;
+}
+
+export async function updateMyProfile(payload: UpdateProfilePayload) {
+  const response = await apiRequest<Envelope<Profile>>('/api/profiles/me', {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
+  return response.data;
+}
+
+export async function uploadMyAvatar(uri: string, mimeType?: string | null, fileName?: string | null) {
+  const formData = new FormData();
+  const inferredName = fileName || uri.split('/').pop() || 'avatar.jpg';
+  const inferredType = mimeType || (inferredName.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg');
+
+  formData.append('avatar', {
+    uri,
+    name: inferredName,
+    type: inferredType,
+  } as unknown as Blob);
+
+  const response = await apiRequest<Envelope<Profile>>('/api/profiles/me/avatar', {
+    method: 'POST',
+    body: formData,
+  });
   return response.data;
 }
 

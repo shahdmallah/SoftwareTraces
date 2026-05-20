@@ -42,7 +42,7 @@ export function ShareActions({ draft, isArabic, navigation, isOwner = true, owne
     const dur = formatCompletionDuration(draft.durationMs, isArabic);
     const postCaption = draft.postCaption?.trim() || draft.review.trim();
     const postPhotos = draft.postPhotoUris?.length ? draft.postPhotoUris : draft.photoUris;
-    const postVisibility = draft.postVisibility === 'friends' ? 'friends' : 'public';
+    const postVisibility = draft.postVisibility ?? 'public';
     const message = isArabic
       ? `أكملتُ «${draft.trailName}» على Traces — ${dur}\n${postCaption.slice(0, 280)}`
       : `Finished "${draft.trailName}" on Traces — ${dur}\n${postCaption.slice(0, 280)}`;

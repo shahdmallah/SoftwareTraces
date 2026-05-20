@@ -1,7 +1,10 @@
 import type { Request, Response } from "express";
+import { randomUUID } from "crypto";
 import { createClient } from "@supabase/supabase-js";
 import { env } from "../../config/env";
 import { pool } from "../../db/pool";
+import { HttpError } from "../../lib/httpError";
+import { requireAuth } from "../../middleware/auth";
 
 interface ProfileRow {
   id: string;
@@ -44,6 +47,16 @@ interface ProfilePhotoRow {
   trail_id: string;
   trail_name: string;
 }
+
+const avatarBucket = "media";
+const validAvatarMimeTypes = ["image/jpeg", "image/png", "image/gif", "image/webp"] as const;
+const avatarExtensionByMimeType: Record<(typeof validAvatarMimeTypes)[number], string> = {
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/gif": "gif",
+  "image/webp": "webp",
+};
+const maxAvatarSizeBytes = 5 * 1024 * 1024;
 
 function getRequestId(value: string | string[] | undefined): string {
   return Array.isArray(value) ? value[0] : (value ?? "");
@@ -101,6 +114,137 @@ async function getProfileByUserId(userId: string): Promise<ProfileRow> {
   }
 
   return profileResult.rows[0];
+}
+
+function sendProfileError(functionName: string, res: Response, error: unknown): void {
+  console.log(`[profiles.${functionName}] error`, error);
+
+  if (error instanceof HttpError) {
+    res.status(error.statusCode).json({ error: error.message });
+    return;
+  }
+
+  if (error instanceof Error && error.message === "PROFILE_NOT_FOUND") {
+    res.status(404).json({ error: "Profile not found" });
+    return;
+  }
+
+  res.status(500).json({
+    error: "Internal server error",
+    details: error instanceof Error ? error.message : String(error),
+  });
+}
+
+function parseOptionalText(value: unknown): string | null | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (value === null) {
+    return null;
+  }
+
+  const trimmed = String(value).trim();
+  return trimmed === "" ? null : trimmed;
+}
+
+function toProfileResponse(profile: ProfileRow) {
+  return {
+    id: profile.id,
+    user_id: profile.user_id,
+    full_name: profile.full_name,
+    avatar_url: profile.avatar_url,
+    bio: profile.bio,
+    location: profile.location,
+  };
+}
+
+export async function updateMyProfile(req: Request, res: Response): Promise<void> {
+  try {
+    const auth = requireAuth(req);
+    const hasFullName = Object.prototype.hasOwnProperty.call(req.body, "full_name");
+    const hasBio = Object.prototype.hasOwnProperty.call(req.body, "bio");
+    const hasLocation = Object.prototype.hasOwnProperty.call(req.body, "location");
+    const hasAvatarUrl = Object.prototype.hasOwnProperty.call(req.body, "avatar_url");
+    const fullName = parseOptionalText(req.body.full_name);
+    const bio = parseOptionalText(req.body.bio);
+    const location = parseOptionalText(req.body.location);
+    const avatarUrl = parseOptionalText(req.body.avatar_url);
+
+    if (fullName !== undefined && !fullName) {
+      throw new HttpError(400, "full_name is required");
+    }
+
+    const result = await pool.query<ProfileRow>(
+      `UPDATE profiles
+          SET full_name = CASE WHEN $2 THEN $3 ELSE full_name END,
+              bio = CASE WHEN $4 THEN $5 ELSE bio END,
+              location = CASE WHEN $6 THEN $7 ELSE location END,
+              avatar_url = CASE WHEN $8 THEN $9 ELSE avatar_url END,
+              updated_at = NOW()
+        WHERE user_id = $1::uuid OR id = $1::uuid
+        RETURNING id, user_id, full_name, avatar_url, bio, location`,
+      [auth.sub, hasFullName, fullName, hasBio, bio, hasLocation, location, hasAvatarUrl, avatarUrl]
+    );
+
+    if (result.rows.length === 0) {
+      throw new Error("PROFILE_NOT_FOUND");
+    }
+
+    res.json({ data: toProfileResponse(result.rows[0]) });
+  } catch (error) {
+    sendProfileError("updateMyProfile", res, error);
+  }
+}
+
+export async function uploadMyAvatar(req: Request & { file?: Express.Multer.File }, res: Response): Promise<void> {
+  try {
+    const auth = requireAuth(req);
+    const file = req.file;
+
+    if (!file) {
+      throw new HttpError(400, "avatar is required");
+    }
+
+    if (!validAvatarMimeTypes.includes(file.mimetype as (typeof validAvatarMimeTypes)[number])) {
+      throw new HttpError(400, "Only JPEG, PNG, GIF, and WebP images are allowed");
+    }
+
+    if (file.size > maxAvatarSizeBytes) {
+      throw new HttpError(400, "Avatar image must be 5MB or smaller");
+    }
+
+    const extension = avatarExtensionByMimeType[file.mimetype as (typeof validAvatarMimeTypes)[number]];
+    const storagePath = `avatars/${auth.sub}/${randomUUID()}.${extension}`;
+    const supabase = getSupabaseStorageClient();
+    const { error: uploadError } = await supabase.storage.from(avatarBucket).upload(storagePath, file.buffer, {
+      contentType: file.mimetype,
+    });
+
+    if (uploadError) {
+      throw new Error(`Failed to upload avatar: ${uploadError.message}`);
+    }
+
+    const { data: urlData } = supabase.storage.from(avatarBucket).getPublicUrl(storagePath);
+    const avatarUrl = urlData?.publicUrl ?? "";
+
+    const result = await pool.query<ProfileRow>(
+      `UPDATE profiles
+          SET avatar_url = $2,
+              updated_at = NOW()
+        WHERE user_id = $1::uuid OR id = $1::uuid
+        RETURNING id, user_id, full_name, avatar_url, bio, location`,
+      [auth.sub, avatarUrl]
+    );
+
+    if (result.rows.length === 0) {
+      throw new Error("PROFILE_NOT_FOUND");
+    }
+
+    res.status(201).json({ data: toProfileResponse(result.rows[0]) });
+  } catch (error) {
+    sendProfileError("uploadMyAvatar", res, error);
+  }
 }
 
 export async function getProfile(req: Request, res: Response): Promise<void> {

@@ -5,6 +5,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { useNavigation } from '@react-navigation/native';
 import type { StackNavigationProp } from '@react-navigation/stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { shareActivityPost } from '../api/activitiesApi';
 import { addTrailReview, saveBookmark, type ReactNativeFile } from '../api/trailsApi';
 import { useTrailTracking } from '../contexts/TrailTrackingContext';
 import { saveJournalEntry } from '../data/localSocial';
@@ -160,18 +161,25 @@ export function TrailReviewScreen() {
         trailCoordinates: finishedSession.trail?.coordinates,
       };
 
-      clearFinishedSession();
-
       if (visibility !== 'private') {
+        clearFinishedSession();
         navigation.replace('ActivityShare', { draft });
       } else {
-        saveJournalEntry({
-          type: 'journal',
-          trail: trailName,
-          note: trimmedPostCaption || trimmedReview || 'Private hike post',
-          date: draft.completedAtIso,
-          photoUris: postPhotoUris,
-        });
+        if (draft.activityId) {
+          await shareActivityPost(draft.activityId, {
+            visibility: 'private',
+            caption: trimmedPostCaption || trimmedReview || 'Private hike post',
+          });
+        } else {
+          saveJournalEntry({
+            type: 'journal',
+            trail: trailName,
+            note: trimmedPostCaption || trimmedReview || 'Private hike post',
+            date: draft.completedAtIso,
+            photoUris: postPhotoUris,
+          });
+        }
+        clearFinishedSession();
         Alert.alert('Saved privately', 'Your private post was saved to your journal.', [
           {
             text: 'Open journal',

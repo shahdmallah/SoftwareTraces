@@ -544,6 +544,24 @@ export async function calculateTrailStats(req: Request, res: Response): Promise<
   res.json({ data: stats });
 }
 
+export async function recalculateTrailReviewStats(req: Request, res: Response): Promise<void> {
+  try {
+    const trailId = getRequestId(req.params.id);
+    const stats = await trailStatsService.recalculateTrailReviewStats(trailId);
+
+    res.json({ data: stats });
+  } catch (error) {
+    console.error("[recalculateTrailReviewStats] Error:", error);
+
+    if (error instanceof Error && error.message === "Trail not found") {
+      res.status(404).json({ error: "Trail not found" });
+      return;
+    }
+
+    res.status(500).json({ error: "Internal server error", details: error instanceof Error ? error.message : String(error) });
+  }
+}
+
 export async function createTrail(req: Request, res: Response): Promise<void> {
   try {
     const auth = requireAuth(req);
@@ -844,7 +862,10 @@ export async function createTrailReview(req: Request, res: Response): Promise<vo
         }
       }
 
-      console.log("[createTrailReview] Step 7: All photos uploaded, committing transaction");
+      console.log("[createTrailReview] Step 7: Recalculating trail review stats");
+      const trailReviewStats = await trailStatsService.recalculateTrailReviewStats(trailId, client);
+
+      console.log("[createTrailReview] Step 8: All photos uploaded, committing transaction");
       await client.query("COMMIT");
       console.log("[createTrailReview] Transaction committed successfully");
 
@@ -852,6 +873,7 @@ export async function createTrailReview(req: Request, res: Response): Promise<vo
         data: {
           ...review,
           photos: uploadedPhotos,
+          trail_stats: trailReviewStats,
         },
       });
     } catch (transactionError) {

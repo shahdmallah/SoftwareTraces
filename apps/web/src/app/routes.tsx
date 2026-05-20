@@ -8,6 +8,11 @@ import { HistoryScreen } from './screens/HistoryScreen';
 import { ProfileScreen } from './screens/ProfileScreen';
 import { TrailDetailScreen } from './screens/TrailDetailScreen';
 import { RecordingScreen } from './screens/RecordingScreen';
+import { SavedTrailsScreen } from './screens/SavedTrailsScreen';
+import { MyTrailsScreen } from './screens/MyTrailsScreen';
+import { JournalScreen } from './screens/JournalScreen';
+import { CommunityScreen } from './screens/CommunityScreen';
+import { OfflineScreen } from './screens/OfflineScreen';
 
 export const router = createBrowserRouter([
   {
@@ -26,10 +31,15 @@ export const router = createBrowserRouter([
     path: '/app',
     element: <AppLayout />,
     children: [
-      { index: true, element: <Navigate to="/app/map" replace /> },
+      { index: true, element: <Navigate to="/app/explore" replace /> },
       { path: 'map', element: <MapScreen /> },
       { path: 'explore', element: <ExploreScreen /> },
+      { path: 'saved', element: <SavedTrailsScreen /> },
+      { path: 'my-trails', element: <MyTrailsScreen /> },
       { path: 'history', element: <HistoryScreen /> },
+      { path: 'journal', element: <JournalScreen /> },
+      { path: 'community', element: <CommunityScreen /> },
+      { path: 'offline', element: <OfflineScreen /> },
       { path: 'profile', element: <ProfileScreen /> },
     ],
   },

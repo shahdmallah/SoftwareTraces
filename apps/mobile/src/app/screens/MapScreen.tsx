@@ -12,6 +12,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useLanguage } from '../contexts/LanguageContext';
 import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
+import { getOfflineMapPacks, type OfflineMapPack } from '../state/offlineMaps';
 import { getTrailRouteCoordinates } from '../state/trailRoutes';
 import { theme } from '../theme';
 import { ltrRow, ltrText, rtlRow, rtlText } from '../utils/direction';
@@ -68,6 +69,36 @@ function toLineFeature(coordinates: [number, number][] | null): FeatureCollectio
   return {
     type: 'FeatureCollection',
     features,
+  };
+}
+
+function buildOfflineTrail(map: OfflineMapPack): Trail {
+  return {
+    id: map.trailId,
+    name: map.trailName,
+    nameAr: map.trailNameAr || map.trailName,
+    region: map.region ?? '',
+    regionAr: map.regionAr ?? map.region ?? '',
+    description: '',
+    descriptionAr: '',
+    distance: 0,
+    duration: '',
+    elevationGain: 0,
+    elevationMin: 0,
+    elevationMax: 0,
+    difficulty: 'Easy',
+    rating: 0,
+    reviews: 0,
+    image: '',
+    images: [],
+    features: [],
+    featuresAr: [],
+    hasCheckpoint: false,
+    coordinates: map.coordinates ?? [31.78, 35.24],
+    routeCoordinates: map.routeCoordinates,
+    mapX: 0,
+    mapY: 0,
+    tags: [],
   };
 }
 
@@ -351,7 +382,14 @@ export function MapScreen() {
           setNearbyTrails((current) => (current.some((item) => item.id === trail.id) ? current : [trail, ...current]));
         }
       } catch {
-        // Keep the current map state if the linked trail cannot be fetched.
+        const offlinePack = (await getOfflineMapPacks()).find((pack) => pack.trailId === selectedTrailId);
+
+        if (!cancelled && offlinePack) {
+          const trail = buildOfflineTrail(offlinePack);
+          setSelectedTrail(trail);
+          setNearbyTrails((current) => (current.some((item) => item.id === trail.id) ? current : [trail, ...current]));
+          setFetchError(null);
+        }
       }
     };
 

@@ -1,16 +1,20 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { View, Text, Pressable, StyleSheet, Image, ScrollView } from 'react-native';
+import { View, Text, Pressable, StyleSheet, Image, ScrollView, type ImageStyle, type StyleProp } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Svg, { Circle, Defs, LinearGradient, Path, Rect, Stop } from 'react-native-svg';
 
 import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
 import { getSavedTrails, type Trail } from '../api/trailsApi';
+import { getTrailPhotos } from '../api/mediaApi';
+import { buildMapImageUri } from '../config/mapConfig';
 import { RootStackParamList } from '../navigation/types';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { ltrRow, ltrText, rtlRow, rtlText } from '../utils/direction';
+import { buildMiniRoutePreviewPoints, buildSmoothPath } from '../utils/trailUtils';
 
 type SavedNavigationProp = StackNavigationProp<RootStackParamList, 'TrailDetail'>;
 type SavedTab = 'favorites' | 'completed';
@@ -37,6 +41,65 @@ function formatCompletedDate(dateString: string, locale: string) {
   }).format(date);
 }
 
+function getUniqueMediaUrls(mediaImages: string[] = []) {
+  return mediaImages.filter(
+    (imageUri, index, collection): imageUri is string =>
+      Boolean(imageUri) && collection.indexOf(imageUri) === index,
+  );
+}
+
+function SavedTrailMedia({ trail, mediaImages, style }: { trail: Trail; mediaImages?: string[]; style: StyleProp<ImageStyle> }) {
+  const images = getUniqueMediaUrls(mediaImages);
+
+  if (images.length) {
+    return <Image source={{ uri: images[0] }} style={style} />;
+  }
+
+  const [lat, lng] = trail.coordinates;
+  const points = buildMiniRoutePreviewPoints(trail.routeCoordinates);
+  const path = buildSmoothPath(points);
+  const startPoint = points[0] ?? { x: 28, y: 92 };
+  const endPoint = points[points.length - 1] ?? { x: 140, y: 34 };
+  const mapImageUri = buildMapImageUri(lng, lat);
+
+  return (
+    <View style={[styles.mapPreview, style]}>
+      {mapImageUri ? <Image source={{ uri: mapImageUri }} style={styles.mapPreviewImage} /> : null}
+      <Svg width="100%" height="100%" viewBox="0 0 170 120" style={styles.mapPreviewOverlay}>
+        <Defs>
+          <LinearGradient id="savedMapTerrain" x1="0" y1="0" x2="1" y2="1">
+            <Stop offset="0" stopColor="#F4EFE2" />
+            <Stop offset="0.52" stopColor="#ECE3D1" />
+            <Stop offset="1" stopColor="#E0D5BF" />
+          </LinearGradient>
+          <LinearGradient id="savedMapWater" x1="0" y1="0" x2="1" y2="1">
+            <Stop offset="0" stopColor="#B8DCEC" />
+            <Stop offset="1" stopColor="#8EC2DD" />
+          </LinearGradient>
+        </Defs>
+
+        {!mapImageUri ? (
+          <>
+            <Rect width="170" height="170" fill="url(#savedMapTerrain)" />
+            <Path d="M -8 102 C 18 84, 58 74, 95 82 C 122 88, 148 104, 178 101 L 178 130 L -8 130 Z" fill="rgba(114,156,106,0.22)" />
+            <Path d="M 108 -8 C 92 12, 89 28, 102 52 C 114 75, 138 97, 182 108 L 182 -8 Z" fill="rgba(198,186,161,0.36)" />
+            <Path d="M -8 28 C 24 18, 56 20, 89 30 C 118 38, 144 35, 178 18 L 178 48 C 143 57, 118 60, 90 52 C 59 44, 28 42, -8 52 Z" fill="url(#savedMapWater)" opacity={0.95} />
+            <Path d="M -6 86 C 28 70, 56 68, 92 76 C 120 82, 147 76, 178 58" fill="none" stroke="#FAF8F2" strokeWidth={12} strokeLinecap="round" />
+            <Path d="M -6 86 C 28 70, 56 68, 92 76 C 120 82, 147 76, 178 58" fill="none" stroke="#D5C7AE" strokeWidth={4.5} strokeLinecap="round" />
+          </>
+        ) : null}
+
+        <Path d={path} fill="none" stroke="rgba(255,255,255,0.96)" strokeWidth={6} strokeLinecap="round" strokeLinejoin="round" />
+        <Path d={path} fill="none" stroke="#2FAF62" strokeWidth={3} strokeLinecap="round" strokeLinejoin="round" />
+        <Circle cx={startPoint.x} cy={startPoint.y} r={5} fill="#FFFFFF" stroke="#1C1D18" strokeWidth={1.5} />
+        <Circle cx={startPoint.x} cy={startPoint.y} r={2.5} fill="#2FAF62" />
+        <Circle cx={endPoint.x} cy={endPoint.y} r={5} fill="#FFFFFF" stroke="#1C1D18" strokeWidth={1.5} />
+        <Circle cx={endPoint.x} cy={endPoint.y} r={2.5} fill="#7A1E1E" />
+      </Svg>
+    </View>
+  );
+}
+
 export function SavedScreen() {
   const navigation = useNavigation<SavedNavigationProp>();
   const insets = useSafeAreaInsets();
@@ -46,6 +109,7 @@ export function SavedScreen() {
   const [activeTab, setActiveTab] = useState<SavedTab>('favorites');
   const [savedTrails, setSavedTrails] = useState<Trail[]>([]);
   const [completedTrails, setCompletedTrails] = useState<CompletedTrailEntry[]>([]);
+  const [trailMediaImages, setTrailMediaImages] = useState<Record<string, string[]>>({});
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -111,6 +175,47 @@ export function SavedScreen() {
     () => (activeTab === 'completed' ? completedTrails.length : savedTrails.length),
     [activeTab, completedTrails.length, savedTrails.length],
   );
+
+  const activeTrails = useMemo(
+    () => (activeTab === 'completed' ? completedTrails.map((entry) => entry.trail) : savedTrails),
+    [activeTab, completedTrails, savedTrails],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadTrailMediaImages = async () => {
+      if (!activeTrails.length) {
+        setTrailMediaImages({});
+        return;
+      }
+
+      const mediaEntries = await Promise.all(
+        activeTrails.map(async (trail) => {
+          try {
+            const photos = await getTrailPhotos(trail.id);
+            const urls = photos
+              .map((photo) => photo.url)
+              .filter((url, index, collection): url is string => Boolean(url) && collection.indexOf(url) === index);
+
+            return [trail.id, urls] as const;
+          } catch {
+            return [trail.id, []] as const;
+          }
+        }),
+      );
+
+      if (!cancelled) {
+        setTrailMediaImages(Object.fromEntries(mediaEntries));
+      }
+    };
+
+    void loadTrailMediaImages();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTrails]);
 
   const completedTotals = useMemo(() => {
     const totalDistance = completedTrails.reduce((sum, item) => sum + item.trail.distance, 0);
@@ -224,7 +329,7 @@ export function SavedScreen() {
                     style={[styles.historyCard, isArabic ? rtlRow : ltrRow]}
                     onPress={() => navigation.navigate('TrailDetail', { trailId: entry.trail.id })}
                   >
-                    <Image source={{ uri: entry.trail.image }} style={styles.historyImage} />
+                    <SavedTrailMedia trail={entry.trail} mediaImages={trailMediaImages[entry.trail.id]} style={styles.historyImage} />
                     <View style={styles.historyContent}>
                       <Text style={[styles.historyDate, isArabic ? rtlText : ltrText]}>
                         {formatCompletedDate(entry.savedAt, isArabic ? 'ar' : 'en-US')}
@@ -261,7 +366,7 @@ export function SavedScreen() {
           savedTrails.map((trail, index) => (
             <AnimatedBlock key={trail.id} delay={90 + index * 40}>
               <Pressable style={styles.card} onPress={() => navigation.navigate('TrailDetail', { trailId: trail.id })}>
-                <Image source={{ uri: trail.image }} style={styles.image} />
+                <SavedTrailMedia trail={trail} mediaImages={trailMediaImages[trail.id]} style={styles.image} />
                 <View style={styles.overlay}>
                   <View style={[styles.cardTopRow, isArabic ? rtlRow : ltrRow]}>
                     <View style={styles.badge}>
@@ -365,6 +470,18 @@ const styles = StyleSheet.create({
   image: {
     width: '100%',
     height: '100%',
+  },
+  mapPreview: {
+    overflow: 'hidden',
+    backgroundColor: '#F4EFE2',
+  },
+  mapPreviewImage: {
+    ...StyleSheet.absoluteFillObject,
+    width: '100%',
+    height: '100%',
+  },
+  mapPreviewOverlay: {
+    ...StyleSheet.absoluteFillObject,
   },
   overlay: {
     ...StyleSheet.absoluteFillObject,

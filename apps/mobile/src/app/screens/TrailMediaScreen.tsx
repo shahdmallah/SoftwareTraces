@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   Animated,
+  Alert,
   Dimensions,
   Easing,
   GestureResponderEvent,
@@ -20,7 +21,8 @@ import Svg, { Circle, Defs, LinearGradient, Path, Stop } from 'react-native-svg'
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { RootStackParamList } from '../navigation/types';
 import { getTrailById, getTrailElevationProfile, type ElevationProfile, type Trail } from '../api/trailsApi';
-import { getTrailPhotos, type TrailPhoto } from '../api/mediaApi';
+import { deleteReviewPhoto, deleteTrailPhoto, getTrailPhotos, setPrimaryTrailPhoto, type TrailPhoto } from '../api/mediaApi';
+import { useAuth } from '../contexts/AuthContext';
 import { buildGalleryImages } from '../utils/trailUtils';
 import { theme } from '../theme';
 
@@ -32,6 +34,7 @@ type GalleryItem = {
   imageUri: string;
   label: string;
   height: number;
+  photo?: TrailPhoto;
 };
 
 const { width } = Dimensions.get('window');
@@ -220,6 +223,7 @@ function buildGalleryItems(tab: MediaTab, trail: Trail | null, photos: TrailPhot
         imageUri: photo.url,
         label: formatPhotoDate(photo.created_at),
         height: CARD_HEIGHTS[index % CARD_HEIGHTS.length],
+        photo,
       }));
     }
   }
@@ -231,6 +235,7 @@ function buildGalleryItems(tab: MediaTab, trail: Trail | null, photos: TrailPhot
         imageUri: photo.url,
         label: photo.caption?.trim() || trail?.features[index % Math.max(1, trail?.features.length ?? 1)] || formatPhotoDate(photo.created_at),
         height: CARD_HEIGHTS[index % CARD_HEIGHTS.length],
+        photo,
       }));
     }
 
@@ -257,6 +262,7 @@ function buildGalleryItems(tab: MediaTab, trail: Trail | null, photos: TrailPhot
       imageUri: photo.url,
       label: season,
       height: CARD_HEIGHTS[index % CARD_HEIGHTS.length],
+      photo,
     }));
 
     return seasonItems;
@@ -275,6 +281,7 @@ export function TrailMediaScreen() {
   const navigation = useNavigation<TrailMediaNavigationProp>();
   const route = useRoute<TrailMediaScreenRouteProp>();
   const insets = useSafeAreaInsets();
+  const { isAuthenticated } = useAuth();
   const { trailId } = route.params;
   const [trail, setTrail] = useState<Trail | null>(null);
   const [trailPhotos, setTrailPhotos] = useState<TrailPhoto[]>([]);
@@ -284,6 +291,7 @@ export function TrailMediaScreen() {
   const [activeTab, setActiveTab] = useState<MediaTab>('latest');
   const [tourProgress, setTourProgress] = useState(0);
   const [tourPlaying, setTourPlaying] = useState(false);
+  const [pendingPhotoAction, setPendingPhotoAction] = useState<string | null>(null);
 
   const imageFade = useRef(new Animated.Value(1)).current;
   const prevPhotoIndexRef = useRef(0);
@@ -327,6 +335,74 @@ export function TrailMediaScreen() {
       cancelled = true;
     };
   }, [trailId]);
+
+  const refreshTrailPhotos = useCallback(async () => {
+    try {
+      const [nextTrail, nextPhotos] = await Promise.all([
+        getTrailById(trailId),
+        getTrailPhotos(trailId).catch(() => []),
+      ]);
+
+      setTrail(nextTrail);
+      setTrailPhotos(nextPhotos);
+    } catch (nextError) {
+      Alert.alert('Unable to refresh photos', nextError instanceof Error ? nextError.message : 'Please try again.');
+    }
+  }, [trailId]);
+
+  const handleSetPrimaryPhoto = useCallback(async (photo: TrailPhoto) => {
+    if (!isAuthenticated) {
+      navigation.navigate('Auth', { mode: 'signin' });
+      return;
+    }
+
+    if (photo.source !== 'direct' || photo.is_primary) {
+      return;
+    }
+
+    setPendingPhotoAction(`primary-${photo.id}`);
+
+    try {
+      await setPrimaryTrailPhoto(photo.id);
+      await refreshTrailPhotos();
+    } catch (nextError) {
+      Alert.alert('Unable to set primary photo', nextError instanceof Error ? nextError.message : 'Please try again.');
+    } finally {
+      setPendingPhotoAction(null);
+    }
+  }, [isAuthenticated, navigation, refreshTrailPhotos]);
+
+  const handleDeletePhoto = useCallback((photo: TrailPhoto) => {
+    if (!isAuthenticated) {
+      navigation.navigate('Auth', { mode: 'signin' });
+      return;
+    }
+
+    Alert.alert('Delete photo?', 'This removes the photo from this trail.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: async () => {
+          setPendingPhotoAction(`delete-${photo.id}`);
+
+          try {
+            if (photo.source === 'review') {
+              await deleteReviewPhoto(photo.id);
+            } else {
+              await deleteTrailPhoto(photo.id);
+            }
+
+            await refreshTrailPhotos();
+          } catch (nextError) {
+            Alert.alert('Unable to delete photo', nextError instanceof Error ? nextError.message : 'Please try again.');
+          } finally {
+            setPendingPhotoAction(null);
+          }
+        },
+      },
+    ]);
+  }, [isAuthenticated, navigation, refreshTrailPhotos]);
 
   useEffect(() => {
     setTourProgress(0);
@@ -631,6 +707,35 @@ export function TrailMediaScreen() {
                   <Image source={{ uri: item.imageUri }} style={styles.galleryImage} resizeMode="cover" />
                   <View style={styles.galleryGradient} />
                   <Text style={styles.galleryLabel}>{item.label}</Text>
+                  {item.photo ? (
+                    <View style={styles.photoActions}>
+                      {item.photo.source === 'direct' ? (
+                        <Pressable
+                          style={[styles.photoActionButton, item.photo.is_primary && styles.photoActionButtonActive]}
+                          disabled={item.photo.is_primary || pendingPhotoAction === `primary-${item.photo.id}`}
+                          onPress={() => void handleSetPrimaryPhoto(item.photo!)}
+                        >
+                          {pendingPhotoAction === `primary-${item.photo.id}` ? (
+                            <ActivityIndicator size="small" color="#fff" />
+                          ) : (
+                            <Ionicons name={item.photo.is_primary ? 'star' : 'star-outline'} size={17} color="#fff" />
+                          )}
+                        </Pressable>
+                      ) : null}
+
+                      <Pressable
+                        style={styles.photoActionButton}
+                        disabled={pendingPhotoAction === `delete-${item.photo.id}`}
+                        onPress={() => handleDeletePhoto(item.photo!)}
+                      >
+                        {pendingPhotoAction === `delete-${item.photo.id}` ? (
+                          <ActivityIndicator size="small" color="#fff" />
+                        ) : (
+                          <Ionicons name="trash-outline" size={17} color="#fff" />
+                        )}
+                      </Pressable>
+                    </View>
+                  ) : null}
                 </View>
               ))}
             </View>
@@ -719,6 +824,26 @@ const styles = StyleSheet.create({
     lineHeight: 28,
     fontWeight: '700',
     letterSpacing: -0.6,
+  },
+  photoActions: {
+    position: 'absolute',
+    top: 12,
+    right: 12,
+    flexDirection: 'row',
+    gap: 8,
+  },
+  photoActionButton: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(16,23,14,0.62)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.18)',
+  },
+  photoActionButtonActive: {
+    backgroundColor: '#630E13',
   },
   floatingTabsWrap: {
     position: 'absolute',

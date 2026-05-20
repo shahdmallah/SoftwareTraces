@@ -75,6 +75,36 @@ export type ActivityDetail = {
   points: ActivityDetailPoint[];
 };
 
+export type ActivityJournalRow = {
+  id: string;
+  activity_id: string;
+  caption?: string | null;
+  created_at: string;
+  trail_id?: string | null;
+  trail_name?: string | null;
+  trail_image?: string | null;
+  distance_meters?: number | string | null;
+  elapsed_time_seconds?: number | null;
+  elevation_gain_meters?: number | string | null;
+  start_time?: string | null;
+  end_time?: string | null;
+  photo_url?: string | null;
+};
+
+export type ActivityJournalEntry = {
+  id: string;
+  activityId: string;
+  trailId?: string | null;
+  trailName: string;
+  note: string;
+  createdAt: string;
+  completedAt?: string | null;
+  photoUris: string[];
+  distanceKm?: number | null;
+  elapsedTimeSeconds?: number | null;
+  elevationGainM?: number | null;
+};
+
 function num(value: unknown): number | null {
   if (value == null || value === '') return null;
   const n = typeof value === 'number' ? value : Number.parseFloat(String(value));
@@ -112,6 +142,30 @@ export async function getUserActivities(_userId: string) {
 export async function getMyActivities(params: { page?: number; limit?: number; status?: string } = {}) {
   const response = await apiRequest<Envelope<ActivityRow[]>>('/api/activities/me', {}, params);
   return response.data.map(normalizeActivityRow);
+}
+
+export function normalizeActivityJournalRow(row: ActivityJournalRow): ActivityJournalEntry {
+  const image = row.photo_url || row.trail_image || '';
+  const distanceMeters = num(row.distance_meters);
+
+  return {
+    id: row.id,
+    activityId: row.activity_id,
+    trailId: row.trail_id,
+    trailName: row.trail_name?.trim() || 'Private hike',
+    note: row.caption?.trim() || 'Private hike post',
+    createdAt: row.created_at,
+    completedAt: row.end_time ?? row.start_time ?? null,
+    photoUris: image ? [image] : [],
+    distanceKm: distanceMeters != null ? distanceMeters / 1000 : null,
+    elapsedTimeSeconds: row.elapsed_time_seconds ?? null,
+    elevationGainM: num(row.elevation_gain_meters),
+  };
+}
+
+export async function getMyActivityJournal(params: { page?: number; limit?: number } = {}) {
+  const response = await apiRequest<Envelope<ActivityJournalRow[]>>('/api/activities/journal', {}, params);
+  return response.data.map(normalizeActivityJournalRow);
 }
 
 export async function getActivityById(activityId: string) {

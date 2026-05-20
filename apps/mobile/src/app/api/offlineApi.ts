@@ -28,6 +28,45 @@ export type OfflineActivityPayload = {
   }>;
 };
 
+type OfflineRoutePayload = {
+  trailId: string;
+  trailName?: string;
+  trailNameAr?: string;
+  region?: string;
+  regionAr?: string;
+  coordinates?: [number, number];
+  routeCoordinates?: [number, number][];
+  route?: [number, number][];
+  tileRegion: string;
+  tileUrlTemplate: string;
+};
+
+function isLikelyWestBankLngLat(point: [number, number]) {
+  const [lng, lat] = point;
+  return lng >= 34 && lng <= 36.8 && lat >= 29 && lat <= 33.8;
+}
+
+function isLikelyWestBankLatLng(point: [number, number]) {
+  const [lat, lng] = point;
+  return lat >= 29 && lat <= 33.8 && lng >= 34 && lng <= 36.8;
+}
+
+function normalizeRoutePoint(point: [number, number]): [number, number] {
+  if (isLikelyWestBankLatLng(point) && !isLikelyWestBankLngLat(point)) {
+    return [point[1], point[0]];
+  }
+
+  return point;
+}
+
+function normalizeRouteCoordinates(routeCoordinates?: [number, number][]) {
+  if (!Array.isArray(routeCoordinates)) {
+    return undefined;
+  }
+
+  return routeCoordinates.map(normalizeRoutePoint);
+}
+
 export async function getPendingSync(params: { since?: string } = {}) {
   const response = await apiRequest<Envelope<Record<string, unknown>[]>>('/api/offline/sync', {}, params);
   return response.data;
@@ -42,10 +81,11 @@ export async function syncOfflineActivities(activities: OfflineActivityPayload[]
 }
 
 export async function downloadOfflineMap(trailId: string) {
-  const response = await apiRequest<Envelope<{
-    trailId: string;
-    tileRegion: string;
-    tileUrlTemplate: string;
-  }>>(`/api/offline/maps/${trailId}`);
-  return response.data;
+  const response = await apiRequest<Envelope<OfflineRoutePayload>>(`/api/offline/maps/${trailId}`);
+  const routeCoordinates = response.data.routeCoordinates ?? response.data.route;
+
+  return {
+    ...response.data,
+    routeCoordinates: normalizeRouteCoordinates(routeCoordinates),
+  };
 }

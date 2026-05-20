@@ -7,6 +7,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { checkAchievements } from '../api/achievementsApi';
+import { shareActivityPost } from '../api/activitiesApi';
 import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
 import {
   CommunitySuggestions,
@@ -26,7 +27,7 @@ import {
   formatElevation,
 } from '../features/trailCompletion/formatters';
 import { useCompletionWeather } from '../features/trailCompletion/useCompletionWeather';
-import { addLocalFeedItem, saveJournalEntry } from '../data/localSocial';
+import { saveJournalEntry } from '../data/localSocial';
 import { RootStackParamList } from '../navigation/types';
 import { ltrRow, ltrText, rtlRow, rtlText } from '../utils/direction';
 import { useAuth } from '../contexts/AuthContext';
@@ -115,15 +116,33 @@ export function ActivityShareScreen() {
     ];
   }, [draft, isArabic]);
 
-  const handleJournalSave = () => {
+  const handleJournalSave = async () => {
     if (!draft) return;
 
-    saveJournalEntry({
-      type: 'journal',
-      trail: draft.trailName,
-      note: draft.review,
-      date: draft.completedAtIso,
-    });
+    try {
+      const note = draft.postCaption?.trim() || draft.review.trim() || 'Private hike post';
+
+      if (draft.activityId) {
+        await shareActivityPost(draft.activityId, {
+          visibility: 'private',
+          caption: note,
+        });
+      } else {
+        saveJournalEntry({
+          type: 'journal',
+          trail: draft.trailName,
+          note,
+          date: draft.completedAtIso,
+          photoUris: draft.postPhotoUris ?? draft.photoUris,
+        });
+      }
+    } catch (error) {
+      Alert.alert(
+        isArabic ? 'طھط¹ط°ط± ط­ظپط¸ ط§ظ„ظٹظˆظ…ظٹط§طھ' : 'Unable to save journal',
+        error instanceof Error ? error.message : isArabic ? 'ط­ط§ظˆظ„ ظ…ط±ط© ط£ط®ط±ظ‰.' : 'Please try again.',
+      );
+      return;
+    }
 
     Alert.alert(
       isArabic ? 'حُفظ في اليوميات' : 'Saved to your journal',

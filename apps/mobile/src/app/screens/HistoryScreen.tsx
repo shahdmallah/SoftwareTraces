@@ -18,7 +18,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLanguage } from '../contexts/LanguageContext';
 import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
 import { useAuth } from '../contexts/AuthContext';
-import { deleteActivity, getActivityById, getUserActivities, type Activity, type ActivityDetail } from '../api/activitiesApi';
+import { deleteActivity, getActivityById, getMyActivities, type Activity, type ActivityDetail } from '../api/activitiesApi';
 import { getTrailById, type Trail } from '../api/trailsApi';
 
 const dayNamesAr = ['أح', 'إث', 'ثل', 'أر', 'خم', 'جم', 'سب'];
@@ -39,6 +39,9 @@ export function HistoryScreen() {
   const [expandedActivityId, setExpandedActivityId] = useState<string | null>(null);
   const [loadingActivityId, setLoadingActivityId] = useState<string | null>(null);
   const [activityError, setActivityError] = useState('');
+  const [isHistoryLoading, setIsHistoryLoading] = useState(true);
+  const [historyError, setHistoryError] = useState('');
+  const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -46,14 +49,17 @@ export function HistoryScreen() {
     if (!user?.id) {
       setActivities([]);
       setTrailMap({});
+      setIsHistoryLoading(false);
       return () => {
         cancelled = true;
       };
     }
 
     const loadHistory = async () => {
+      setIsHistoryLoading(true);
+      setHistoryError('');
       try {
-        const userActivities = await getUserActivities(user.id);
+        const userActivities = await getMyActivities({ status: 'completed', limit: 100 });
         if (cancelled) return;
         setActivities(userActivities);
 
@@ -81,10 +87,15 @@ export function HistoryScreen() {
           });
           setTrailMap(nextMap);
         }
-      } catch {
+      } catch (error) {
         if (!cancelled) {
           setActivities([]);
           setTrailMap({});
+          setHistoryError(error instanceof Error ? error.message : 'Unable to load your activity history.');
+        }
+      } finally {
+        if (!cancelled) {
+          setIsHistoryLoading(false);
         }
       }
     };
@@ -94,7 +105,7 @@ export function HistoryScreen() {
     return () => {
       cancelled = true;
     };
-  }, [user?.id]);
+  }, [user?.id, refreshKey]);
 
   const completedActivities = useMemo(
     () =>
@@ -185,9 +196,14 @@ export function HistoryScreen() {
     <AnimatedScreen style={styles.container}>
       {/* ── Header ── */}
       <AnimatedBlock delay={40} style={[styles.header, { paddingTop: Math.max(12, insets.top + 8) }]}>
-        <View>
-          <Text style={styles.title}>{t('historyTitle')}</Text>
-          <Text style={styles.subtitle}>{t('historySubtitle')}</Text>
+        <View style={styles.headerTopRow}>
+          <View style={styles.headerCopy}>
+            <Text style={styles.title}>{t('historyTitle')}</Text>
+            <Text style={styles.subtitle}>{t('historySubtitle')}</Text>
+          </View>
+          <Pressable style={styles.refreshButton} onPress={() => setRefreshKey((value) => value + 1)}>
+            <Ionicons name="refresh" size={18} color="#FFF8EA" />
+          </Pressable>
         </View>
 
         <View style={styles.statsRow}>
@@ -244,7 +260,20 @@ export function HistoryScreen() {
       {/* ── Content ── */}
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         {activeTab === 'list' ? (
-          completedActivities.length === 0 ? (
+          isHistoryLoading ? (
+            <View style={styles.emptyState}>
+              <ActivityIndicator color="#630E13" />
+              <Text style={styles.emptyStateText}>Loading activity history...</Text>
+            </View>
+          ) : historyError ? (
+            <View style={styles.emptyState}>
+              <Ionicons name="alert-circle-outline" size={42} color="#BB2823" />
+              <Text style={styles.activityErrorText}>{historyError}</Text>
+              <Pressable style={styles.retryButton} onPress={() => setRefreshKey((value) => value + 1)}>
+                <Text style={styles.retryButtonText}>Retry</Text>
+              </Pressable>
+            </View>
+          ) : completedActivities.length === 0 ? (
             <View style={styles.emptyState}>
               <Ionicons name="trail-sign-outline" size={48} color="#C9B89A" />
               <Text style={styles.emptyStateText}>No completed hikes yet</Text>
@@ -278,7 +307,7 @@ export function HistoryScreen() {
                           }).format(new Date(hike.started_at))}
                         </Text>
                         <Text style={styles.hikeName} numberOfLines={1}>
-                          {trailMap[hike.trail_id ?? '']?.name ?? 'Trail'}
+                          {trailMap[hike.trail_id ?? '']?.name ?? hike.trail_name ?? 'Trail'}
                         </Text>
                         <View style={styles.hikeMetaRow}>
                           <Text style={styles.hikeMetaText}>
@@ -455,6 +484,24 @@ const styles = StyleSheet.create({
     backgroundColor: '#630E13',
     borderBottomLeftRadius: 28,
     borderBottomRightRadius: 28,
+  },
+  headerTopRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  headerCopy: {
+    flex: 1,
+  },
+  refreshButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.16)',
   },
   title: {
     fontSize: 22,
@@ -647,6 +694,20 @@ const styles = StyleSheet.create({
     color: '#8B1E1E',
     fontSize: 12,
     fontWeight: '800',
+    textAlign: 'center',
+  },
+  retryButton: {
+    minWidth: 120,
+    minHeight: 42,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#630E13',
+  },
+  retryButtonText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '900',
   },
   activityActionRow: {
     flexDirection: 'row',

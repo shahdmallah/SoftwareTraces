@@ -123,6 +123,13 @@ export type TrailStatsResponse = {
   difficulty: TrailDifficultyApi;
 };
 
+export type TrailReviewStatsResponse = {
+  average_rating: number;
+  total_reviews: number;
+  rating: number;
+  reviews: number;
+};
+
 export type ElevationProfile = {
   elevations: number[];
   distances: number[];
@@ -358,6 +365,13 @@ export async function addTrailReview(id: string, payload: { rating: number; cont
       ...(payload.title ? { title: payload.title } : {}),
     }),
   });
+}
+
+export async function recalculateTrailReviewStats(id: string) {
+  const response = await apiRequest<Envelope<TrailReviewStatsResponse>>(`/api/trails/${id}/reviews/recalculate`, {
+    method: 'POST',
+  });
+  return response.data;
 }
 
 export async function getTrailReviews(id: string) {

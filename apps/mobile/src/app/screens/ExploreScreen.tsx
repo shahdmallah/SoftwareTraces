@@ -336,13 +336,15 @@ export function ExploreScreen() {
 
     try {
       const map = await downloadOfflineMap(trail.id);
+      const routeCoordinates = map.routeCoordinates?.length ? map.routeCoordinates : trail.routeCoordinates;
       await saveOfflineMapPack({
         trailId: map.trailId,
-        trailName: trail.name,
-        trailNameAr: trail.nameAr,
-        region: trail.region,
-        regionAr: trail.regionAr,
-        coordinates: trail.coordinates,
+        trailName: map.trailName ?? trail.name,
+        trailNameAr: map.trailNameAr ?? trail.nameAr,
+        region: map.region ?? trail.region,
+        regionAr: map.regionAr ?? trail.regionAr,
+        coordinates: map.coordinates ?? trail.coordinates,
+        routeCoordinates,
         tileRegion: map.tileRegion,
         tileUrlTemplate: map.tileUrlTemplate,
         downloadedAt: new Date().toISOString(),

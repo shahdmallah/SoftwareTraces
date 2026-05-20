@@ -7,6 +7,7 @@ export type OfflineMapPack = {
   region?: string;
   regionAr?: string;
   coordinates?: [number, number];
+  routeCoordinates?: [number, number][];
   tileRegion: string;
   tileUrlTemplate: string;
   downloadedAt: string;
