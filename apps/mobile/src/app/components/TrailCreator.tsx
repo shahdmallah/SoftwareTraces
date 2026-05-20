@@ -2,6 +2,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Image, View, Text, TextInput, Pressable, StyleSheet, ActivityIndicator, Alert } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
+import * as Location from 'expo-location';
 import Mapbox from '@rnmapbox/maps';
 import type { Feature, FeatureCollection, LineString, Point } from 'geojson';
 import { Ionicons } from '@expo/vector-icons';
@@ -222,6 +223,33 @@ function toFallbackStats(distanceMeters: number, durationSeconds: number): Trail
   };
 }
 
+function getDistanceMeters(left: LngLat, right: LngLat) {
+  const earthRadiusMeters = 6371000;
+  const toRadians = (value: number) => (value * Math.PI) / 180;
+  const [leftLng, leftLat] = left;
+  const [rightLng, rightLat] = right;
+  const deltaLat = toRadians(rightLat - leftLat);
+  const deltaLng = toRadians(rightLng - leftLng);
+  const a =
+    Math.sin(deltaLat / 2) * Math.sin(deltaLat / 2) +
+    Math.cos(toRadians(leftLat)) *
+      Math.cos(toRadians(rightLat)) *
+      Math.sin(deltaLng / 2) *
+      Math.sin(deltaLng / 2);
+
+  return earthRadiusMeters * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function getPathDistanceMeters(points: LngLat[]) {
+  return points.reduce((sum, point, index) => {
+    if (index === 0) {
+      return sum;
+    }
+
+    return sum + getDistanceMeters(points[index - 1], point);
+  }, 0);
+}
+
 function buildDirectionsUrl(waypoints: LngLat[]) {
   const coordinates = waypoints.map(([lng, lat]) => `${lng},${lat}`).join(';');
   const params = new URLSearchParams({
@@ -241,8 +269,10 @@ export function TrailCreator({
 }: TrailCreatorProps) {
   const insets = useSafeAreaInsets();
   const cameraRef = useRef<Mapbox.Camera>(null);
+  const locationSubscriptionRef = useRef<Location.LocationSubscription | null>(null);
 
   const [isDrawing, setIsDrawing] = useState(false);
+  const [isRecordingTrail, setIsRecordingTrail] = useState(false);
   const [isFinished, setIsFinished] = useState(false);
   const [drawingStage, setDrawingStage] = useState<DrawingStage>('start');
   const [isLoop, setIsLoop] = useState(false);
@@ -281,6 +311,7 @@ export function TrailCreator({
   const [savingMode, setSavingMode] = useState<'draft' | 'published' | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState<string | null>(null);
+  const [recordingStartedAt, setRecordingStartedAt] = useState<number | null>(null);
 
   const [zoomLevel, setZoomLevel] = useState(initialZoom);
   const [pitch, setPitch] = useState(0); // 0 for 2D, 45 for 3D
@@ -298,8 +329,18 @@ export function TrailCreator({
   const canUndo = isDrawing && waypointCount > 0;
   const canMarkEnd = isDrawing && Boolean(startCoordinate) && drawingStage === 'middle';
   const canFinish = isDrawing && Boolean(startCoordinate && endCoordinate) && !isCalculating;
+  const recordedDistanceMeters = useMemo(() => getPathDistanceMeters(routeCoordinates), [routeCoordinates]);
+
+  useEffect(() => {
+    return () => {
+      locationSubscriptionRef.current?.remove();
+      locationSubscriptionRef.current = null;
+    };
+  }, []);
 
   const begin = () => {
+    locationSubscriptionRef.current?.remove();
+    locationSubscriptionRef.current = null;
     setSaveSuccess(null);
     setSaveError(null);
     setCalcError(null);
@@ -315,10 +356,18 @@ export function TrailCreator({
     setIsLoop(false);
     setDrawingStage('start');
     setIsDrawing(true);
+    setIsRecordingTrail(false);
     setIsFinished(false);
+    setRecordingStartedAt(null);
   };
 
-  const clear = () => {
+  const beginRecordingTrail = async () => {
+    locationSubscriptionRef.current?.remove();
+    locationSubscriptionRef.current = null;
+    setSaveSuccess(null);
+    setSaveError(null);
+    setCalcError(null);
+    setStats(null);
     setName('');
     setDescription('');
     setRegion('');
@@ -331,10 +380,114 @@ export function TrailCreator({
     setDrawingStage('start');
     setIsDrawing(false);
     setIsFinished(false);
+    setIsRecordingTrail(false);
+    setRecordingStartedAt(null);
+
+    try {
+      const permission = await Location.requestForegroundPermissionsAsync();
+      if (!permission.granted) {
+        Alert.alert('Location required', 'Location permission is required to record a trail as you walk.');
+        return;
+      }
+
+      const current = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.BestForNavigation,
+      });
+      const initialCoordinate: LngLat = [current.coords.longitude, current.coords.latitude];
+
+      setStartCoordinate(initialCoordinate);
+      setEndCoordinate(initialCoordinate);
+      setRouteCoordinates([initialCoordinate]);
+      setIsRecordingTrail(true);
+      setRecordingStartedAt(Date.now());
+      cameraRef.current?.setCamera({
+        centerCoordinate: initialCoordinate,
+        zoomLevel: 15,
+        animationDuration: 650,
+      });
+
+      locationSubscriptionRef.current = await Location.watchPositionAsync(
+        {
+          accuracy: Location.Accuracy.BestForNavigation,
+          distanceInterval: 5,
+          timeInterval: 2500,
+        },
+        (location) => {
+          const nextCoordinate: LngLat = [location.coords.longitude, location.coords.latitude];
+
+          setRouteCoordinates((currentPath) => {
+            const previousCoordinate = currentPath[currentPath.length - 1];
+            if (previousCoordinate && getDistanceMeters(previousCoordinate, nextCoordinate) < 5) {
+              return currentPath;
+            }
+
+            const nextPath = [...currentPath, nextCoordinate];
+            setEndCoordinate(nextCoordinate);
+            return nextPath;
+          });
+        },
+      );
+    } catch (error) {
+      setIsRecordingTrail(false);
+      setRecordingStartedAt(null);
+      Alert.alert('Unable to start recording', error instanceof Error ? error.message : 'Please try again.');
+    }
+  };
+
+  const clear = () => {
+    locationSubscriptionRef.current?.remove();
+    locationSubscriptionRef.current = null;
+    setName('');
+    setDescription('');
+    setRegion('');
+    setFeatures([]);
+    setStartCoordinate(null);
+    setMiddleCoordinates([]);
+    setEndCoordinate(null);
+    setRouteCoordinates([]);
+    setIsLoop(false);
+    setDrawingStage('start');
+    setIsDrawing(false);
+    setIsRecordingTrail(false);
+    setIsFinished(false);
     setStats(null);
     setCalcError(null);
     setSaveError(null);
     setSaveSuccess(null);
+    setRecordingStartedAt(null);
+  };
+
+  const finishRecordedTrail = async () => {
+    if (routeCoordinates.length < 2) {
+      Alert.alert('Keep walking', 'Record at least two GPS points before finishing the trail.');
+      return;
+    }
+
+    locationSubscriptionRef.current?.remove();
+    locationSubscriptionRef.current = null;
+    setIsRecordingTrail(false);
+    setIsCalculating(true);
+    setCalcError(null);
+    setSaveError(null);
+    setSaveSuccess(null);
+
+    try {
+      const elapsedSeconds = recordingStartedAt ? Math.max(60, Math.round((Date.now() - recordingStartedAt) / 1000)) : Math.max(60, routeCoordinates.length * 5);
+
+      try {
+        const calculateJson = await getTrailStats({ coordinates: routeCoordinates });
+        setStats(calculateJson);
+      } catch {
+        setStats(toFallbackStats(recordedDistanceMeters, elapsedSeconds));
+      }
+
+      setIsFinished(true);
+    } catch (error) {
+      setCalcError(error instanceof Error ? error.message : 'Failed to prepare recorded trail.');
+    } finally {
+      setIsCalculating(false);
+      setRecordingStartedAt(null);
+    }
   };
 
   const undo = () => {
@@ -498,18 +651,22 @@ export function TrailCreator({
   };
 
   const stageTitle =
-    drawingStage === 'start'
+    isRecordingTrail
+      ? 'Recording your walk'
+      : drawingStage === 'start'
       ? 'Tap a starting point'
       : drawingStage === 'middle'
       ? 'Add middle points or switch to the end point'
       : 'Tap the ending point';
 
-  const stageSummary = [
-    startCoordinate ? 'Start set' : 'Choose a start',
-    middleCoordinates.length ? `${middleCoordinates.length} middle point${middleCoordinates.length === 1 ? '' : 's'}` : 'No middle points',
-    endCoordinate ? 'End set' : 'Choose an end',
-    isLoop ? 'Loop on' : 'Loop off',
-  ].join(' | ');
+  const stageSummary = isRecordingTrail
+    ? `${(recordedDistanceMeters / 1000).toFixed(2)} km | ${Math.max(0, routeCoordinates.length)} GPS points`
+    : [
+        startCoordinate ? 'Start set' : 'Choose a start',
+        middleCoordinates.length ? `${middleCoordinates.length} middle point${middleCoordinates.length === 1 ? '' : 's'}` : 'No middle points',
+        endCoordinate ? 'End set' : 'Choose an end',
+        isLoop ? 'Loop on' : 'Loop off',
+      ].join(' | ');
 
   return (
     <View style={styles.root}>
@@ -602,11 +759,17 @@ export function TrailCreator({
         </View>
 
         <View style={styles.topActions}>
-          {!isDrawing && !isFinished ? (
-            <Pressable style={[styles.iconButton, styles.primaryIconButton]} onPress={begin}>
-              <Ionicons name="git-compare-outline" size={18} color="#fff" />
-              <Text style={styles.primaryIconText}>New trail</Text>
-            </Pressable>
+          {!isDrawing && !isRecordingTrail && !isFinished ? (
+            <>
+              <Pressable style={[styles.iconButton, styles.primaryIconButton]} onPress={begin}>
+                <Ionicons name="git-compare-outline" size={18} color="#fff" />
+                <Text style={styles.primaryIconText}>Draw trail</Text>
+              </Pressable>
+              <Pressable style={[styles.iconButton, styles.recordIconButton]} onPress={() => void beginRecordingTrail()}>
+                <Ionicons name="radio-outline" size={18} color="#fff" />
+                <Text style={styles.primaryIconText}>Record walk</Text>
+              </Pressable>
+            </>
           ) : null}
 
           {isDrawing ? (
@@ -644,6 +807,19 @@ export function TrailCreator({
             </>
           ) : null}
 
+          {isRecordingTrail ? (
+            <>
+              <Pressable style={[styles.iconButton, styles.recordIconButton]} onPress={() => void finishRecordedTrail()}>
+                <Ionicons name="checkmark-circle-outline" size={18} color="#fff" />
+                <Text style={styles.primaryIconText}>Finish</Text>
+              </Pressable>
+              <Pressable style={[styles.iconButton, styles.dangerIconButton]} onPress={clear}>
+                <Ionicons name="close-circle-outline" size={18} color="#BB2823" />
+                <Text style={[styles.iconText, styles.dangerText]}>Cancel</Text>
+              </Pressable>
+            </>
+          ) : null}
+
           {isFinished ? (
             <Pressable style={[styles.iconButton, styles.dangerIconButton]} onPress={clear}>
               <Ionicons name="refresh-outline" size={18} color="#BB2823" />
@@ -653,12 +829,12 @@ export function TrailCreator({
         </View>
       </View>
 
-      {(isDrawing || isFinished) && (
+      {(isDrawing || isRecordingTrail || isFinished) && (
         <View style={[styles.bottomPanelWrap, { paddingBottom: Math.max(12, insets.bottom + 10) }]}>
           <View style={styles.bottomPanel}>
             <View style={styles.panelHeaderRow}>
               <View style={{ flex: 1 }}>
-                <Text style={styles.panelTitle}>{isDrawing ? stageTitle : 'Trail details'}</Text>
+                <Text style={styles.panelTitle}>{isDrawing || isRecordingTrail ? stageTitle : 'Trail details'}</Text>
                 <Text style={styles.panelSubtitle}>{stageSummary}</Text>
               </View>
               {isCalculating ? <ActivityIndicator /> : null}
@@ -666,7 +842,20 @@ export function TrailCreator({
 
             {calcError ? <Text style={styles.errorText}>{calcError}</Text> : null}
 
-            {isDrawing ? (
+            {isRecordingTrail ? (
+              <View style={styles.drawingActionsRow}>
+                <Pressable
+                  style={[styles.secondaryActionButton, routeCoordinates.length < 2 && styles.secondaryActionButtonDisabled]}
+                  disabled={routeCoordinates.length < 2 || isCalculating}
+                  onPress={() => void finishRecordedTrail()}
+                >
+                  <Ionicons name="checkmark-circle-outline" size={16} color={routeCoordinates.length >= 2 ? '#2C2418' : '#B0A090'} />
+                  <Text style={[styles.secondaryActionText, routeCoordinates.length < 2 && styles.iconTextDisabled]}>
+                    Finish recording
+                  </Text>
+                </Pressable>
+              </View>
+            ) : isDrawing ? (
               <View style={styles.drawingActionsRow}>
                 <Pressable
                   style={[styles.secondaryActionButton, !canFinish && styles.secondaryActionButtonDisabled]}
@@ -838,7 +1027,9 @@ export function TrailCreator({
               </>
             ) : (
               <Text style={styles.hint}>
-                Tap once to place the start, add as many middle waypoints as you need, switch to end mode, then tap the ending point. Turn on loop to close the route back to the start.
+                {isRecordingTrail
+                  ? 'Keep this screen open while you walk. The trail line updates from GPS points, then you can finish and save it as a draft or publish it.'
+                  : 'Tap once to place the start, add as many middle waypoints as you need, switch to end mode, then tap the ending point. Turn on loop to close the route back to the start.'}
               </Text>
             )}
           </View>
@@ -922,6 +1113,10 @@ const styles = StyleSheet.create({
   primaryIconButton: {
     backgroundColor: '#0F5A38',
     borderColor: 'rgba(15,90,56,0.35)',
+  },
+  recordIconButton: {
+    backgroundColor: '#630E13',
+    borderColor: 'rgba(99,14,19,0.32)',
   },
   dangerIconButton: {
     backgroundColor: 'rgba(255,255,255,0.94)',
