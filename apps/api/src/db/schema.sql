@@ -184,6 +184,28 @@ CREATE TABLE IF NOT EXISTS saved_trails (
 CREATE INDEX IF NOT EXISTS idx_saved_trails_user ON saved_trails(user_id);
 CREATE INDEX IF NOT EXISTS idx_saved_trails_trail ON saved_trails(trail_id);
 
+CREATE TABLE IF NOT EXISTS navigation_sessions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  trail_id UUID REFERENCES trails(id) ON DELETE CASCADE,
+  started_at TIMESTAMPTZ DEFAULT NOW(),
+  ended_at TIMESTAMPTZ,
+  status TEXT DEFAULT 'active',
+  off_trail_count INTEGER DEFAULT 0,
+  total_off_trail_duration_seconds INTEGER DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS off_trail_events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  navigation_session_id UUID REFERENCES navigation_sessions(id) ON DELETE CASCADE,
+  latitude DECIMAL(10,8),
+  longitude DECIMAL(11,8),
+  deviation_meters INTEGER,
+  duration_seconds INTEGER,
+  recovered_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 CREATE OR REPLACE FUNCTION set_updated_at()
 RETURNS TRIGGER AS $$
 BEGIN

@@ -9,6 +9,7 @@ import authRoutes from "./features/auth/auth.routes";
 import debugRoutes from "./features/debug/debug.routes";
 import healthRoutes from "./features/health/health.routes";
 import mediaRoutes from "./features/media/media.routes";
+import navigationRoutes from "./features/navigation/navigation.routes";
 import offlineRoutes from "./features/offline/offline.routes";
 import profilesRoutes from "./features/profiles/profiles.routes";
 import socialRoutes from "./features/social/social.routes";
@@ -35,6 +36,7 @@ export function createApp() {
   app.use("/api/trails", trailsRoutes);
   app.use("/api/activities", activitiesRoutes);
   app.use("/api/media", mediaRoutes);
+  app.use("/api/navigation", navigationRoutes);
   app.post("/api/sos", authenticate, asyncHandler(sosAlert));
   app.use("/api/health", healthRoutes);
   app.use("/api/social", socialRoutes);
