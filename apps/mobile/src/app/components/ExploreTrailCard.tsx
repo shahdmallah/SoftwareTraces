@@ -6,6 +6,7 @@ import { ScrollView as GestureScrollView } from 'react-native-gesture-handler';
 import Svg, { Circle, Defs, LinearGradient, Path, Rect, Stop } from 'react-native-svg';
 
 import type { Trail } from '../api/trailsApi';
+import { getSafetyBand, type TrailSafety } from '../api/safetyApi';
 import type { TranslationKey } from '../contexts/LanguageContext';
 import { buildMapImageUri } from '../config/mapConfig';
 import { theme } from '../theme';
@@ -40,6 +41,7 @@ type ExploreTrailCardProps = {
   isDownloaded: boolean;
   isDownloading: boolean;
   mediaImages?: string[];
+  safety?: TrailSafety;
   t: (key: TranslationKey) => string;
   onOpen: () => void;
   onOpenMap: () => void;
@@ -182,6 +184,7 @@ export function ExploreTrailCard({
   isDownloaded,
   isDownloading,
   mediaImages = [],
+  safety,
   t,
   onOpen,
   onOpenMap,
@@ -219,6 +222,7 @@ export function ExploreTrailCard({
   const ratingLabel = `${decimalFormatter.format(item.rating)} (${integerFormatter.format(item.reviews)})`;
   const distanceLabel = `${decimalFormatter.format(item.distance)} ${t('unitKm')}`;
   const trailLabels = React.useMemo(() => buildTrailLabels(item, isArabic), [isArabic, item]);
+  const safetyBand = safety ? getSafetyBand(safety.safety_score) : null;
 
   React.useEffect(() => {
     setActiveImageIndex(0);
@@ -325,6 +329,13 @@ export function ExploreTrailCard({
                   style={[styles.paginationDot, index === activeImageIndex && styles.paginationDotActive]}
                 />
               ))}
+            </View>
+          ) : null}
+
+          {safety && safetyBand ? (
+            <View style={[styles.safetyBadge, isArabic ? styles.safetyBadgeRtl : styles.safetyBadgeLtr, { backgroundColor: safetyBand.color }]}>
+              <Ionicons name="shield-checkmark-outline" size={13} color="#fff" />
+              <Text style={styles.safetyBadgeText}>{safety.safety_score}</Text>
             </View>
           ) : null}
         </View>

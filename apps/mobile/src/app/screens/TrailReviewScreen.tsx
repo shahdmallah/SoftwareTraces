@@ -150,6 +150,11 @@ export function TrailReviewScreen() {
         reviewPhotoUris,
         postCaption: trimmedPostCaption,
         postPhotoUris,
+        activityPhotoTags: finishedSession.sessionPhotos.map((photo) => ({
+          uri: photo.uri,
+          coordinate: photo.coordinate,
+          capturedAt: photo.capturedAt,
+        })),
         postVisibility: visibility,
         photoUris: postPhotoUris,
         completedAtIso: new Date().toISOString(),

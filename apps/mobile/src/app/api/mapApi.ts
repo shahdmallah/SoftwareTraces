@@ -11,6 +11,7 @@ export type MapBubble = {
   count: number;
   media_ids: string[];
   preview_images: string[];
+  photos?: MapBubblePhoto[];
 };
 
 export type MapBubblePhoto = {
@@ -39,14 +40,72 @@ type RawMapBubble = Partial<MapBubble> & {
   cluster_lng?: number | string | null;
   latitude?: number | string | null;
   longitude?: number | string | null;
-  mediaIds?: string[] | string | null;
-  preview_images?: string[] | string | null;
-  previewImages?: string[] | string | null;
+  mediaIds?: unknown;
+  media_id?: unknown;
+  mediaId?: unknown;
+  activity_media_ids?: unknown;
+  activityMediaIds?: unknown;
+  activity_media_id?: unknown;
+  activityMediaId?: unknown;
+  ids?: unknown;
+  preview_images?: unknown;
+  previewImages?: unknown;
+  preview_image?: unknown;
+  previewImage?: unknown;
+  thumbnail_url?: unknown;
+  thumbnailUrl?: unknown;
+  public_url?: unknown;
+  publicUrl?: unknown;
+  url?: unknown;
+  photos?: unknown;
+  media?: unknown;
 };
 
-function normalizeIds(value: RawMapBubble['media_ids'] | RawMapBubble['mediaIds']) {
+type RawMapBubbleResponse = RawMapBubble[] | {
+  bubbles?: RawMapBubble[];
+  items?: RawMapBubble[];
+  data?: RawMapBubble[] | {
+    bubbles?: RawMapBubble[];
+    items?: RawMapBubble[];
+  };
+};
+
+function stringFromUnknown(value: unknown) {
+  if (typeof value === 'string') {
+    return value.trim();
+  }
+
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+
+  return '';
+}
+
+function normalizeStringArray(value: unknown): string[] {
   if (Array.isArray(value)) {
-    return value.map(String).filter(Boolean);
+    return value
+      .flatMap((item) => {
+        if (item && typeof item === 'object') {
+          const record = item as Record<string, unknown>;
+          return [
+            record.id,
+            record.media_id,
+            record.mediaId,
+            record.activity_media_id,
+            record.activityMediaId,
+            record.url,
+            record.public_url,
+            record.publicUrl,
+            record.thumbnail_url,
+            record.thumbnailUrl,
+          ];
+        }
+
+        return [item];
+      })
+      .map(stringFromUnknown)
+      .filter(Boolean);
   }
 
   if (typeof value === 'string') {
@@ -59,13 +118,54 @@ function normalizeIds(value: RawMapBubble['media_ids'] | RawMapBubble['mediaIds'
     try {
       const parsed = JSON.parse(trimmed);
       if (Array.isArray(parsed)) {
-        return parsed.map(String).filter(Boolean);
+        return normalizeStringArray(parsed);
       }
     } catch {
       // Fall through to comma splitting for APIs that return "id,id,id".
     }
 
-    return trimmed.split(',').map((id) => id.trim()).filter(Boolean);
+    const postgresArrayMatch = trimmed.match(/^\{(.*)\}$/);
+    const list = postgresArrayMatch ? postgresArrayMatch[1] : trimmed;
+
+    return list
+      .split(',')
+      .map((item) => item.trim().replace(/^"|"$/g, ''))
+      .filter(Boolean);
+  }
+
+  const single = stringFromUnknown(value);
+  if (single) {
+    return [single];
+  }
+
+  return [];
+}
+
+function uniqueStrings(values: string[]) {
+  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+}
+
+function normalizeRawBubbles(response: Envelope<RawMapBubbleResponse>) {
+  const payload = response.data;
+
+  if (Array.isArray(payload)) {
+    return payload;
+  }
+
+  if (Array.isArray(payload?.data)) {
+    return payload.data;
+  }
+
+  if (Array.isArray(payload?.bubbles)) {
+    return payload.bubbles;
+  }
+
+  if (Array.isArray(payload?.items)) {
+    return payload.items;
+  }
+
+  if (payload?.data && !Array.isArray(payload.data)) {
+    return payload.data.bubbles ?? payload.data.items ?? [];
   }
 
   return [];
@@ -74,8 +174,33 @@ function normalizeIds(value: RawMapBubble['media_ids'] | RawMapBubble['mediaIds'
 function normalizeBubble(raw: RawMapBubble): MapBubble | null {
   const lat = Number(raw.lat ?? raw.cluster_lat ?? raw.latitude);
   const lng = Number(raw.lng ?? raw.cluster_lng ?? raw.longitude);
-  const media_ids = normalizeIds(raw.media_ids ?? raw.mediaIds);
-  const preview_images = normalizeIds(raw.preview_images ?? raw.previewImages);
+  const media_ids = uniqueStrings([
+    ...normalizeStringArray(raw.media_ids),
+    ...normalizeStringArray(raw.mediaIds),
+    ...normalizeStringArray(raw.media_id),
+    ...normalizeStringArray(raw.mediaId),
+    ...normalizeStringArray(raw.activity_media_ids),
+    ...normalizeStringArray(raw.activityMediaIds),
+    ...normalizeStringArray(raw.activity_media_id),
+    ...normalizeStringArray(raw.activityMediaId),
+    ...normalizeStringArray(raw.ids),
+    ...normalizeStringArray(raw.media),
+    ...normalizeStringArray(raw.photos),
+    ...normalizeStringArray(raw.id),
+  ]);
+  const preview_images = uniqueStrings([
+    ...normalizeStringArray(raw.preview_images),
+    ...normalizeStringArray(raw.previewImages),
+    ...normalizeStringArray(raw.preview_image),
+    ...normalizeStringArray(raw.previewImage),
+    ...normalizeStringArray(raw.thumbnail_url),
+    ...normalizeStringArray(raw.thumbnailUrl),
+    ...normalizeStringArray(raw.public_url),
+    ...normalizeStringArray(raw.publicUrl),
+    ...normalizeStringArray(raw.url),
+    ...normalizeStringArray(raw.media),
+    ...normalizeStringArray(raw.photos),
+  ]);
 
   if (!Number.isFinite(lat) || !Number.isFinite(lng) || media_ids.length === 0) {
     return null;
@@ -98,8 +223,8 @@ export async function getMapBubbles(params: {
   sw_lng: number;
   zoom: number;
 }) {
-  const response = await apiRequest<Envelope<RawMapBubble[]>>('/api/media/map/bubbles', {}, params);
-  return response.data.map(normalizeBubble).filter((bubble): bubble is MapBubble => Boolean(bubble));
+  const response = await apiRequest<Envelope<RawMapBubbleResponse>>('/api/media/map/bubbles', {}, params);
+  return normalizeRawBubbles(response).map(normalizeBubble).filter((bubble): bubble is MapBubble => Boolean(bubble));
 }
 
 export async function getMapBubblePhotos(ids: string[]) {

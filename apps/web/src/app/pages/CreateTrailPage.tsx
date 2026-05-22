@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { ArrowLeft, Save, Send, MapPin, Image as ImageIcon, RotateCcw } from 'lucide-react';
 import { Link, useNavigate } from 'react-router';
-import { FilterChip, FilterChipsContainer } from '../components/FilterChips';
 import { MapboxTrailMap } from '../components/MapboxTrailMap';
 import { createTrail, getTrailStats } from '../api/trails';
 
@@ -9,17 +8,12 @@ export function CreateTrailPage() {
   const navigate = useNavigate();
   const [trailName, setTrailName] = useState('');
   const [description, setDescription] = useState('');
-  const [features, setFeatures] = useState<string[]>([]);
   const [routePoints, setRoutePoints] = useState<[number, number][]>([
     [35.235, 31.776],
     [35.255, 31.785],
   ]);
   const [isSaving, setIsSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
-
-  const toggleFeature = (feature: string) => {
-    setFeatures((prev) => prev.includes(feature) ? prev.filter((f) => f !== feature) : [...prev, feature]);
-  };
 
   const handleSubmit = async () => {
     if (!trailName.trim()) {
@@ -109,14 +103,6 @@ export function CreateTrailPage() {
                 rows={4}
                 className="w-full px-4 py-3 bg-input-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 resize-none"
               />
-            </div>
-            <div>
-              <label className="block text-sm text-secondary mb-2">Trail Features</label>
-              <FilterChipsContainer>
-                {['Water', 'Historical', 'Olive Groves', 'Summit', 'Wildlife', 'Canyon'].map((feature) => (
-                  <FilterChip key={feature} label={feature} active={features.includes(feature)} onClick={() => toggleFeature(feature)} />
-                ))}
-              </FilterChipsContainer>
             </div>
           </div>
         </div>

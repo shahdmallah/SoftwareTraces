@@ -25,6 +25,8 @@ import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { addLocalFeedItem } from '../data/localSocial';
+import { createMeetup } from '../api/meetupsApi';
+import { uploadMedia, type ReactNativeFile } from '../api/mediaApi';
 import { getFollowers, getFollowing, type SocialProfile } from '../api/socialApi';
 import { getWeatherForecast, type WeatherForecast } from '../api/weatherApi';
 import { RootStackParamList } from '../navigation/types';
@@ -35,7 +37,7 @@ type ComposerRouteProp = RouteProp<RootStackParamList, 'ActivityShareComposer'>;
 type ComposerNavigationProp = StackNavigationProp<RootStackParamList, 'ActivityShareComposer'>;
 type MapboxModule = typeof import('@rnmapbox/maps');
 type LngLat = [number, number];
-type PlanVisibility = 'public' | 'private';
+type PlanVisibility = 'public' | 'private' | 'friends';
 type DeparturePeriod = 'AM' | 'PM';
 
 const MAPBOX_ACCESS_TOKEN = process.env.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN ?? '';
@@ -184,6 +186,27 @@ const pillStyles = StyleSheet.create({
 
 function formatDepartureTime(hour: number, minute: number, period: DeparturePeriod) {
   return `${hour}:${String(minute).padStart(2, '0')} ${period}`;
+}
+
+function buildStartsAtIso(dateIso: string, hour: number, minute: number, period: DeparturePeriod) {
+  const date = dateIso ? new Date(dateIso) : new Date();
+  const normalizedHour = period === 'PM' ? (hour % 12) + 12 : hour % 12;
+  date.setHours(normalizedHour, minute, 0, 0);
+  return date.toISOString();
+}
+
+function imageUriToFile(uri: string): ReactNativeFile {
+  const cleanName = uri.split('/').pop()?.split('?')[0] || `meetup-cover-${Date.now()}.jpg`;
+  const extension = cleanName.split('.').pop()?.toLowerCase();
+  const type = extension === 'png'
+    ? 'image/png'
+    : extension === 'webp'
+      ? 'image/webp'
+      : extension === 'gif'
+        ? 'image/gif'
+        : 'image/jpeg';
+
+  return { uri, name: cleanName, type };
 }
 
 type DepartureTimePickerProps = {
@@ -851,6 +874,7 @@ export function ActivityShareComposerScreen() {
   const [meetupWeather, setMeetupWeather] = useState<WeatherForecast | null>(null);
   const [isMeetupWeatherLoading, setIsMeetupWeatherLoading] = useState(false);
   const [meetupWeatherError, setMeetupWeatherError] = useState<string | null>(null);
+  const [isPosting, setIsPosting] = useState(false);
 
   // Modal visibility
   const [showTimePicker, setShowTimePicker] = useState(false);
@@ -978,17 +1002,67 @@ export function ActivityShareComposerScreen() {
     }
   };
 
-  const handlePost = () => {
+  const handlePost = async () => {
     const trimmedTrail = trail.trim() || (isArabic ? 'مسارك' : 'Your trail');
     const trimmedNote = note.trim() || (isArabic ? 'مشاركة لحظة جديدة' : 'Sharing a new trail moment');
 
     const headcount = parseInt(maxHeadcount, 10) || 6;
     const joined = Math.max(1, 1 + selectedFriends.length);
     const spotsLeft = Math.max(0, headcount - joined);
-    const meetingSummary = meetingPlace
-      ? `${isArabic ? 'نقطة اللقاء' : 'Meet'}: ${meetingPlace}`
-      : null;
-    const weatherSummary = meetupWeatherSummary ? `Weather: ${meetupWeatherSummary}` : null;
+    if (isPlan) {
+      const invitedUserIds = contacts
+        .filter((contact) => selectedFriends.includes(contact.full_name))
+        .map((contact) => contact.id);
+
+      setIsPosting(true);
+      try {
+        let coverUrl = photos[0] && /^https?:\/\//i.test(photos[0]) ? photos[0] : null;
+
+        if (photos[0] && !coverUrl) {
+          const uploaded = await uploadMedia({
+            file: imageUriToFile(photos[0]),
+            caption: trimmedTrail,
+            latitude: meetingCoords?.lat ?? null,
+            longitude: meetingCoords?.lng ?? null,
+            locationName: meetingPlace || null,
+          });
+          coverUrl = uploaded.url;
+        }
+
+        await createMeetup({
+          trail_id: route.params?.trailId ?? null,
+          title: trimmedTrail,
+          title_ar: trimmedTrail,
+          note: trimmedNote,
+          note_ar: trimmedNote,
+          vibe: null,
+          vibe_ar: null,
+          cover_url: coverUrl,
+          starts_at: buildStartsAtIso(selectedDateIso, departureHour, departureMinute, departurePeriod),
+          meeting_place: meetingPlace || null,
+          meeting_latitude: meetingCoords?.lat ?? null,
+          meeting_longitude: meetingCoords?.lng ?? null,
+          visibility: planVisibility,
+          max_headcount: Math.min(500, Math.max(1, headcount)),
+          bring_items: bringItems.split(',').map((item) => item.trim()).filter(Boolean),
+          invited_user_ids: invitedUserIds,
+        });
+
+        Alert.alert(
+          isArabic ? 'تم إنشاء اللقاء' : 'Meetup created',
+          isArabic ? 'سيظهر اللقاء في صفحة النشاط.' : 'Your meetup is now connected to Activity.',
+          [{ text: isArabic ? 'حسنا' : 'OK', onPress: () => navigation.navigate('AppTabs', { screen: 'Activity' }) }],
+        );
+      } catch (error) {
+        Alert.alert(
+          isArabic ? 'تعذر إنشاء اللقاء' : 'Unable to create meetup',
+          error instanceof Error ? error.message : isArabic ? 'حاول مرة أخرى.' : 'Please try again.',
+        );
+      } finally {
+        setIsPosting(false);
+      }
+      return;
+    }
 
     const item = isPlan
       ? {
@@ -1003,10 +1077,10 @@ export function ActivityShareComposerScreen() {
           destinationAr: trimmedTrail,
           dateEn: [selectedDateLabel, timeText].filter(Boolean).join(' · ') || 'Soon',
           dateAr: [selectedDateLabel, timeText].filter(Boolean).join(' · ') || 'قريباً',
-          vibeEn: trimmedNote,
-          vibeAr: trimmedNote,
-          noteEn: [trimmedNote, meetingSummary, weatherSummary, bringItems ? `Bring: ${bringItems}` : null].filter(Boolean).join(' · '),
-          noteAr: [trimmedNote, meetingSummary, weatherSummary, bringItems ? `أحضر: ${bringItems}` : null].filter(Boolean).join(' · '),
+          vibeEn: '',
+          vibeAr: '',
+          noteEn: trimmedNote,
+          noteAr: trimmedNote,
           peopleJoined: joined,
           spotsLeft,
           visibility: planVisibility,
@@ -1192,9 +1266,20 @@ export function ActivityShareComposerScreen() {
 
               <FieldRow icon="lock-closed-outline" label={isArabic ? 'خصوصية الخطة' : 'Plan privacy'} isArabic={isArabic}>
                 <View style={[styles.visibilityRow, isArabic && styles.visibilityRowRtl]}>
-                  {(['public', 'private'] as PlanVisibility[]).map(option => {
+                  {(['public', 'friends', 'private'] as PlanVisibility[]).map(option => {
                     const active = planVisibility === option;
                     const isPublic = option === 'public';
+                    const isFriends = option === 'friends';
+                    const visibilityTitle = isPublic
+                      ? isArabic ? 'عام' : 'Public'
+                      : isFriends
+                        ? isArabic ? 'للأصدقاء' : 'Friends'
+                        : isArabic ? 'خاص' : 'Private';
+                    const visibilityHint = isPublic
+                      ? isArabic ? 'يظهر في النشاط للجميع' : 'Visible in Activity'
+                      : isFriends
+                        ? isArabic ? 'يظهر للأصدقاء ويمكن دعوتهم' : 'Visible to friends'
+                        : isArabic ? 'للمدعوين فقط' : 'Invited members only';
                     return (
                       <Pressable
                         key={option}
@@ -1202,21 +1287,13 @@ export function ActivityShareComposerScreen() {
                         onPress={() => setPlanVisibility(option)}
                       >
                         <Ionicons
-                          name={isPublic ? 'globe-outline' : 'people-outline'}
+                          name={isPublic ? 'globe-outline' : isFriends ? 'people-outline' : 'lock-closed-outline'}
                           size={18}
                           color={active ? '#fff' : '#630E13'}
                         />
                         <View style={styles.visibilityCopy}>
-                          <Text style={[styles.visibilityTitle, active && styles.visibilityTextActive]}>
-                            {isPublic
-                              ? isArabic ? 'عام' : 'Public'
-                              : isArabic ? 'خاص' : 'Private'}
-                          </Text>
-                          <Text style={[styles.visibilityHint, active && styles.visibilityTextActive]} numberOfLines={2}>
-                            {isPublic
-                              ? isArabic ? 'يظهر في النشاط للجميع' : 'Visible in Activity'
-                              : isArabic ? 'للمدعوين فقط' : 'Invited members only'}
-                          </Text>
+                          <Text style={[styles.visibilityTitle, active && styles.visibilityTextActive]}>{visibilityTitle}</Text>
+                          <Text style={[styles.visibilityHint, active && styles.visibilityTextActive]} numberOfLines={2}>{visibilityHint}</Text>
                         </View>
                       </Pressable>
                     );
@@ -1297,8 +1374,12 @@ export function ActivityShareComposerScreen() {
             )}
           </FieldRow>
 
-          <Pressable style={styles.submitButton} onPress={handlePost}>
-            <Ionicons name={isPlan ? 'calendar-outline' : 'paper-plane-outline'} size={18} color="#fff" />
+          <Pressable style={[styles.submitButton, isPosting && styles.submitButtonDisabled]} onPress={handlePost} disabled={isPosting}>
+            {isPosting ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <Ionicons name={isPlan ? 'calendar-outline' : 'paper-plane-outline'} size={18} color="#fff" />
+            )}
             <Text style={styles.submitText}>{isArabic ? 'نشر' : 'Post'}</Text>
           </Pressable>
         </AnimatedBlock>
@@ -1550,5 +1631,7 @@ const styles = StyleSheet.create({
     alignItems: 'center', backgroundColor: '#630E13',
     flexDirection: 'row', justifyContent: 'center', gap: 8,
   },
+  submitButtonDisabled: { opacity: 0.65 },
   submitText: { color: '#fff', fontSize: 15, fontWeight: '900' },
 });
+

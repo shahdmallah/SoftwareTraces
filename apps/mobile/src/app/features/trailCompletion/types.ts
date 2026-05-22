@@ -19,6 +19,11 @@ export type TrailCompletionDraft = {
   reviewPhotoUris?: string[];
   postCaption?: string;
   postPhotoUris?: string[];
+  activityPhotoTags?: Array<{
+    uri: string;
+    coordinate: [number, number];
+    capturedAt: number;
+  }>;
   postVisibility?: 'public' | 'friends' | 'private';
   photoUris: string[];
   completedAtIso: string;

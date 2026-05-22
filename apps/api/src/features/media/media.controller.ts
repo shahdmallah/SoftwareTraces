@@ -235,18 +235,45 @@ export async function getMapBubbles(req: Request, res: Response): Promise<void> 
       gridSize === null
         ? await pool.query(
             `
+            WITH map_media AS (
+              SELECT
+                m.latitude,
+                m.longitude,
+                m.thumbnail_url AS preview_image,
+                m.id,
+                'media' AS source,
+                m.created_at
+              FROM media m
+              WHERE m.is_public = true
+                AND m.latitude IS NOT NULL
+                AND m.longitude IS NOT NULL
+                AND m.latitude BETWEEN $1 AND $2
+                AND m.longitude BETWEEN $3 AND $4
+
+              UNION ALL
+
+              SELECT
+                am.latitude,
+                am.longitude,
+                am.public_url AS preview_image,
+                am.id,
+                'activity_media' AS source,
+                am.created_at
+              FROM activity_media am
+              JOIN activities a ON a.id = am.activity_id
+              WHERE a.is_public = true
+                AND am.latitude IS NOT NULL
+                AND am.longitude IS NOT NULL
+                AND am.latitude BETWEEN $1 AND $2
+                AND am.longitude BETWEEN $3 AND $4
+            )
             SELECT
               latitude AS cluster_lat,
               longitude AS cluster_lng,
               1 AS count,
-              ARRAY[thumbnail_url] AS preview_images,
+              ARRAY[preview_image] AS preview_images,
               ARRAY[id::text] AS media_ids
-            FROM media
-            WHERE latitude BETWEEN $1 AND $2
-              AND longitude BETWEEN $3 AND $4
-              AND is_public = true
-              AND latitude IS NOT NULL
-              AND longitude IS NOT NULL
+            FROM map_media
             ORDER BY created_at DESC
             LIMIT $5
             `,
@@ -254,25 +281,52 @@ export async function getMapBubbles(req: Request, res: Response): Promise<void> 
           )
         : await pool.query(
             `
-            WITH clustered_media AS (
+            WITH map_media AS (
+              SELECT
+                m.latitude,
+                m.longitude,
+                m.thumbnail_url AS preview_image,
+                m.id,
+                'media' AS source,
+                m.created_at
+              FROM media m
+              WHERE m.is_public = true
+                AND m.latitude IS NOT NULL
+                AND m.longitude IS NOT NULL
+                AND m.latitude BETWEEN $3 AND $4
+                AND m.longitude BETWEEN $5 AND $6
+
+              UNION ALL
+
+              SELECT
+                am.latitude,
+                am.longitude,
+                am.public_url AS preview_image,
+                am.id,
+                'activity_media' AS source,
+                am.created_at
+              FROM activity_media am
+              JOIN activities a ON a.id = am.activity_id
+              WHERE a.is_public = true
+                AND am.latitude IS NOT NULL
+                AND am.longitude IS NOT NULL
+                AND am.latitude BETWEEN $3 AND $4
+                AND am.longitude BETWEEN $5 AND $6
+            ),
+            clustered_media AS (
               SELECT
                 FLOOR(latitude / $1) * $1 AS cluster_lat,
                 FLOOR(longitude / $2) * $2 AS cluster_lng,
                 id,
-                thumbnail_url,
+                preview_image,
                 created_at
-              FROM media
-              WHERE latitude BETWEEN $3 AND $4
-                AND longitude BETWEEN $5 AND $6
-                AND is_public = true
-                AND latitude IS NOT NULL
-                AND longitude IS NOT NULL
+              FROM map_media
             )
             SELECT
               cluster_lat,
               cluster_lng,
               COUNT(*)::int AS count,
-              (ARRAY_AGG(thumbnail_url ORDER BY created_at DESC) FILTER (WHERE thumbnail_url IS NOT NULL))[1:3] AS preview_images,
+              (ARRAY_AGG(preview_image ORDER BY created_at DESC) FILTER (WHERE preview_image IS NOT NULL))[1:3] AS preview_images,
               ARRAY_AGG(id::text) AS media_ids
             FROM clustered_media
             GROUP BY cluster_lat, cluster_lng
@@ -326,22 +380,58 @@ export async function getBubblePhotos(req: Request, res: Response): Promise<void
     console.log("[media.getBubblePhotos] querying photos", { count: ids.length });
     const result = await pool.query(
       `
+      WITH bubble_photos AS (
+        SELECT
+          m.id,
+          m.url,
+          m.thumbnail_url,
+          m.caption,
+          m.latitude,
+          m.longitude,
+          m.created_at,
+          m.uploader_id AS user_id,
+          'media' AS source,
+          p.full_name,
+          p.avatar_url
+        FROM media m
+        JOIN profiles p ON p.id = m.uploader_id
+        WHERE m.id = ANY($1::uuid[])
+          AND m.is_public = true
+
+        UNION ALL
+
+        SELECT
+          am.id,
+          am.public_url AS url,
+          am.public_url AS thumbnail_url,
+          am.caption,
+          am.latitude,
+          am.longitude,
+          am.created_at,
+          am.user_id,
+          'activity_media' AS source,
+          p.full_name,
+          p.avatar_url
+        FROM activity_media am
+        JOIN activities a ON a.id = am.activity_id
+        JOIN profiles p ON p.id = am.user_id
+        WHERE am.id = ANY($1::uuid[])
+          AND a.is_public = true
+      )
       SELECT
-        m.id,
-        m.url,
-        m.thumbnail_url,
-        m.caption,
-        m.latitude,
-        m.longitude,
-        m.created_at,
-        m.uploader_id AS user_id,
-        p.full_name,
-        p.avatar_url
-      FROM media m
-      JOIN profiles p ON p.id = m.uploader_id
-      WHERE m.id = ANY($1::uuid[])
-        AND m.is_public = true
-      ORDER BY m.created_at DESC
+        id,
+        url,
+        thumbnail_url,
+        caption,
+        latitude,
+        longitude,
+        created_at,
+        user_id,
+        source,
+        full_name,
+        avatar_url
+      FROM bubble_photos
+      ORDER BY created_at DESC
       `,
       [ids]
     );

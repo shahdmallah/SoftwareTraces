@@ -54,6 +54,22 @@ export type ActivityPointPayload = {
   recordedAt: string;
 };
 
+export type ActivityMediaFile = {
+  uri: string;
+  name: string;
+  type: string;
+};
+
+export type ActivityMedia = {
+  id: string;
+  url: string;
+  latitude: number | string | null;
+  longitude: number | string | null;
+  captured_at?: string | null;
+  caption?: string | null;
+  created_at?: string | null;
+};
+
 export type ActivityDetailPoint = {
   latitude: number;
   longitude: number;
@@ -173,6 +189,11 @@ export async function getActivityById(activityId: string) {
   return response.data;
 }
 
+export async function getActivityMedia(activityId: string) {
+  const response = await apiRequest<Envelope<ActivityMedia[]>>(`/api/activities/${activityId}/media`);
+  return response.data;
+}
+
 /**
  * Starts a recording session. The server expects `started_at` (ISO-8601) and optional `trail_id`.
  * Some deployments also validate camelCase fields on the same route; callers may need to align with their API build.
@@ -266,6 +287,41 @@ export async function shareActivityPost(
       body: JSON.stringify(body),
     },
   );
+}
+
+export async function uploadActivityMedia(
+  activityId: string,
+  payload: {
+    photo: ActivityMediaFile;
+    latitude: number;
+    longitude: number;
+    capturedAt: string;
+    caption?: string;
+  },
+) {
+  const formData = new FormData();
+  formData.append('photo', payload.photo as unknown as Blob);
+  formData.append('latitude', String(payload.latitude));
+  formData.append('longitude', String(payload.longitude));
+  formData.append('captured_at', payload.capturedAt);
+
+  if (payload.caption?.trim()) {
+    formData.append('caption', payload.caption.trim());
+  }
+
+  const response = await apiRequest<Envelope<{
+    id: string;
+    public_url: string;
+    latitude: number;
+    longitude: number;
+    captured_at: string;
+    caption?: string | null;
+  }>>(`/api/activities/${activityId}/media`, {
+    method: 'POST',
+    body: formData,
+  });
+
+  return response.data;
 }
 
 export async function deleteActivity(activityId: string) {

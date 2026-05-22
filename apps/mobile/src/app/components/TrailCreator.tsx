@@ -1,13 +1,21 @@
 // Updated to support staged trail creation with start, optional middle waypoints, end, and loop routes.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Image, View, Text, TextInput, Pressable, StyleSheet, ActivityIndicator, Alert } from 'react-native';
+import { Image, View, Text, TextInput, Pressable, StyleSheet, ActivityIndicator, Alert, ScrollView, useWindowDimensions } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
 import Mapbox from '@rnmapbox/maps';
 import type { Feature, FeatureCollection, LineString, Point } from 'geojson';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { createTrail, uploadTrailPhoto, getTrailStats, publishTrail, type TrailStatsResponse } from '../api/trailsApi';
+import {
+  analyzeTrailRoute,
+  createTrail,
+  uploadTrailPhoto,
+  publishTrail,
+  type GeneratedTrailSuggestion,
+  type TrailAnalysisResponse,
+  type TrailStatsResponse,
+} from '../api/trailsApi';
 import { setTrailRouteCoordinates } from '../state/trailRoutes';
 
 type LngLat = [number, number];
@@ -16,6 +24,10 @@ type DrawingStage = 'start' | 'middle' | 'end';
 type SaveTrailBody = {
   name: string;
   description?: string;
+  region?: string;
+  features?: string[];
+  tags?: string[];
+  status?: 'draft' | 'published';
   coordinates: LngLat[];
   stats: TrailStatsResponse;
 };
@@ -34,21 +46,11 @@ export type TrailCreatorProps = {
   styleURL?: string;
   initialCenter?: LngLat;
   initialZoom?: number;
+  initialGeneratedTrail?: GeneratedTrailSuggestion;
   onSaved?: (payload: SaveTrailBody & { id?: string; status: 'draft' | 'published' }) => void;
 };
 
 const MAPBOX_ACCESS_TOKEN = process.env.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN ?? '';
-
-const AVAILABLE_FEATURES = [
-  'Water',
-  'Historical',
-  'Olive',
-  'Summit',
-  'Scenic',
-  'Wildlife',
-  'Cultural',
-  'Adventure'
-];
 
 function formatDuration(minutes: number) {
   if (!Number.isFinite(minutes) || minutes <= 0) return '--';
@@ -265,9 +267,11 @@ export function TrailCreator({
   styleURL,
   initialCenter = [35.24, 31.78],
   initialZoom = 7.8,
+  initialGeneratedTrail,
   onSaved,
 }: TrailCreatorProps) {
   const insets = useSafeAreaInsets();
+  const { height: windowHeight } = useWindowDimensions();
   const cameraRef = useRef<Mapbox.Camera>(null);
   const locationSubscriptionRef = useRef<Location.LocationSubscription | null>(null);
 
@@ -293,7 +297,7 @@ export function TrailCreator({
       setIsRegionLoading(true);
       const fetchedRegion = await reverseGeocodeRegion(startCoordinate);
       setIsRegionLoading(false);
-      setRegion(fetchedRegion || '');
+      setRegion((current) => current.trim() || fetchedRegion || '');
     };
 
     void fetchRegion();
@@ -320,11 +324,38 @@ export function TrailCreator({
   const zoomOut = () => setZoomLevel(prev => Math.max(prev - 1, 0));
   const toggle3D = () => setPitch(prev => prev === 0 ? 45 : 0);
 
+  const applyRouteAnalysis = (analysis: TrailAnalysisResponse) => {
+    setStats({
+      length_meters: analysis.length_meters,
+      elevation_gain_meters: analysis.elevation_gain_meters,
+      estimated_duration_minutes: analysis.estimated_duration_minutes,
+      difficulty: analysis.difficulty,
+    });
+
+    const suggestedName = analysis.ai_name?.trim();
+    const suggestedDescription = analysis.ai_description?.trim();
+    const suggestedRegion = analysis.region?.trim();
+    const suggestedLabels = Array.isArray(analysis.ai_labels) ? analysis.ai_labels.filter(Boolean) : [];
+
+    if (suggestedName) {
+      setName((current) => current.trim() ? current : suggestedName);
+    }
+
+    if (suggestedDescription) {
+      setDescription((current) => current.trim() ? current : suggestedDescription);
+    }
+
+    if (suggestedRegion) {
+      setRegion((current) => current.trim() ? current : suggestedRegion);
+    }
+
+    setFeatures(Array.from(new Set(suggestedLabels)));
+  };
+
   const routeGeojson = useMemo(() => toLineFeature(routeCoordinates), [routeCoordinates]);
   const startGeojson = useMemo(() => toPointFeature(startCoordinate), [startCoordinate]);
   const middleGeojson = useMemo(() => toPointsFeatureCollection(middleCoordinates), [middleCoordinates]);
   const endGeojson = useMemo(() => toPointFeature(endCoordinate), [endCoordinate]);
-
   const waypointCount = middleCoordinates.length + (startCoordinate ? 1 : 0) + (endCoordinate ? 1 : 0);
   const canUndo = isDrawing && waypointCount > 0;
   const canMarkEnd = isDrawing && Boolean(startCoordinate) && drawingStage === 'middle';
@@ -337,6 +368,49 @@ export function TrailCreator({
       locationSubscriptionRef.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    if (!initialGeneratedTrail?.coordinates?.length) {
+      return;
+    }
+
+    const coordinates = initialGeneratedTrail.coordinates;
+    const firstCoordinate = coordinates[0] ?? null;
+    const lastCoordinate = coordinates[coordinates.length - 1] ?? null;
+
+    locationSubscriptionRef.current?.remove();
+    locationSubscriptionRef.current = null;
+    setSaveSuccess('AI route ready. Review the details, then save or publish it.');
+    setSaveError(null);
+    setCalcError(null);
+    setName(initialGeneratedTrail.name_suggestion?.trim() || 'Suggested Trail');
+    setDescription(initialGeneratedTrail.description_suggestion?.trim() || '');
+    setFeatures(Array.from(new Set((initialGeneratedTrail.labels ?? []).filter(Boolean))));
+    setStartCoordinate(firstCoordinate);
+    setMiddleCoordinates(coordinates.slice(1, -1));
+    setEndCoordinate(lastCoordinate);
+    setRouteCoordinates(coordinates);
+    setStats({
+      length_meters: initialGeneratedTrail.length_meters,
+      elevation_gain_meters: initialGeneratedTrail.elevation_gain_meters,
+      estimated_duration_minutes: initialGeneratedTrail.estimated_duration_minutes,
+      difficulty: initialGeneratedTrail.difficulty,
+    });
+    setIsLoop(Boolean(firstCoordinate && lastCoordinate && firstCoordinate[0] === lastCoordinate[0] && firstCoordinate[1] === lastCoordinate[1]));
+    setDrawingStage('end');
+    setIsDrawing(false);
+    setIsRecordingTrail(false);
+    setIsFinished(true);
+    setRecordingStartedAt(null);
+
+    if (firstCoordinate) {
+      cameraRef.current?.setCamera({
+        centerCoordinate: firstCoordinate,
+        zoomLevel: 12,
+        animationDuration: 650,
+      });
+    }
+  }, [initialGeneratedTrail]);
 
   const begin = () => {
     locationSubscriptionRef.current?.remove();
@@ -475,10 +549,11 @@ export function TrailCreator({
       const elapsedSeconds = recordingStartedAt ? Math.max(60, Math.round((Date.now() - recordingStartedAt) / 1000)) : Math.max(60, routeCoordinates.length * 5);
 
       try {
-        const calculateJson = await getTrailStats({ coordinates: routeCoordinates });
-        setStats(calculateJson);
+        const analysis = await analyzeTrailRoute({ coordinates: routeCoordinates });
+        applyRouteAnalysis(analysis);
       } catch {
         setStats(toFallbackStats(recordedDistanceMeters, elapsedSeconds));
+        setFeatures([]);
       }
 
       setIsFinished(true);
@@ -563,10 +638,11 @@ export function TrailCreator({
       setIsFinished(true);
 
       try {
-        const calculateJson = await getTrailStats({ coordinates: geometryCoordinates });
-        setStats(calculateJson);
+        const analysis = await analyzeTrailRoute({ coordinates: geometryCoordinates });
+        applyRouteAnalysis(analysis);
       } catch {
         setStats(toFallbackStats(route.distance, route.duration));
+        setFeatures([]);
       }
     } catch (e) {
       setRouteCoordinates([]);
@@ -595,6 +671,10 @@ export function TrailCreator({
       const payload: SaveTrailBody = {
         name: name.trim(),
         description: description.trim() || undefined,
+        region: region.trim() || undefined,
+        features,
+        tags: features,
+        status: 'draft',
         coordinates: routeCoordinates,
         stats,
       };
@@ -831,207 +911,208 @@ export function TrailCreator({
 
       {(isDrawing || isRecordingTrail || isFinished) && (
         <View style={[styles.bottomPanelWrap, { paddingBottom: Math.max(12, insets.bottom + 10) }]}>
-          <View style={styles.bottomPanel}>
-            <View style={styles.panelHeaderRow}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.panelTitle}>{isDrawing || isRecordingTrail ? stageTitle : 'Trail details'}</Text>
-                <Text style={styles.panelSubtitle}>{stageSummary}</Text>
+          <View style={[styles.bottomPanel, { maxHeight: Math.max(260, windowHeight * 0.72) }]}>
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+              contentContainerStyle={styles.bottomPanelScrollContent}
+            >
+              <View style={styles.panelHeaderRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.panelTitle}>{isDrawing || isRecordingTrail ? stageTitle : 'Trail details'}</Text>
+                  <Text style={styles.panelSubtitle}>{stageSummary}</Text>
+                </View>
+                {isCalculating ? <ActivityIndicator /> : null}
               </View>
-              {isCalculating ? <ActivityIndicator /> : null}
-            </View>
 
-            {calcError ? <Text style={styles.errorText}>{calcError}</Text> : null}
+              {calcError ? <Text style={styles.errorText}>{calcError}</Text> : null}
 
-            {isRecordingTrail ? (
-              <View style={styles.drawingActionsRow}>
-                <Pressable
-                  style={[styles.secondaryActionButton, routeCoordinates.length < 2 && styles.secondaryActionButtonDisabled]}
-                  disabled={routeCoordinates.length < 2 || isCalculating}
-                  onPress={() => void finishRecordedTrail()}
-                >
-                  <Ionicons name="checkmark-circle-outline" size={16} color={routeCoordinates.length >= 2 ? '#2C2418' : '#B0A090'} />
-                  <Text style={[styles.secondaryActionText, routeCoordinates.length < 2 && styles.iconTextDisabled]}>
-                    Finish recording
-                  </Text>
-                </Pressable>
-              </View>
-            ) : isDrawing ? (
-              <View style={styles.drawingActionsRow}>
-                <Pressable
-                  style={[styles.secondaryActionButton, !canFinish && styles.secondaryActionButtonDisabled]}
-                  disabled={!canFinish}
-                  onPress={() => void fetchTrail()}
-                >
-                  <Ionicons name="sparkles-outline" size={16} color={canFinish ? '#2C2418' : '#B0A090'} />
-                  <Text style={[styles.secondaryActionText, !canFinish && styles.iconTextDisabled]}>
-                    Build route
-                  </Text>
-                </Pressable>
-              </View>
-            ) : null}
+              {isRecordingTrail ? (
+                <View style={styles.drawingActionsRow}>
+                  <Pressable
+                    style={[styles.secondaryActionButton, routeCoordinates.length < 2 && styles.secondaryActionButtonDisabled]}
+                    disabled={routeCoordinates.length < 2 || isCalculating}
+                    onPress={() => void finishRecordedTrail()}
+                  >
+                    <Ionicons name="checkmark-circle-outline" size={16} color={routeCoordinates.length >= 2 ? '#2C2418' : '#B0A090'} />
+                    <Text style={[styles.secondaryActionText, routeCoordinates.length < 2 && styles.iconTextDisabled]}>
+                      Finish recording
+                    </Text>
+                  </Pressable>
+                </View>
+              ) : isDrawing ? (
+                <View style={styles.drawingActionsRow}>
+                  <Pressable
+                    style={[styles.secondaryActionButton, !canFinish && styles.secondaryActionButtonDisabled]}
+                    disabled={!canFinish}
+                    onPress={() => void fetchTrail()}
+                  >
+                    <Ionicons name="sparkles-outline" size={16} color={canFinish ? '#2C2418' : '#B0A090'} />
+                    <Text style={[styles.secondaryActionText, !canFinish && styles.iconTextDisabled]}>
+                      Build route
+                    </Text>
+                  </Pressable>
+                </View>
+              ) : null}
 
-            {stats ? (
-              <View style={styles.statsGrid}>
-                <View style={styles.statCard}>
-                  <Text style={styles.statValue}>{(stats.length_meters / 1000).toFixed(2)}</Text>
-                  <Text style={styles.statLabel}>km</Text>
-                </View>
-                <View style={styles.statCard}>
-                  <Text style={styles.statValue}>{Math.round(stats.elevation_gain_meters)}</Text>
-                  <Text style={styles.statLabel}>m gain</Text>
-                </View>
-                <View style={styles.statCard}>
-                  <Text style={styles.statValue}>{formatDuration(stats.estimated_duration_minutes)}</Text>
-                  <Text style={styles.statLabel}>time</Text>
-                </View>
-                <View style={[styles.badge, { backgroundColor: difficultyTone(stats.difficulty).bg }]}>
-                  <View style={[styles.badgeDot, { backgroundColor: difficultyTone(stats.difficulty).dot }]} />
-                  <Text style={[styles.badgeText, { color: difficultyTone(stats.difficulty).fg }]}>
-                    {stats.difficulty}
-                  </Text>
-                </View>
-              </View>
-            ) : null}
-
-            {isFinished ? (
-              <>
-                <View style={styles.formRow}>
-                  <Text style={styles.inputLabel}>Trail name</Text>
-                  <TextInput
-                    value={name}
-                    onChangeText={setName}
-                    placeholder={isLoop ? 'e.g. Wadi Qelt Loop' : 'e.g. Wadi Qelt Traverse'}
-                    placeholderTextColor="#9E8E80"
-                    style={styles.input}
-                  />
-                </View>
-                <View style={styles.formRow}>
-                  <Text style={styles.inputLabel}>Description</Text>
-                  <TextInput
-                    value={description}
-                    onChangeText={setDescription}
-                    placeholder="Notes, tips, best season, water sources..."
-                    placeholderTextColor="#9E8E80"
-                    style={[styles.input, styles.textarea]}
-                    multiline
-                  />
-                </View>
-                <View style={styles.formRow}>
-                  <Text style={styles.inputLabel}>Region/City</Text>
-                  <TextInput
-                    value={region}
-                    onChangeText={setRegion}
-                    placeholder={isRegionLoading ? 'Deriving area and city from start point...' : 'e.g. Old City - Nablus'}
-                    placeholderTextColor="#9E8E80"
-                    style={styles.input}
-                  />
-                </View>
-                <View style={styles.formRow}>
-                  <Text style={styles.inputLabel}>Features</Text>
-                  <View style={styles.featuresContainer}>
-                    {AVAILABLE_FEATURES.map((feature) => (
-                      <Pressable
-                        key={feature}
-                        style={[
-                          styles.featureChip,
-                          features.includes(feature) && styles.featureChipSelected,
-                        ]}
-                        onPress={() => {
-                          setFeatures(prev =>
-                            prev.includes(feature)
-                              ? prev.filter(f => f !== feature)
-                              : [...prev, feature]
-                          );
-                        }}
-                      >
-                        <Text
-                          style={[
-                            styles.featureChipText,
-                            features.includes(feature) && styles.featureChipTextSelected,
-                          ]}
-                        >
-                          {feature}
-                        </Text>
-                      </Pressable>
-                    ))}
+              {stats ? (
+                <View style={styles.statsGrid}>
+                  <View style={styles.statCard}>
+                    <Text style={styles.statValue}>{(stats.length_meters / 1000).toFixed(2)}</Text>
+                    <Text style={styles.statLabel}>km</Text>
+                  </View>
+                  <View style={styles.statCard}>
+                    <Text style={styles.statValue}>{Math.round(stats.elevation_gain_meters)}</Text>
+                    <Text style={styles.statLabel}>m gain</Text>
+                  </View>
+                  <View style={styles.statCard}>
+                    <Text style={styles.statValue}>{formatDuration(stats.estimated_duration_minutes)}</Text>
+                    <Text style={styles.statLabel}>time</Text>
+                  </View>
+                  <View style={[styles.badge, { backgroundColor: difficultyTone(stats.difficulty).bg }]}>
+                    <View style={[styles.badgeDot, { backgroundColor: difficultyTone(stats.difficulty).dot }]} />
+                    <Text style={[styles.badgeText, { color: difficultyTone(stats.difficulty).fg }]}>
+                      {stats.difficulty}
+                    </Text>
                   </View>
                 </View>
+              ) : null}
 
-                <View style={styles.formRow}>
-                  <Text style={styles.inputLabel}>Trail photo</Text>
-                  <View style={styles.photoRow}>
-                    {trailImage ? (
-                      <Image source={{ uri: trailImage }} style={styles.photoPreview} />
-                    ) : (
-                      <View style={styles.photoPlaceholder}>
-                        <Text style={styles.photoPlaceholderText}>No photo selected</Text>
-                      </View>
-                    )}
-                    <View style={styles.photoActions}>
-                      <Pressable
-                        style={styles.photoButton}
-                        onPress={async () => {
-                          setIsPickingImage(true);
-                          const uri = await pickTrailImage();
-                          setIsPickingImage(false);
-                          if (uri) setTrailImage(uri);
-                        }}
-                      >
-                        <Text style={styles.photoButtonText}>
-                          {isPickingImage ? 'Picking...' : 'Select photo'}
-                        </Text>
-                      </Pressable>
-                      {trailImage ? (
-                        <Pressable
-                          style={[styles.photoButton, styles.photoRemoveButton]}
-                          onPress={() => setTrailImage(null)}
-                        >
-                          <Text style={[styles.photoButtonText, styles.photoRemoveButtonText]}>Remove</Text>
-                        </Pressable>
-                      ) : null}
+              {isFinished ? (
+                <>
+                  <View style={styles.formRow}>
+                    <Text style={styles.inputLabel}>Trail name</Text>
+                    <TextInput
+                      value={name}
+                      onChangeText={setName}
+                      placeholder={isLoop ? 'e.g. Wadi Qelt Loop' : 'e.g. Wadi Qelt Traverse'}
+                      placeholderTextColor="#9E8E80"
+                      style={styles.input}
+                    />
+                  </View>
+                  <View style={styles.formRow}>
+                    <Text style={styles.inputLabel}>Description</Text>
+                    <TextInput
+                      value={description}
+                      onChangeText={setDescription}
+                      placeholder="Notes, tips, best season, water sources..."
+                      placeholderTextColor="#9E8E80"
+                      style={[styles.input, styles.textarea]}
+                      multiline
+                    />
+                  </View>
+                  <View style={styles.formRow}>
+                    <Text style={styles.inputLabel}>Region/City</Text>
+                    <TextInput
+                      value={region}
+                      onChangeText={setRegion}
+                      placeholder={isRegionLoading ? 'Deriving area and city from start point...' : 'e.g. Old City - Nablus'}
+                      placeholderTextColor="#9E8E80"
+                      style={styles.input}
+                    />
+                  </View>
+                  <View style={styles.formRow}>
+                    <Text style={styles.inputLabel}>Features</Text>
+                    <View style={styles.featuresContainer}>
+                      {features.length ? (
+                        features.map((feature) => (
+                          <View
+                            key={feature}
+                            style={[styles.featureChip, styles.featureChipSelected]}
+                          >
+                            <Text style={[styles.featureChipText, styles.featureChipTextSelected]}>
+                              {feature}
+                            </Text>
+                          </View>
+                        ))
+                      ) : (
+                        <View style={styles.emptyFeaturesBox}>
+                          <Text
+                            style={styles.emptyFeaturesText}
+                          >
+                            AI-generated features will appear here after route analysis.
+                          </Text>
+                        </View>
+                      )}
                     </View>
                   </View>
-                </View>
 
-                {saveError ? <Text style={styles.errorText}>{saveError}</Text> : null}
-                {saveSuccess ? <Text style={styles.successText}>{saveSuccess}</Text> : null}
+                  <View style={styles.formRow}>
+                    <Text style={styles.inputLabel}>Trail photo</Text>
+                    <View style={styles.photoRow}>
+                      {trailImage ? (
+                        <Image source={{ uri: trailImage }} style={styles.photoPreview} />
+                      ) : (
+                        <View style={styles.photoPlaceholder}>
+                          <Text style={styles.photoPlaceholderText}>No photo selected</Text>
+                        </View>
+                      )}
+                      <View style={styles.photoActions}>
+                        <Pressable
+                          style={styles.photoButton}
+                          onPress={async () => {
+                            setIsPickingImage(true);
+                            const uri = await pickTrailImage();
+                            setIsPickingImage(false);
+                            if (uri) setTrailImage(uri);
+                          }}
+                        >
+                          <Text style={styles.photoButtonText}>
+                            {isPickingImage ? 'Picking...' : 'Select photo'}
+                          </Text>
+                        </Pressable>
+                        {trailImage ? (
+                          <Pressable
+                            style={[styles.photoButton, styles.photoRemoveButton]}
+                            onPress={() => setTrailImage(null)}
+                          >
+                            <Text style={[styles.photoButtonText, styles.photoRemoveButtonText]}>Remove</Text>
+                          </Pressable>
+                        ) : null}
+                      </View>
+                    </View>
+                  </View>
 
-                <Pressable
-                  style={[styles.saveButton, (!stats || Boolean(savingMode)) && { opacity: 0.7 }]}
-                  disabled={!stats || Boolean(savingMode)}
-                  onPress={() => void save('draft')}
-                >
-                  {savingMode === 'draft' ? (
-                    <ActivityIndicator color="#fff" />
-                  ) : (
-                    <>
-                      <Ionicons name="document-text-outline" size={18} color="#fff" />
-                      <Text style={styles.saveButtonText}>Save draft</Text>
-                    </>
-                  )}
-                </Pressable>
-                <Pressable
-                  style={[styles.publishButton, (!stats || Boolean(savingMode)) && { opacity: 0.7 }]}
-                  disabled={!stats || Boolean(savingMode)}
-                  onPress={() => void save('published')}
-                >
-                  {savingMode === 'published' ? (
-                    <ActivityIndicator color="#fff" />
-                  ) : (
-                    <>
-                      <Ionicons name="cloud-upload-outline" size={18} color="#fff" />
-                      <Text style={styles.saveButtonText}>Publish</Text>
-                    </>
-                  )}
-                </Pressable>
-              </>
-            ) : (
-              <Text style={styles.hint}>
-                {isRecordingTrail
-                  ? 'Keep this screen open while you walk. The trail line updates from GPS points, then you can finish and save it as a draft or publish it.'
-                  : 'Tap once to place the start, add as many middle waypoints as you need, switch to end mode, then tap the ending point. Turn on loop to close the route back to the start.'}
-              </Text>
-            )}
+                  {saveError ? <Text style={styles.errorText}>{saveError}</Text> : null}
+                  {saveSuccess ? <Text style={styles.successText}>{saveSuccess}</Text> : null}
+
+                  <Pressable
+                    style={[styles.saveButton, (!stats || Boolean(savingMode)) && { opacity: 0.7 }]}
+                    disabled={!stats || Boolean(savingMode)}
+                    onPress={() => void save('draft')}
+                  >
+                    {savingMode === 'draft' ? (
+                      <ActivityIndicator color="#fff" />
+                    ) : (
+                      <>
+                        <Ionicons name="document-text-outline" size={18} color="#fff" />
+                        <Text style={styles.saveButtonText}>Save draft</Text>
+                      </>
+                    )}
+                  </Pressable>
+                  <Pressable
+                    style={[styles.publishButton, (!stats || Boolean(savingMode)) && { opacity: 0.7 }]}
+                    disabled={!stats || Boolean(savingMode)}
+                    onPress={() => void save('published')}
+                  >
+                    {savingMode === 'published' ? (
+                      <ActivityIndicator color="#fff" />
+                    ) : (
+                      <>
+                        <Ionicons name="cloud-upload-outline" size={18} color="#fff" />
+                        <Text style={styles.saveButtonText}>Publish</Text>
+                      </>
+                    )}
+                  </Pressable>
+                </>
+              ) : (
+                <Text style={styles.hint}>
+                  {isRecordingTrail
+                    ? 'Keep this screen open while you walk. The trail line updates from GPS points, then you can finish and save it as a draft or publish it.'
+                    : 'Tap once to place the start, add as many middle waypoints as you need, switch to end mode, then tap the ending point. Turn on loop to close the route back to the start.'}
+                </Text>
+              )}
+            </ScrollView>
           </View>
         </View>
       )}
@@ -1153,6 +1234,9 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: -8 },
     shadowRadius: 22,
     elevation: 14,
+  },
+  bottomPanelScrollContent: {
+    paddingBottom: 4,
   },
   panelHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10 },
   panelTitle: { fontSize: 14, fontWeight: '900', color: '#2C2418' },
@@ -1297,6 +1381,20 @@ const styles = StyleSheet.create({
   },
   featureChipTextSelected: {
     color: '#fff',
+  },
+  emptyFeaturesBox: {
+    width: '100%',
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    backgroundColor: '#F7F0E8',
+    borderWidth: 1,
+    borderColor: '#E2D4C2',
+  },
+  emptyFeaturesText: {
+    color: '#7E6F5F',
+    fontSize: 13,
+    lineHeight: 18,
   },
 
   saveButton: {

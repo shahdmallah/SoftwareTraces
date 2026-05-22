@@ -20,6 +20,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getUserAchievements, type UserAchievement } from '../api/achievementsApi';
 import { getMyActivities, type Activity } from '../api/activitiesApi';
 import { getProfile, getProfilePhotos, getProfileReviews, type Profile, type ProfilePhoto, type ProfileReview } from '../api/profilesApi';
+import { getSavedTrails, type Trail } from '../api/trailsApi';
 
 type SettingItem = {
   id: string;
@@ -50,7 +51,7 @@ const profileLinks: ProfileLinkItem[] = [
     icon: 'trail-sign-outline',
     labelEn: 'My trails',
     labelAr: 'مساراتي',
-    subtitleEn: 'Manage published trails you created',
+    subtitleEn: 'Manage public and private trails you created',
     subtitleAr: 'إدارة المسارات المنشورة التي أنشأتها',
     route: 'MyTrails',
   },
@@ -123,6 +124,7 @@ export function ProfileScreen() {
     .join('') || 'TR';
   const [achievements, setAchievements] = useState<ProfileAchievement[]>([]);
   const [activities, setActivities] = useState<Activity[]>([]);
+  const [completedTrails, setCompletedTrails] = useState<Trail[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -130,6 +132,7 @@ export function ProfileScreen() {
     if (!user?.id) {
       setAchievements([]);
       setActivities([]);
+      setCompletedTrails([]);
       return () => {
         cancelled = true;
       };
@@ -139,10 +142,25 @@ export function ProfileScreen() {
       setIsProfileLoading(true);
       setProfileError('');
       try {
-        const [userAchievements, userActivities, nextProfile, nextReviews, nextPhotos] = await Promise.all([
+        const [userAchievements, userActivities, completedTrailResponse, nextProfile, nextReviews, nextPhotos] = await Promise.all([
           getUserAchievements(user.id).catch(() => [] as UserAchievement[]),
           getMyActivities({ page: 1, limit: 50 }).catch(() => [] as Activity[]),
-          getProfile(user.id),
+          getSavedTrails({ type: 'completed', page: 1, limit: 100 }).catch(() => ({ items: [] })),
+          getProfile(user.id).catch(() => ({
+            id: user.id,
+            user_id: user.id,
+            full_name: user.full_name || user.email,
+            avatar_url: user.avatar_url ?? null,
+            bio: user.bio ?? null,
+            location: user.location ?? null,
+            stats: {
+              total_reviews: 0,
+              total_photos: 0,
+              total_likes_received: 0,
+              total_followers: 0,
+              total_following: 0,
+            },
+          } as Profile)),
           getProfileReviews(user.id).catch(() => [] as ProfileReview[]),
           getProfilePhotos(user.id).catch(() => [] as ProfilePhoto[]),
         ]);
@@ -162,6 +180,7 @@ export function ProfileScreen() {
             })),
           );
           setActivities(userActivities);
+          setCompletedTrails(completedTrailResponse.items.map((item) => item.trail));
           setProfileError('');
         }
       } catch (error) {
@@ -171,6 +190,7 @@ export function ProfileScreen() {
           setProfilePhotos([]);
           setAchievements([]);
           setActivities([]);
+          setCompletedTrails([]);
           setProfileError(error instanceof Error ? error.message : 'Unable to load profile data.');
         }
       } finally {
@@ -190,7 +210,7 @@ export function ProfileScreen() {
   const earnedCount = achievements.filter((a) => a.earned).length;
   const progress = achievements.length ? (earnedCount / achievements.length) * 100 : 0;
   const nextAchievement = achievements.find((a) => !a.earned);
-  const totalDistance = activities.reduce((sum, activity) => sum + (activity.distance_km ?? 0), 0);
+  const totalDistance = completedTrails.reduce((sum, trail) => sum + trail.distance, 0);
   const completedTrips = activities.filter((activity) => activity.status === 'completed').length;
   const followerCount = profile?.stats?.total_followers ?? 0;
   const reviewCount = profile?.stats?.total_reviews ?? profileReviews.length;

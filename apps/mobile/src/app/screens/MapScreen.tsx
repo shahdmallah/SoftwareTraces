@@ -8,6 +8,15 @@ import type { Feature, FeatureCollection, LineString } from 'geojson';
 import { AppTabParamList, RootStackParamList } from '../navigation/types';
 import { getNearbyTrails, getTrailById, type Trail } from '../api/trailsApi';
 import { getMapBubblePhotos, getMapBubbles, type MapBubble, type MapBubblePhoto } from '../api/mapApi';
+import { getActivityMedia, getMyActivities } from '../api/activitiesApi';
+import {
+  formatSafetyDistance,
+  getNearbySafetyAlerts,
+  getRiskColor,
+  safetyAlertTitle,
+  safetyAlertWarning,
+  type NearbySafetyAlert,
+} from '../api/safetyApi';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useLanguage } from '../contexts/LanguageContext';
@@ -17,7 +26,7 @@ import { getTrailRouteCoordinates } from '../state/trailRoutes';
 import { theme } from '../theme';
 import { ltrRow, ltrText, rtlRow, rtlText } from '../utils/direction';
 
-type MapScreenNavigationProp = StackNavigationProp<RootStackParamList, 'TrailDetail'>;
+type MapScreenNavigationProp = StackNavigationProp<RootStackParamList>;
 type MapScreenRouteProp = RouteProp<AppTabParamList, 'Map'>;
 type MapboxModule = typeof import('@rnmapbox/maps');
 
@@ -25,6 +34,10 @@ const { width, height } = Dimensions.get('window');
 const MAPBOX_ACCESS_TOKEN = process.env.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN ?? '';
 const MAPBOX_STYLE_URL =
   process.env.EXPO_PUBLIC_MAPBOX_STYLE_URL ?? 'mapbox://styles/shahdmallah/cmnqgt687000h01s66inve68a';
+const BUBBLE_FETCH_DEBOUNCE_MS = 1200;
+const SAFETY_FETCH_DEBOUNCE_MS = 2500;
+const OWN_ACTIVITY_MEDIA_CACHE_MS = 2 * 60 * 1000;
+const OWN_ACTIVITY_MEDIA_LIMIT = 25;
 
 let Mapbox: MapboxModule | null = null;
 let mapboxLoadError: string | null = null;
@@ -138,12 +151,74 @@ function bubbleOutlineColor(count: number) {
   return theme.colors.difficulty.easy;
 }
 
+function isInsideBounds(lat: number, lng: number, bounds: { ne_lat: number; ne_lng: number; sw_lat: number; sw_lng: number }) {
+  return lat >= bounds.sw_lat && lat <= bounds.ne_lat && lng >= bounds.sw_lng && lng <= bounds.ne_lng;
+}
+
+function viewportKey(bounds: { ne_lat: number; ne_lng: number; sw_lat: number; sw_lng: number }, zoom: number) {
+  const zoomBucket = Math.max(1, Math.floor(zoom));
+  return [
+    bounds.ne_lat.toFixed(2),
+    bounds.ne_lng.toFixed(2),
+    bounds.sw_lat.toFixed(2),
+    bounds.sw_lng.toFixed(2),
+    zoomBucket,
+  ].join(':');
+}
+
+function activityMediaToBubble(photo: Awaited<ReturnType<typeof getActivityMedia>>[number]): MapBubble | null {
+  const lat = Number(photo.latitude);
+  const lng = Number(photo.longitude);
+  const uri = photo.url?.trim();
+
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || !uri) {
+    return null;
+  }
+
+  return {
+    id: `activity-media-${photo.id}`,
+    lat,
+    lng,
+    count: 1,
+    media_ids: [photo.id],
+    preview_images: [uri],
+    photos: [{
+      id: photo.id,
+      url: uri,
+      thumbnail_url: uri,
+      caption: photo.caption,
+      created_at: photo.created_at,
+      captured_at: photo.captured_at,
+    }],
+  };
+}
+
+function mergeBubbles(primary: MapBubble[], secondary: MapBubble[]) {
+  const seenMediaIds = new Set(primary.flatMap((bubble) => bubble.media_ids));
+  const merged = [...primary];
+
+  secondary.forEach((bubble) => {
+    if (bubble.media_ids.some((id) => seenMediaIds.has(id))) {
+      return;
+    }
+
+    bubble.media_ids.forEach((id) => seenMediaIds.add(id));
+    merged.push(bubble);
+  });
+
+  return merged;
+}
+
 export function MapScreen() {
   const navigation = useNavigation<MapScreenNavigationProp>();
   const route = useRoute<MapScreenRouteProp>();
   const mapRef = useRef<any>(null);
   const cameraRef = useRef<any>(null);
   const bubbleFetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const safetyFetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastBubbleViewportKeyRef = useRef<string | null>(null);
+  const ownActivityMediaCacheRef = useRef<{ expiresAt: number; bubbles: MapBubble[] } | null>(null);
+  const ownActivityMediaPromiseRef = useRef<Promise<MapBubble[]> | null>(null);
   const [selectedTrail, setSelectedTrail] = useState<Trail | null>(null);
   const [nearbyTrails, setNearbyTrails] = useState<Trail[]>([]);
   const [mapBubbles, setMapBubbles] = useState<MapBubble[]>([]);
@@ -152,6 +227,9 @@ export function MapScreen() {
   const [isBubbleGalleryVisible, setIsBubbleGalleryVisible] = useState(false);
   const [isBubbleLoading, setIsBubbleLoading] = useState(false);
   const [bubbleError, setBubbleError] = useState<string | null>(null);
+  const [safetyAlerts, setSafetyAlerts] = useState<NearbySafetyAlert[]>([]);
+  const [selectedSafetyAlert, setSelectedSafetyAlert] = useState<NearbySafetyAlert | null>(null);
+  const [safetyError, setSafetyError] = useState<string | null>(null);
   const [userLocation, setUserLocation] = useState<[number, number] | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [locationMessage, setLocationMessage] = useState<string | null>(null);
@@ -172,6 +250,46 @@ export function MapScreen() {
     return selectedTrail.routeCoordinates ?? getTrailRouteCoordinates(selectedTrail.id);
   }, [selectedTrail]);
   const selectedTrailLine = useMemo(() => toLineFeature(selectedTrailRoute), [selectedTrailRoute]);
+
+  const loadOwnActivityMediaBubbles = useCallback(async () => {
+    const cached = ownActivityMediaCacheRef.current;
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.bubbles;
+    }
+
+    if (ownActivityMediaPromiseRef.current) {
+      return ownActivityMediaPromiseRef.current;
+    }
+
+    ownActivityMediaPromiseRef.current = (async () => {
+      try {
+        const activities = await getMyActivities({ limit: OWN_ACTIVITY_MEDIA_LIMIT, status: 'completed' });
+        const bubbles: MapBubble[] = [];
+
+        for (const activity of activities) {
+          const photos = await getActivityMedia(activity.id).catch(() => []);
+          photos.forEach((photo) => {
+            const bubble = activityMediaToBubble(photo);
+            if (bubble) {
+              bubbles.push(bubble);
+            }
+          });
+        }
+
+        ownActivityMediaCacheRef.current = {
+          expiresAt: Date.now() + OWN_ACTIVITY_MEDIA_CACHE_MS,
+          bubbles,
+        };
+
+        return bubbles;
+      } finally {
+        ownActivityMediaPromiseRef.current = null;
+      }
+    })();
+
+    return ownActivityMediaPromiseRef.current;
+  }, []);
+
   const fetchBubblesForViewport = useCallback(async () => {
     if (!mapRef.current?.getVisibleBounds || !mapRef.current?.getZoom) {
       return;
@@ -200,19 +318,86 @@ export function MapScreen() {
       }
 
       setBubbleError(null);
-      const bubbles = await getMapBubbles({
+      const viewport = {
         ne_lat,
         ne_lng,
         sw_lat,
         sw_lng,
-        zoom: Number.isFinite(Number(zoom)) ? Number(zoom) : zoomLevel,
-      });
-      setMapBubbles(bubbles);
+      };
+      const normalizedZoom = Number.isFinite(Number(zoom)) ? Number(zoom) : zoomLevel;
+      const nextViewportKey = viewportKey(viewport, normalizedZoom);
+
+      if (lastBubbleViewportKeyRef.current === nextViewportKey) {
+        return;
+      }
+
+      lastBubbleViewportKeyRef.current = nextViewportKey;
+      const [bubbles, myActivityBubbles] = await Promise.all([
+        getMapBubbles({
+          ...viewport,
+          zoom: normalizedZoom,
+        }),
+        loadOwnActivityMediaBubbles().catch(() => []),
+      ]);
+      setMapBubbles(mergeBubbles(
+        bubbles,
+        myActivityBubbles.filter((bubble) => isInsideBounds(bubble.lat, bubble.lng, viewport)),
+      ));
     } catch (error) {
       setMapBubbles([]);
+      lastBubbleViewportKeyRef.current = null;
       setBubbleError(error instanceof Error ? error.message : 'Unable to load photo bubbles.');
     }
-  }, [zoomLevel]);
+  }, [loadOwnActivityMediaBubbles, zoomLevel]);
+
+  const fetchSafetyAlertsNear = useCallback(async (lat: number, lng: number) => {
+    try {
+      const alerts = await getNearbySafetyAlerts({ lat, lng, radius: 5000 });
+      setSafetyAlerts(alerts);
+      setSelectedSafetyAlert((current) => {
+        if (!current) return alerts[0] ?? null;
+        return alerts.find((alert) => alert.id === current.id && alert.kind === current.kind) ?? alerts[0] ?? null;
+      });
+      setSafetyError(null);
+    } catch (error) {
+      setSafetyAlerts([]);
+      setSelectedSafetyAlert(null);
+      setSafetyError(error instanceof Error ? error.message : 'Unable to load safety alerts.');
+    }
+  }, []);
+
+  const fetchSafetyAlertsForViewport = useCallback(async () => {
+    if (!mapRef.current?.getVisibleBounds) {
+      if (userLocation) {
+        await fetchSafetyAlertsNear(userLocation[0], userLocation[1]);
+      }
+      return;
+    }
+
+    try {
+      const bounds = await mapRef.current.getVisibleBounds();
+      const points = Array.isArray(bounds) ? bounds.flat() : [];
+
+      if (points.length < 4) {
+        return;
+      }
+
+      const lngs = [Number(points[0]), Number(points[2])];
+      const lats = [Number(points[1]), Number(points[3])];
+      const centerLat = (Math.max(...lats) + Math.min(...lats)) / 2;
+      const centerLng = (Math.max(...lngs) + Math.min(...lngs)) / 2;
+
+      if (![centerLat, centerLng].every(Number.isFinite)) {
+        return;
+      }
+
+      await fetchSafetyAlertsNear(centerLat, centerLng);
+    } catch {
+      if (userLocation) {
+        await fetchSafetyAlertsNear(userLocation[0], userLocation[1]);
+      }
+    }
+  }, [fetchSafetyAlertsNear, userLocation]);
 
   const scheduleBubbleFetch = useCallback(() => {
     if (!canRenderMapbox) {
@@ -225,25 +410,42 @@ export function MapScreen() {
 
     bubbleFetchTimerRef.current = setTimeout(() => {
       void fetchBubblesForViewport();
-    }, 350);
+    }, BUBBLE_FETCH_DEBOUNCE_MS);
   }, [canRenderMapbox, fetchBubblesForViewport]);
 
-  const openBubbleGallery = useCallback(async (mediaIds: string[]) => {
-    if (mediaIds.length === 0) {
+  const scheduleSafetyFetch = useCallback(() => {
+    if (!canRenderMapbox && !userLocation) {
+      return;
+    }
+
+    if (safetyFetchTimerRef.current) {
+      clearTimeout(safetyFetchTimerRef.current);
+    }
+
+    safetyFetchTimerRef.current = setTimeout(() => {
+      void fetchSafetyAlertsForViewport();
+    }, SAFETY_FETCH_DEBOUNCE_MS);
+  }, [canRenderMapbox, fetchSafetyAlertsForViewport, userLocation]);
+
+  const openBubbleGallery = useCallback(async (bubble: MapBubble) => {
+    if (bubble.media_ids.length === 0 && !bubble.photos?.length) {
       return;
     }
 
     setIsBubbleLoading(true);
     setBubbleError(null);
     setIsBubbleGalleryVisible(true);
-    setBubblePhotos([]);
+    setBubblePhotos(bubble.photos?.filter((photo) => photoUri(photo)) ?? []);
     setSelectedPhoto(null);
 
     try {
-      const photos = await getMapBubblePhotos(mediaIds);
-      setBubblePhotos(photos.filter((photo) => photoUri(photo)));
+      const photos = await getMapBubblePhotos(bubble.media_ids);
+      const visiblePhotos = photos.filter((photo) => photoUri(photo));
+      setBubblePhotos(visiblePhotos.length ? visiblePhotos : bubble.photos?.filter((photo) => photoUri(photo)) ?? []);
     } catch (error) {
-      setBubbleError(error instanceof Error ? error.message : 'Unable to load photos for this area.');
+      if (!bubble.photos?.length) {
+        setBubbleError(error instanceof Error ? error.message : 'Unable to load photos for this area.');
+      }
     } finally {
       setIsBubbleLoading(false);
     }
@@ -276,7 +478,7 @@ export function MapScreen() {
           setUserLocation(coords);
           setNearbyTrails(trails);
           setSelectedTrail(trails[0] ?? null);
-          
+          void fetchSafetyAlertsNear(coords[0], coords[1]);
         }
       } catch (error) {
         if (!cancelled) {
@@ -296,7 +498,7 @@ export function MapScreen() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [fetchSafetyAlertsNear]);
 
   useEffect(() => {
     if (!canRenderMapbox) {
@@ -349,13 +551,17 @@ export function MapScreen() {
     }
 
     scheduleBubbleFetch();
+    scheduleSafetyFetch();
 
     return () => {
       if (bubbleFetchTimerRef.current) {
         clearTimeout(bubbleFetchTimerRef.current);
       }
+      if (safetyFetchTimerRef.current) {
+        clearTimeout(safetyFetchTimerRef.current);
+      }
     };
-  }, [canRenderMapbox, scheduleBubbleFetch, userLocation]);
+  }, [canRenderMapbox, scheduleBubbleFetch, scheduleSafetyFetch, userLocation]);
 
   useEffect(() => {
     const selectedTrailId = route.params?.selectedTrailId;
@@ -477,7 +683,10 @@ export function MapScreen() {
           attributionEnabled={false}
           rotateEnabled
           pitchEnabled
-          onMapIdle={scheduleBubbleFetch}
+          onMapIdle={() => {
+            scheduleBubbleFetch();
+            scheduleSafetyFetch();
+          }}
         >
           <Mapbox.Camera
             ref={cameraRef}
@@ -520,7 +729,7 @@ export function MapScreen() {
                 <Pressable
                   accessibilityRole="button"
                   accessibilityLabel={`${bubble.count} photos`}
-                  onPress={() => void openBubbleGallery(bubble.media_ids)}
+                  onPress={() => void openBubbleGallery(bubble)}
                   style={[
                     styles.photoBubbleMarker,
                     {
@@ -564,6 +773,31 @@ export function MapScreen() {
               </Mapbox.MarkerView>
             );
           })}
+
+          {safetyAlerts
+            .filter((alert) => Number.isFinite(alert.latitude) && Number.isFinite(alert.longitude))
+            .map((alert) => {
+              const tone = getRiskColor(alert.kind === 'location' ? alert.risk_level : alert.severity);
+              const iconName = alert.kind === 'location' ? 'business-outline' : 'warning-outline';
+
+              return (
+                <Mapbox.MarkerView
+                  key={`safety-${alert.kind}-${alert.id}`}
+                  coordinate={[alert.longitude, alert.latitude]}
+                  anchor={{ x: 0.5, y: 0.5 }}
+                  allowOverlap
+                >
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={safetyAlertTitle(alert)}
+                    onPress={() => setSelectedSafetyAlert(alert)}
+                    style={[styles.safetyMarker, { borderColor: tone }]}
+                  >
+                    <Ionicons name={iconName} size={17} color={tone} />
+                  </Pressable>
+                </Mapbox.MarkerView>
+              );
+            })}
 
           {nearbyTrails.map((trail) => {
             const active = selectedTrail?.id === trail.id;
@@ -647,6 +881,32 @@ export function MapScreen() {
         {bubbleError ? (
           <View style={styles.infoBanner}>
             <Text style={[styles.infoBannerText, isArabic ? rtlText : ltrText]}>{bubbleError}</Text>
+          </View>
+        ) : null}
+
+        {selectedSafetyAlert ? (
+          <Pressable
+            style={styles.safetyBanner}
+            onPress={() => navigation.navigate('ReportIssue', {
+              latitude: selectedSafetyAlert.latitude,
+              longitude: selectedSafetyAlert.longitude,
+              locationName: safetyAlertTitle(selectedSafetyAlert),
+            })}
+          >
+            <View style={[styles.safetyBannerIcon, { backgroundColor: getRiskColor(selectedSafetyAlert.kind === 'location' ? selectedSafetyAlert.risk_level : selectedSafetyAlert.severity) }]}>
+              <Ionicons name="warning-outline" size={17} color="#fff" />
+            </View>
+            <View style={styles.safetyBannerCopy}>
+              <Text style={styles.safetyBannerTitle}>Safety alert</Text>
+              <Text style={[styles.safetyBannerText, isArabic ? rtlText : ltrText]} numberOfLines={2}>
+                {safetyAlertWarning(selectedSafetyAlert)}
+              </Text>
+            </View>
+            <Text style={styles.safetyBannerDistance}>{formatSafetyDistance(selectedSafetyAlert.distance_meters)}</Text>
+          </Pressable>
+        ) : safetyError ? (
+          <View style={styles.infoBanner}>
+            <Text style={[styles.infoBannerText, isArabic ? rtlText : ltrText]}>{safetyError}</Text>
           </View>
         ) : null}
       </AnimatedBlock>
@@ -760,6 +1020,17 @@ export function MapScreen() {
                   <Pressable style={styles.secondaryButton} onPress={handleCenterMap}>
                     <Ionicons name="locate-outline" size={16} color="#2C2418" />
                     <Text style={styles.secondaryButtonText}>Center</Text>
+                  </Pressable>
+                  <Pressable
+                    style={styles.secondaryButton}
+                    onPress={() => navigation.navigate('ReportIssue', {
+                      latitude: userLocation?.[0] ?? selectedTrail.coordinates[0],
+                      longitude: userLocation?.[1] ?? selectedTrail.coordinates[1],
+                      locationName: selectedTrail.name,
+                    })}
+                  >
+                    <Ionicons name="warning-outline" size={16} color="#2C2418" />
+                    <Text style={styles.secondaryButtonText}>Report</Text>
                   </Pressable>
                   <Pressable style={styles.detailButton} onPress={handleTrailDetail}>
                     <Ionicons name="information-circle-outline" size={16} color="#fff" />
@@ -1030,6 +1301,59 @@ const styles = StyleSheet.create({
     width: 8,
     height: 8,
     borderRadius: 4,
+  },
+  safetyMarker: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    borderWidth: 3,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOpacity: 0.22,
+    shadowOffset: { width: 0, height: 5 },
+    shadowRadius: 10,
+    elevation: 7,
+  },
+  safetyBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+    borderRadius: 18,
+    backgroundColor: 'rgba(234,226,204,0.96)',
+    borderWidth: 1,
+    borderColor: 'rgba(99,14,19,0.16)',
+  },
+  safetyBannerIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  safetyBannerCopy: {
+    flex: 1,
+  },
+  safetyBannerTitle: {
+    color: '#2C2418',
+    fontSize: 12,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
+  safetyBannerText: {
+    marginTop: 2,
+    color: '#4A4131',
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: '700',
+  },
+  safetyBannerDistance: {
+    color: '#630E13',
+    fontSize: 12,
+    fontWeight: '900',
   },
   photoBubbleMarker: {
     backgroundColor: '#FFFEF9',

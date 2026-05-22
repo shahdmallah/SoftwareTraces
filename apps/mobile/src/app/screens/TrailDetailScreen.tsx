@@ -1,6 +1,6 @@
 ﻿// Updated to restore the previous trail detail layout while loading trail data from the API and syncing saved state through backend bookmarks.
 import React, { useEffect, useMemo, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Pressable, useWindowDimensions } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Pressable, useWindowDimensions, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
@@ -31,6 +31,7 @@ import { useTrailTracking } from '../contexts/TrailTrackingContext';
 import { getSocialFeed } from '../api/socialApi';
 import { getTrailPhotos } from '../api/mediaApi';
 import { getProfile, type Profile } from '../api/profilesApi';
+import { formatSafetyDistance, getSafetyBand, getTrailSafety, type TrailSafety } from '../api/safetyApi';
 import { type FeedItem } from '../data/activitySocial';
 import { mapSocialFeedItemToFeedItem } from '../utils/socialFeedMap';
 
@@ -98,6 +99,7 @@ export function TrailDetailScreen() {
   const [selectedForecastDate, setSelectedForecastDate] = useState<string | null>(null);
   const [communityPosts, setCommunityPosts] = useState<FeedItem[]>([]);
   const [trailMediaImages, setTrailMediaImages] = useState<string[]>([]);
+  const [trailSafety, setTrailSafety] = useState<TrailSafety | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -112,10 +114,12 @@ export function TrailDetailScreen() {
           getTrailReviews(trailId).catch(() => []),
           getTrailPhotos(trailId).catch(() => []),
         ]);
+        const nextSafety = await getTrailSafety(trailId).catch(() => null);
         const nextReviews = await hydrateReviewProfiles(rawReviews);
 
         if (!cancelled) {
           setTrail(nextTrail);
+          setTrailSafety(nextSafety);
           setReviews(nextReviews);
           setTrailMediaImages(
             nextPhotos
@@ -149,6 +153,7 @@ export function TrailDetailScreen() {
           setLoadError(error instanceof Error ? error.message : 'Unable to load trail details.');
           setReviews([]);
           setTrailMediaImages([]);
+          setTrailSafety(null);
         }
       } finally {
         if (!cancelled) {
@@ -258,6 +263,30 @@ export function TrailDetailScreen() {
   };
 
   const openTrailRecording = async () => {
+    if (trailSafety && trailSafety.safety_score < 60) {
+      const band = getSafetyBand(trailSafety.safety_score);
+      Alert.alert(
+        `${band.label} safety warning`,
+        `This trail has a safety score of ${trailSafety.safety_score}/100. Review the warnings before starting.`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Start anyway',
+            style: 'destructive',
+            onPress: () => {
+              void (async () => {
+                if (activeSessionTrailId !== trail!.id) {
+                  await startTrailSession(trail!.id);
+                }
+                navigation.navigate('Recording', { trailId: trail!.id });
+              })();
+            },
+          },
+        ],
+      );
+      return;
+    }
+
     if (activeSessionTrailId !== trail!.id) {
       await startTrailSession(trail!.id);
     }
@@ -328,6 +357,7 @@ export function TrailDetailScreen() {
 
   const posts = communityPosts;
   const isThisTrailActive = activeSessionTrailId === trail.id;
+  const safetyBand = trailSafety ? getSafetyBand(trailSafety.safety_score) : null;
   const planTripButton = (
     <Pressable
       style={styles.planTripButton}
@@ -379,6 +409,69 @@ export function TrailDetailScreen() {
           <AnimatedBlock delay={110}>
             <TrailSummaryCard trail={trail} isArabic={isArabic} />
           </AnimatedBlock>
+
+          {trailSafety && safetyBand ? (
+            <AnimatedBlock delay={145}>
+              <View style={[styles.safetyCard, { borderColor: `${safetyBand.color}33` }]}>
+                <View style={styles.safetyHeader}>
+                  <View style={[styles.safetyIcon, { backgroundColor: safetyBand.color }]}>
+                    <Ionicons name="shield-checkmark-outline" size={20} color="#fff" />
+                  </View>
+                  <View style={styles.safetyHeaderCopy}>
+                    <Text style={styles.safetyTitle}>Safety score</Text>
+                    <Text style={[styles.safetyScore, { color: safetyBand.color }]}>
+                      {trailSafety.safety_score}/100 ({safetyBand.label})
+                    </Text>
+                  </View>
+                </View>
+
+                {trailSafety.warnings.length ? (
+                  <View style={styles.safetyWarnings}>
+                    {trailSafety.warnings.slice(0, 3).map((warning) => (
+                      <View key={warning} style={styles.safetyWarningRow}>
+                        <Ionicons name="alert-circle-outline" size={15} color={safetyBand.color} />
+                        <Text style={styles.safetyWarningText}>{warning}</Text>
+                      </View>
+                    ))}
+                  </View>
+                ) : null}
+
+                <View style={styles.safetyMetaGrid}>
+                  <View style={styles.safetyMetaItem}>
+                    <Text style={styles.safetyMetaLabel}>Nearest settlement</Text>
+                    <Text style={styles.safetyMetaValue}>
+                      {trailSafety.nearest_settlement
+                        ? `${trailSafety.nearest_settlement.name} (${formatSafetyDistance(trailSafety.nearest_settlement.distance_meters)})`
+                        : 'None nearby'}
+                    </Text>
+                  </View>
+                  <View style={styles.safetyMetaItem}>
+                    <Text style={styles.safetyMetaLabel}>Nearest checkpoint</Text>
+                    <Text style={styles.safetyMetaValue}>
+                      {trailSafety.nearest_checkpoint
+                        ? `${trailSafety.nearest_checkpoint.name} (${formatSafetyDistance(trailSafety.nearest_checkpoint.distance_meters)})`
+                        : 'None nearby'}
+                    </Text>
+                  </View>
+                  <View style={styles.safetyMetaItem}>
+                    <Text style={styles.safetyMetaLabel}>Incidents in 48h</Text>
+                    <Text style={styles.safetyMetaValue}>{trailSafety.incident_count_48h}</Text>
+                  </View>
+                </View>
+                <Pressable
+                  style={styles.safetyReportButton}
+                  onPress={() => navigation.navigate('ReportIssue', {
+                    latitude: trail.coordinates[0],
+                    longitude: trail.coordinates[1],
+                    locationName: isArabic ? trail.nameAr || trail.name : trail.name,
+                  })}
+                >
+                  <Ionicons name="warning-outline" size={16} color="#630E13" />
+                  <Text style={styles.safetyReportButtonText}>Report an incident near this trail</Text>
+                </Pressable>
+              </View>
+            </AnimatedBlock>
+          ) : null}
 
         <AnimatedBlock delay={170}>
   <View style={styles.actionRow}>
@@ -543,6 +636,95 @@ const styles = StyleSheet.create({
   notFound: {
     padding: 16,
     color: '#2C2418',
+  },
+  safetyCard: {
+    borderRadius: 22,
+    padding: 15,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+  },
+  safetyHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  safetyIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  safetyHeaderCopy: {
+    flex: 1,
+  },
+  safetyTitle: {
+    color: '#2C2418',
+    fontSize: 13,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
+  safetyScore: {
+    marginTop: 3,
+    fontSize: 19,
+    fontWeight: '900',
+  },
+  safetyWarnings: {
+    gap: 8,
+    marginTop: 14,
+  },
+  safetyWarningRow: {
+    flexDirection: 'row',
+    gap: 8,
+    alignItems: 'flex-start',
+  },
+  safetyWarningText: {
+    flex: 1,
+    color: '#4A4131',
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: '700',
+  },
+  safetyMetaGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    marginTop: 14,
+  },
+  safetyMetaItem: {
+    flexGrow: 1,
+    flexBasis: '47%',
+    borderRadius: 14,
+    padding: 11,
+    backgroundColor: '#F7F3E7',
+  },
+  safetyMetaLabel: {
+    color: '#7B6D5A',
+    fontSize: 10,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
+  safetyMetaValue: {
+    marginTop: 5,
+    color: '#2C2418',
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: '800',
+  },
+  safetyReportButton: {
+    marginTop: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    borderRadius: 15,
+    paddingVertical: 12,
+    backgroundColor: '#F7EBE8',
+  },
+  safetyReportButtonText: {
+    color: '#630E13',
+    fontSize: 12,
+    fontWeight: '900',
   },
   completedButton: {
   flex: 1,

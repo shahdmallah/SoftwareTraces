@@ -1,7 +1,7 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
+import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { RootStackParamList } from '../navigation/types';
 import { trackOwnedTrail } from '../state/ownedTrails';
@@ -12,6 +12,7 @@ const MAPBOX_ACCESS_TOKEN = process.env.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN ?? '';
 
 type TrailCreatorComponent = typeof import('../components/TrailCreator').TrailCreator;
 type CreateTrailNavigationProp = StackNavigationProp<RootStackParamList>;
+type CreateTrailRouteProp = RouteProp<RootStackParamList, 'CreateTrail'>;
 
 let TrailCreator: TrailCreatorComponent | null = null;
 let trailCreatorLoadError: string | null = null;
@@ -26,12 +27,14 @@ try {
 
 export function CreateTrailScreen() {
   const navigation = useNavigation<CreateTrailNavigationProp>();
+  const route = useRoute<CreateTrailRouteProp>();
 
   return (
     <View style={styles.container}>
       {TrailCreator ? (
         <TrailCreator
           styleURL={MAPBOX_STYLE_URL}
+          initialGeneratedTrail={route.params?.generatedTrail}
           onSaved={(payload) => {
             if (payload.id) {
               trackOwnedTrail(payload.id, payload.status);

@@ -20,9 +20,11 @@ import { ExploreTrailCard } from '../components/ExploreTrailCard';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { getTrailPhotos } from '../api/mediaApi';
+import { getTrailSafety, type TrailSafety } from '../api/safetyApi';
 import { downloadOfflineMap } from '../api/offlineApi';
 import { RootStackParamList } from '../navigation/types';
 import { getOfflineMapPacks, saveOfflineMapPack } from '../state/offlineMaps';
+import { useOwnedTrails } from '../state/ownedTrails';
 import { theme } from '../theme';
 import { ltrRow, ltrText, rtlRow, rtlText } from '../utils/direction';
 import { exploreScreenStyles as styles } from './ExploreScreen.styles';
@@ -106,6 +108,19 @@ function sortTrails(trails: Trail[], sortBy: SortOptionId) {
   }
 }
 
+function isExploreVisibleTrail(trail: Trail, localDraftIds: Set<string>) {
+  if (localDraftIds.has(trail.id)) {
+    return false;
+  }
+
+  const status = trail.status?.toLowerCase();
+  if (status) {
+    return status === 'published';
+  }
+
+  return trail.isPublic !== false;
+}
+
 export function ExploreScreen() {
   const navigation = useNavigation<ExploreNavigationProp>();
   const [search, setSearch] = useState('');
@@ -118,6 +133,7 @@ export function ExploreScreen() {
   const [sortBy, setSortBy] = useState<SortOptionId>('bestMatch');
   const [fetchedTrails, setFetchedTrails] = useState<Trail[]>([]);
   const [trailMediaImages, setTrailMediaImages] = useState<Record<string, string[]>>({});
+  const [trailSafetyById, setTrailSafetyById] = useState<Record<string, TrailSafety>>({});
   const [savedTrailIds, setSavedTrailIds] = useState<Set<string>>(new Set());
   const [savingTrailIds, setSavingTrailIds] = useState<string[]>([]);
   const [downloadedTrailIds, setDownloadedTrailIds] = useState<Set<string>>(new Set());
@@ -125,6 +141,12 @@ export function ExploreScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  const trackedDrafts = useOwnedTrails('draft');
+  const trackedDraftIds = trackedDrafts.map((record) => record.trailId).join('|');
+  const localDraftIds = useMemo(
+    () => new Set(trackedDraftIds ? trackedDraftIds.split('|') : []),
+    [trackedDraftIds],
+  );
   const insets = useSafeAreaInsets();
   const { isAuthenticated } = useAuth();
   const { t, language } = useLanguage();
@@ -150,7 +172,9 @@ export function ExploreScreen() {
             })
           : await getTrails(1, 50);
 
-        if (!cancelled) setFetchedTrails(nextTrails);
+        if (!cancelled) {
+          setFetchedTrails(nextTrails.filter((trail) => isExploreVisibleTrail(trail, localDraftIds)));
+        }
       } catch (error) {
         if (!cancelled) {
           setErrorMessage(error instanceof Error ? error.message : 'Unable to load trails right now.');
@@ -162,7 +186,7 @@ export function ExploreScreen() {
 
     const timeoutId = setTimeout(() => { void loadTrails(); }, 250);
     return () => { cancelled = true; clearTimeout(timeoutId); };
-  }, [difficulty, length, refreshKey, search]);
+  }, [difficulty, length, localDraftIds, refreshKey, search]);
 
   useEffect(() => {
     let cancelled = false;
@@ -194,6 +218,38 @@ export function ExploreScreen() {
     };
 
     void loadTrailMediaImages();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchedTrails]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadTrailSafetyScores = async () => {
+      if (!fetchedTrails.length) {
+        setTrailSafetyById({});
+        return;
+      }
+
+      const safetyEntries = await Promise.all(
+        fetchedTrails.slice(0, 30).map(async (trail) => {
+          try {
+            const safety = await getTrailSafety(trail.id);
+            return [trail.id, safety] as const;
+          } catch {
+            return null;
+          }
+        }),
+      );
+
+      if (!cancelled) {
+        setTrailSafetyById(Object.fromEntries(safetyEntries.filter((entry): entry is [string, TrailSafety] => Boolean(entry))));
+      }
+    };
+
+    void loadTrailSafetyScores();
 
     return () => {
       cancelled = true;
@@ -376,6 +432,7 @@ export function ExploreScreen() {
         isDownloaded={downloadedTrailIds.has(item.id)}
         isDownloading={downloadingTrailIds.includes(item.id)}
         mediaImages={trailMediaImages[item.id]}
+        safety={trailSafetyById[item.id]}
         t={t}
         onOpen={() => navigation.navigate('TrailDetail', { trailId: item.id })}
         onOpenMap={() => handleOpenMap(item.id)}

@@ -3,6 +3,7 @@ import { apiRequest } from './client';
 
 export type TrailDifficulty = 'Easy' | 'Moderate' | 'Hard' | 'Expert';
 export type TrailDifficultyApi = 'easy' | 'moderate' | 'hard' | 'expert';
+export type TrailStatus = 'draft' | 'published' | 'private' | string;
 export type BookmarkType = 'favorites' | 'want_to_do' | 'completed';
 export type ConditionType =
   | 'snow'
@@ -43,6 +44,10 @@ export type Trail = {
   mapX: number;
   mapY: number;
   tags: string[];
+  status?: TrailStatus;
+  isPublic?: boolean;
+  publishedAt?: string | null;
+  userId?: string | null;
 };
 
 export type TrailReview = {
@@ -123,6 +128,13 @@ export type TrailStatsResponse = {
   difficulty: TrailDifficultyApi;
 };
 
+export type TrailAnalysisResponse = TrailStatsResponse & {
+  region?: string | null;
+  ai_name?: string | null;
+  ai_description?: string | null;
+  ai_labels?: string[];
+};
+
 export type TrailReviewStatsResponse = {
   average_rating: number;
   total_reviews: number;
@@ -140,6 +152,41 @@ export type ElevationProfile = {
   start_elevation: number;
   end_elevation: number;
   warnings?: string[];
+};
+
+export type GeneratedTrailSuggestion = {
+  coordinates: [number, number][];
+  length_meters: number;
+  elevation_gain_meters: number;
+  estimated_duration_minutes: number;
+  difficulty: TrailDifficultyApi;
+  name_suggestion: string | null;
+  description_suggestion: string | null;
+  labels: string[];
+};
+
+export type ExistingTrailSuggestion = {
+  id: string;
+  name: string;
+  region?: string | null;
+  match_score?: number;
+  distance_km?: number;
+  difficulty?: TrailDifficultyApi | string | null;
+  labels?: string[];
+};
+
+export type TrailSearchOrGenerateResult = {
+  parsed: {
+    length_km: number | null;
+    difficulty: TrailDifficultyApi | null;
+    region: string | null;
+    duration_minutes: number | null;
+    labels: string[];
+    name_suggestion: string | null;
+    description_suggestion: string | null;
+  };
+  existing_trails: ExistingTrailSuggestion[];
+  generated_trail: GeneratedTrailSuggestion | null;
 };
 
 export type TrailBookmark = {
@@ -233,12 +280,20 @@ export function normalizeTrail(trail: Trail): Trail {
     image: trail.image || trail.images?.[0] || 'https://images.unsplash.com/photo-1511497584788-876760111969?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&w=800',
     checkpointNote: trail.checkpointNote || undefined,
     routeCoordinates: normalizeRouteCoordinates(trail.routeCoordinates),
+    status: typeof trail.status === 'string' ? trail.status : undefined,
+    isPublic: typeof trail.isPublic === 'boolean' ? trail.isPublic : typeof (trail as any).is_public === 'boolean' ? (trail as any).is_public : undefined,
+    publishedAt: typeof trail.publishedAt === 'string' ? trail.publishedAt : typeof (trail as any).published_at === 'string' ? (trail as any).published_at : null,
+    userId: typeof trail.userId === 'string' ? trail.userId : typeof (trail as any).user_id === 'string' ? (trail as any).user_id : null,
   };
 }
 
 export async function createTrail(payload: {
   name: string;
   description?: string;
+  region?: string;
+  features?: string[];
+  tags?: string[];
+  status?: 'draft' | 'published';
   coordinates: [number, number][];
   stats: TrailStatsResponse;
 }) {
@@ -317,6 +372,17 @@ export async function getTrailStats(payload: { coordinates: [number, number][] }
   return response.data;
 }
 
+export async function analyzeTrailRoute(payload: { coordinates: [number, number][] }) {
+  const response = await apiRequest<Envelope<TrailAnalysisResponse>>('/api/trails/analyze-route', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+  return {
+    ...response.data,
+    ai_labels: Array.isArray(response.data.ai_labels) ? response.data.ai_labels : [],
+  };
+}
+
 export async function searchTrails(params: {
   q?: string;
   difficulty?: TrailDifficulty | 'all';
@@ -330,6 +396,24 @@ export async function searchTrails(params: {
     maxLength: params.maxLength,
   });
   return response.data.map(normalizeTrail);
+}
+
+export async function searchOrGenerateTrail(description: string) {
+  const response = await apiRequest<Envelope<TrailSearchOrGenerateResult>>('/api/trails/search-or-generate', {
+    method: 'POST',
+    body: JSON.stringify({ description }),
+  });
+  return {
+    ...response.data,
+    existing_trails: Array.isArray(response.data.existing_trails) ? response.data.existing_trails : [],
+    generated_trail: response.data.generated_trail
+      ? {
+          ...response.data.generated_trail,
+          coordinates: normalizeRouteCoordinates(response.data.generated_trail.coordinates) ?? [],
+          labels: Array.isArray(response.data.generated_trail.labels) ? response.data.generated_trail.labels : [],
+        }
+      : null,
+  };
 }
 
 export async function getNearbyTrails(params: { lat: number; lng: number; radius?: number }) {

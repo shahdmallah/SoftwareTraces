@@ -16,6 +16,8 @@ interface TrailRecord {
   elevation_min?: number | string | null;
   elevation_max?: number | string | null;
   difficulty?: string | null;
+  average_rating?: number | string | null;
+  total_reviews?: number | string | null;
   rating?: number | string | null;
   reviews?: number | string | null;
   image?: string | null;
@@ -30,6 +32,10 @@ interface TrailRecord {
   start_lat?: number | string | null;
   start_point_text?: string | null;
   tags?: unknown;
+  status?: string | null;
+  is_active?: boolean | null;
+  published_at?: string | Date | null;
+  user_id?: string | null;
   created_at?: string | Date | null;
   updated_at?: string | Date | null;
 }
@@ -160,8 +166,8 @@ export function formatTrailForApp(dbTrail: TrailRecord) {
     elevationMin: toNumber(dbTrail.elevation_min),
     elevationMax: toNumber(dbTrail.elevation_max),
     difficulty: normalizeDifficulty(dbTrail.difficulty),
-    rating: toNumber(dbTrail.rating),
-    reviews: Math.round(toNumber(dbTrail.reviews)),
+    rating: toNumber(dbTrail.average_rating, toNumber(dbTrail.rating)),
+    reviews: Math.round(toNumber(dbTrail.total_reviews, toNumber(dbTrail.reviews))),
     image: dbTrail.image ?? "",
     images: normalizeUnknownArray<string>(dbTrail.images),
     features: normalizeUnknownArray<string>(dbTrail.features),
@@ -169,6 +175,10 @@ export function formatTrailForApp(dbTrail: TrailRecord) {
     hasCheckpoint: Boolean(dbTrail.has_checkpoint),
     checkpointNote: dbTrail.checkpoint_note ?? "",
     tags: normalizeStringArray(dbTrail.tags),
+    status: dbTrail.status ?? "",
+    isPublic: dbTrail.status === "published" && dbTrail.is_active !== false,
+    publishedAt: toIsoString(dbTrail.published_at),
+    userId: dbTrail.user_id ?? null,
     coordinates,
     routeCoordinates,
     mapX: 0,

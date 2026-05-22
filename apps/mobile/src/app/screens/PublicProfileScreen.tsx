@@ -48,16 +48,18 @@ export function PublicProfileScreen() {
       setErrorMessage('');
 
       try {
-        const [nextProfile, nextReviews, nextPhotos] = await Promise.all([
-          getProfile(profileId),
-          getProfileReviews(profileId).catch(() => [] as ProfileReview[]),
-          getProfilePhotos(profileId).catch(() => [] as ProfilePhoto[]),
+        const nextProfile = await getProfile(profileId);
+        const backendProfileId = nextProfile.user_id || nextProfile.id || profileId;
+        const [nextReviews, nextPhotos] = await Promise.all([
+          getProfileReviews(backendProfileId).catch(() => [] as ProfileReview[]),
+          getProfilePhotos(backendProfileId).catch(() => [] as ProfilePhoto[]),
         ]);
 
         if (!cancelled) {
           setProfile(nextProfile);
           setReviews(nextReviews);
           setPhotos(nextPhotos);
+          setIsFollowing(Boolean(nextProfile.relationship?.is_following));
         }
       } catch (error) {
         if (!cancelled) {
@@ -86,7 +88,8 @@ export function PublicProfileScreen() {
     setIsFollowing(!wasFollowing);
 
     try {
-      await (wasFollowing ? unfollowUser(profileId) : followUser(profileId));
+      const backendProfileId = profile?.user_id || profile?.id || profileId;
+      await (wasFollowing ? unfollowUser(backendProfileId) : followUser(backendProfileId));
     } catch (error) {
       setIsFollowing(wasFollowing);
       setErrorMessage(error instanceof Error ? error.message : 'Unable to update follow status.');

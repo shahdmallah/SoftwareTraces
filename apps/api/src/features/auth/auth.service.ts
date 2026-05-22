@@ -8,9 +8,6 @@ const USERS_PAGE_SIZE = 200;
 type ProfileRow = {
   user_id: string;
   full_name: string;
-  avatar_url: string | null;
-  bio: string | null;
-  location: string | null;
 };
 
 export type SignupInput = {
@@ -29,9 +26,6 @@ export type AuthUserResponse = {
   email: string;
   full_name: string;
   role: string;
-  avatar_url?: string | null;
-  bio?: string | null;
-  location?: string | null;
 };
 
 export type LoginResponse = {
@@ -133,7 +127,7 @@ function isDuplicateEmailError(error: { message?: string; status?: number } | nu
 }
 
 async function fetchProfile(adminClient: SupabaseClient, userId: string): Promise<ProfileRow | null> {
-  const { data, error } = await adminClient.from("profiles").select("user_id, full_name, avatar_url, bio, location").eq("user_id", userId).maybeSingle();
+  const { data, error } = await adminClient.from("profiles").select("user_id, full_name").eq("user_id", userId).maybeSingle();
 
   if (error) {
     throw error;
@@ -142,23 +136,12 @@ async function fetchProfile(adminClient: SupabaseClient, userId: string): Promis
   return data;
 }
 
-function mapUserResponse(user: {
-  id: string;
-  email: string;
-  full_name: string;
-  role?: string;
-  avatar_url?: string | null;
-  bio?: string | null;
-  location?: string | null;
-}): AuthUserResponse {
+function mapUserResponse(user: { id: string; email: string; full_name: string; role?: string }): AuthUserResponse {
   return {
     id: user.id,
     email: user.email,
     full_name: user.full_name,
-    role: user.role ?? DEFAULT_ROLE,
-    avatar_url: user.avatar_url,
-    bio: user.bio,
-    location: user.location
+    role: user.role ?? DEFAULT_ROLE
   };
 }
 
@@ -264,10 +247,7 @@ async function login(input: LoginInput): Promise<LoginResponse> {
       id: data.user.id,
       email: data.user.email,
       full_name: fullName,
-      role,
-      avatar_url: profile?.avatar_url,
-      bio: profile?.bio,
-      location: profile?.location
+      role
     })
   };
 }
@@ -287,10 +267,7 @@ async function getCurrentUser(userId: string): Promise<AuthUserResponse> {
     id: data.user.id,
     email: data.user.email,
     full_name: profile?.full_name ?? String(data.user.user_metadata.full_name ?? ""),
-    role: String(data.user.user_metadata.role ?? DEFAULT_ROLE),
-    avatar_url: profile?.avatar_url,
-    bio: profile?.bio,
-    location: profile?.location
+    role: String(data.user.user_metadata.role ?? DEFAULT_ROLE)
   });
 }
 

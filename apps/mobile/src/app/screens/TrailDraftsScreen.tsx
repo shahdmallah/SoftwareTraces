@@ -40,7 +40,7 @@ export function TrailDraftsScreen() {
       setIsLoading(true);
       setErrorMessage('');
       try {
-        const response = await getMyTrailDrafts({ limit: 100 });
+        const response = await getMyTrailDrafts({ limit: 100 }).catch(() => ({ items: [] as Trail[] }));
         const serverDraftIds = new Set(response.items.map((trail) => trail.id));
         const localOnlyDrafts = await Promise.all(
           trackedDrafts

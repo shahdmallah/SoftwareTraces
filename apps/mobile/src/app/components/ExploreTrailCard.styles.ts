@@ -109,6 +109,29 @@ export const exploreTrailCardStyles = StyleSheet.create({
   paginationDotActive: {
     backgroundColor: theme.colors.textInverse,
   },
+  safetyBadge: {
+    position: 'absolute',
+    top: theme.spacing.lg,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.88)',
+  },
+  safetyBadgeLtr: {
+    left: theme.spacing.lg,
+  },
+  safetyBadgeRtl: {
+    right: theme.spacing.lg,
+  },
+  safetyBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '900',
+  },
   cardInfo: {
     paddingTop: theme.spacing.md,
     paddingBottom: theme.spacing.sm,

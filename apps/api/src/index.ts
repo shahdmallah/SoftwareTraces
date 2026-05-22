@@ -1,5 +1,6 @@
 import { createApp } from "./app";
 import { env } from "./config/env";
+import { startSafetyCron } from "./features/safety/safety.cron";
 import { testDatabaseConnection } from "./lib/db";
 
 async function bootstrap(): Promise<void> {
@@ -8,6 +9,7 @@ async function bootstrap(): Promise<void> {
   app.listen(env.PORT, () => {
     console.log(`Traces API running on port ${env.PORT}`);
   });
+  startSafetyCron();
 
   const dbStatus = await testDatabaseConnection();
   if (dbStatus.success) {

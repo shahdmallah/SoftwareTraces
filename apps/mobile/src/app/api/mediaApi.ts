@@ -41,6 +41,30 @@ export async function uploadTrailPhoto(id: string, payload: { photo: ReactNative
   return response.data;
 }
 
+export async function uploadMedia(payload: {
+  file: ReactNativeFile;
+  caption?: string;
+  latitude?: number | null;
+  longitude?: number | null;
+  locationName?: string | null;
+}) {
+  const formData = new FormData();
+  formData.append('file', payload.file as unknown as Blob);
+
+  if (payload.caption) formData.append('caption', payload.caption);
+  if (typeof payload.latitude === 'number') formData.append('latitude', String(payload.latitude));
+  if (typeof payload.longitude === 'number') formData.append('longitude', String(payload.longitude));
+  if (payload.locationName) formData.append('location_name', payload.locationName);
+  formData.append('is_public', 'true');
+
+  const response = await apiRequest<Envelope<{ id: string; url: string; thumbnail_url?: string }>>('/api/media', {
+    method: 'POST',
+    body: formData,
+  });
+
+  return response.data;
+}
+
 export async function deleteReviewPhoto(photoId: string) {
   return apiRequest<{ message: string }>(`/api/trails/review-photos/${photoId}`, { method: 'DELETE' });
 }

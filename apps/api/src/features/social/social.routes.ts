@@ -1,16 +1,40 @@
 import { Router } from "express";
 import { z } from "zod";
-import { addReviewComment, commentOnActivity, deleteReviewComment, followUser, getFeed, getFollowers, getFollowing, getReviewComments, getReviewLikes, likeActivity, likeReview, unlikeReview, unfollowUser } from "./social.controller";
+import {
+  addReviewComment,
+  commentOnActivity,
+  deleteReviewComment,
+  followUser,
+  getFeed,
+  getFollowers,
+  getFollowing,
+  getFriendCount,
+  getFriends,
+  getFriendSuggestions,
+  getMyFriends,
+  getReviewComments,
+  getReviewLikes,
+  likeActivity,
+  likeReview,
+  removeFriend,
+  unlikeReview,
+  unfollowUser,
+} from "./social.controller";
 import { asyncHandler } from "../../lib/asyncHandler";
 import { authenticate } from "../../middleware/auth";
 import { validate } from "../../middleware/validate";
 
 const router = Router();
 
+router.get("/users/me/friends", authenticate, asyncHandler(getMyFriends));
+router.get("/users/me/friend-suggestions", authenticate, asyncHandler(getFriendSuggestions));
 router.get("/users/:id/followers", asyncHandler(getFollowers));
 router.get("/users/:id/following", asyncHandler(getFollowing));
+router.get("/users/:id/friends", asyncHandler(getFriends));
+router.get("/users/:id/friends/count", asyncHandler(getFriendCount));
 router.post("/users/:id/follow", authenticate, asyncHandler(followUser));
 router.delete("/users/:id/follow", authenticate, asyncHandler(unfollowUser));
+router.delete("/users/:id/friend", authenticate, asyncHandler(removeFriend));
 router.get("/feed", authenticate, asyncHandler(getFeed));
 router.post("/reviews/:id/like", authenticate, asyncHandler(likeReview));
 router.delete("/reviews/:id/like", authenticate, asyncHandler(unlikeReview));

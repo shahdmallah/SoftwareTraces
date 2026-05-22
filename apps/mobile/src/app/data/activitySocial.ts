@@ -60,6 +60,9 @@ export type FeedItem =
   | {
       id: string;
       kind: 'plan';
+      meetupId?: string;
+      userId?: string;
+      viewerStatus?: 'host' | 'joined' | 'invited' | 'none';
       trailId: string;
       user: string;
       handle: string;
@@ -75,7 +78,7 @@ export type FeedItem =
       noteAr: string;
       peopleJoined: number;
       spotsLeft: number;
-      visibility?: 'public' | 'private';
+      visibility?: 'public' | 'private' | 'friends';
       invitedNames?: string[];
     };
 

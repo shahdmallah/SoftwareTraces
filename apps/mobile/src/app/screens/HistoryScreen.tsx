@@ -19,7 +19,7 @@ import { useLanguage } from '../contexts/LanguageContext';
 import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
 import { useAuth } from '../contexts/AuthContext';
 import { deleteActivity, getActivityById, getMyActivities, type Activity, type ActivityDetail } from '../api/activitiesApi';
-import { getTrailById, type Trail } from '../api/trailsApi';
+import { getSavedTrails, getTrailById, type Trail } from '../api/trailsApi';
 
 const dayNamesAr = ['أح', 'إث', 'ثل', 'أر', 'خم', 'جم', 'سب'];
 const dayNamesEn = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
@@ -34,6 +34,7 @@ export function HistoryScreen() {
   const { user } = useAuth();
   const isArabic = language === 'ar';
   const [activities, setActivities] = useState<Activity[]>([]);
+  const [completedTrails, setCompletedTrails] = useState<Trail[]>([]);
   const [trailMap, setTrailMap] = useState<Record<string, Trail>>({});
   const [activityDetails, setActivityDetails] = useState<Record<string, ActivityDetail>>({});
   const [expandedActivityId, setExpandedActivityId] = useState<string | null>(null);
@@ -48,6 +49,7 @@ export function HistoryScreen() {
 
     if (!user?.id) {
       setActivities([]);
+      setCompletedTrails([]);
       setTrailMap({});
       setIsHistoryLoading(false);
       return () => {
@@ -59,9 +61,13 @@ export function HistoryScreen() {
       setIsHistoryLoading(true);
       setHistoryError('');
       try {
-        const userActivities = await getMyActivities({ status: 'completed', limit: 100 });
+        const [userActivities, completedTrailResponse] = await Promise.all([
+          getMyActivities({ status: 'completed', limit: 100 }),
+          getSavedTrails({ type: 'completed', page: 1, limit: 100 }).catch(() => ({ items: [] })),
+        ]);
         if (cancelled) return;
         setActivities(userActivities);
+        setCompletedTrails(completedTrailResponse.items.map((item) => item.trail));
 
         const trailIds = Array.from(
           new Set(
@@ -90,6 +96,7 @@ export function HistoryScreen() {
       } catch (error) {
         if (!cancelled) {
           setActivities([]);
+          setCompletedTrails([]);
           setTrailMap({});
           setHistoryError(error instanceof Error ? error.message : 'Unable to load your activity history.');
         }
@@ -131,7 +138,7 @@ export function HistoryScreen() {
     return { daysInMonth, firstDayOfWeek, activeDays };
   }, [completedActivities]);
 
-  const totalDistance = completedActivities.reduce((sum, hike) => sum + (hike.distance_km ?? 0), 0);
+  const totalDistance = completedTrails.reduce((sum, trail) => sum + trail.distance, 0);
   const totalHikes = completedActivities.length;
   const totalDurationHours = completedActivities.reduce((sum, hike) => {
     if (!hike.started_at || !hike.ended_at) return sum;

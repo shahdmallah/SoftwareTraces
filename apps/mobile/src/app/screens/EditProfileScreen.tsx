@@ -7,13 +7,19 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 
 import { ApiError } from '../api/client';
-import { updateMyProfile, uploadMyAvatar } from '../api/profilesApi';
+import { uploadMedia, type ReactNativeFile } from '../api/mediaApi';
 import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { RootStackParamList } from '../navigation/types';
 
 type EditProfileNavigationProp = StackNavigationProp<RootStackParamList, 'EditProfile'>;
+
+function imageUriToFile(uri: string, mimeType?: string | null, fileName?: string | null): ReactNativeFile {
+  const inferredName = fileName || uri.split('/').pop()?.split('?')[0] || `avatar-${Date.now()}.jpg`;
+  const inferredType = mimeType || (inferredName.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg');
+  return { uri, name: inferredName, type: inferredType };
+}
 
 export function EditProfileScreen() {
   const navigation = useNavigation<EditProfileNavigationProp>();
@@ -74,16 +80,20 @@ export function EditProfileScreen() {
 
     try {
       setIsSaving(true);
-      let nextProfile = selectedAvatar
-        ? await uploadMyAvatar(selectedAvatar.uri, selectedAvatar.mimeType, selectedAvatar.fileName)
+      const uploadedAvatar = selectedAvatar
+        ? await uploadMedia({
+            file: imageUriToFile(selectedAvatar.uri, selectedAvatar.mimeType, selectedAvatar.fileName),
+            caption: `${name.trim()} avatar`,
+          })
         : null;
 
-      nextProfile = await updateMyProfile({
+      const nextProfile = {
+        id: user?.id ?? '',
         full_name: name.trim(),
         location: location.trim() || null,
         bio: bio.trim() || null,
-        avatar_url: nextProfile?.avatar_url ?? (avatarUrl || null),
-      });
+        avatar_url: uploadedAvatar?.url ?? (avatarUrl || null),
+      };
 
       if (session) {
         setSession({

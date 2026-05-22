@@ -1,6 +1,7 @@
 import type { NavigatorScreenParams } from '@react-navigation/native';
 import type { TrailCompletionDraft } from '../features/trailCompletion/types';
 import type { FeedItem } from '../data/activitySocial';
+import type { GeneratedTrailSuggestion } from '../api/trailsApi';
 
 export type RootStackParamList = {
   Onboarding: undefined;
@@ -23,7 +24,7 @@ export type RootStackParamList = {
   };
   ProfileSettings: { settingId: string };
   PublicProfile: { profileId: string };
-  CreateTrail: undefined;
+  CreateTrail: { generatedTrail?: GeneratedTrailSuggestion } | undefined;
   Recording: { trailId: string };
   TrailReview: undefined;
   History: undefined;
@@ -35,7 +36,7 @@ export type RootStackParamList = {
   TrailDrafts: undefined;
   MyTrails: undefined;
   SupportHelp: undefined;
-  ReportIssue: undefined;
+  ReportIssue: { latitude?: number; longitude?: number; locationName?: string } | undefined;
   Legal: undefined;
   OfflineDownloads: undefined;
 };

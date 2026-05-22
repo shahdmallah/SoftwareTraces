@@ -3,6 +3,10 @@ import { pool } from "../../db/pool";
 import { requireAuth } from "../../middleware/auth";
 import { HttpError } from "../../lib/httpError";
 import { sendSocialNotification } from "../../services/notificationService";
+import {
+  getFriendCount as countFriends,
+  getFriends as listFriends,
+} from "../../services/friendService";
 
 interface FeedReviewRow {
   id: string;
@@ -35,6 +39,13 @@ interface FollowProfileRow {
   user_id?: string;
   full_name: string;
   avatar_url: string | null;
+}
+
+interface FriendSuggestionRow {
+  id: string;
+  full_name: string;
+  avatar_url: string | null;
+  mutual_following_count: string;
 }
 
 interface ReviewCommentRow {
@@ -261,14 +272,165 @@ export async function getFollowing(req: Request, res: Response): Promise<void> {
   }
 }
 
+export async function getFriends(req: Request, res: Response): Promise<void> {
+  const functionName = "getFriends";
+  const targetUserId = getRequestId(req.params.id);
+  const { page, limit, offset } = getPagination(req.query);
+  console.log(`[social] getFriends START - userId: ${targetUserId}`);
+
+  try {
+    await ensureProfileExists(targetUserId);
+
+    const [friends, total] = await Promise.all([
+      listFriends(targetUserId, limit, offset),
+      countFriends(targetUserId),
+    ]);
+
+    res.json({
+      count: friends.length,
+      data: friends,
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: total === 0 ? 0 : Math.ceil(total / limit),
+      },
+    });
+  } catch (error) {
+    sendSocialError(functionName, res, error);
+  }
+}
+
+export async function getMyFriends(req: Request, res: Response): Promise<void> {
+  const functionName = "getMyFriends";
+
+  try {
+    const auth = requireAuth(req);
+    const { page, limit, offset } = getPagination(req.query);
+    const [friends, total] = await Promise.all([
+      listFriends(auth.sub, limit, offset),
+      countFriends(auth.sub),
+    ]);
+
+    res.json({
+      count: friends.length,
+      data: friends,
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: total === 0 ? 0 : Math.ceil(total / limit),
+      },
+    });
+  } catch (error) {
+    sendSocialError(functionName, res, error);
+  }
+}
+
+export async function getFriendCount(req: Request, res: Response): Promise<void> {
+  const functionName = "getFriendCount";
+  const targetUserId = getRequestId(req.params.id);
+
+  try {
+    await ensureProfileExists(targetUserId);
+    const total = await countFriends(targetUserId);
+
+    res.json({ count: total });
+  } catch (error) {
+    sendSocialError(functionName, res, error);
+  }
+}
+
+export async function getFriendSuggestions(req: Request, res: Response): Promise<void> {
+  const functionName = "getFriendSuggestions";
+
+  try {
+    const auth = requireAuth(req);
+    const { page, limit, offset } = getPagination(req.query);
+    console.log(`[social] getFriendSuggestions START - userId: ${auth.sub}`);
+
+    const result = await pool.query<FriendSuggestionRow>(
+      `SELECT
+         COALESCE(candidate.user_id, candidate.id) AS id,
+         candidate.full_name,
+         candidate.avatar_url,
+         COUNT(DISTINCT mine.following_id)::text AS mutual_following_count
+       FROM user_follows mine
+       JOIN user_follows followed ON followed.follower_id = mine.following_id
+       JOIN profiles candidate ON candidate.id = followed.following_id
+       WHERE mine.follower_id = $1::uuid
+         AND followed.following_id <> $1::uuid
+         AND NOT EXISTS (
+           SELECT 1
+           FROM user_follows already_following
+           WHERE already_following.follower_id = $1::uuid
+             AND already_following.following_id = followed.following_id
+         )
+       GROUP BY candidate.id, candidate.user_id, candidate.full_name, candidate.avatar_url
+       ORDER BY COUNT(DISTINCT followed.following_id) DESC, candidate.full_name ASC
+       LIMIT $2 OFFSET $3`,
+      [auth.sub, limit, offset]
+    );
+
+    res.json({
+      count: result.rows.length,
+      data: result.rows.map((row) => ({
+        id: row.id,
+        full_name: row.full_name,
+        avatar_url: row.avatar_url,
+        mutual_following_count: Number(row.mutual_following_count),
+      })),
+      pagination: {
+        page,
+        limit,
+      },
+    });
+  } catch (error) {
+    sendSocialError(functionName, res, error);
+  }
+}
+
+export async function removeFriend(req: Request, res: Response): Promise<void> {
+  const functionName = "removeFriend";
+
+  try {
+    const auth = requireAuth(req);
+    const currentUserId = auth.sub;
+    const targetUserId = getRequestId(req.params.id);
+    console.log(`[social] removeFriend START - targetUserId: ${targetUserId}, authUserId: ${currentUserId}`);
+
+    if (currentUserId === targetUserId) {
+      res.status(400).json({ error: "Users cannot remove themselves as a friend" });
+      return;
+    }
+
+    await ensureProfileExists(targetUserId);
+
+    const result = await pool.query(
+      `DELETE FROM user_follows
+       WHERE (follower_id = $1::uuid AND following_id = $2::uuid)
+          OR (follower_id = $2::uuid AND following_id = $1::uuid)`,
+      [currentUserId, targetUserId]
+    );
+
+    res.json({
+      message: "Friend removed successfully",
+      deleted: result.rowCount ?? 0,
+    });
+  } catch (error) {
+    sendSocialError(functionName, res, error);
+  }
+}
+
 export async function getFeed(req: Request, res: Response): Promise<void> {
   const functionName = "getFeed";
   try {
     const auth = requireAuth(req);
     const userId = auth.sub;
     const { page, limit, offset } = getPagination(req.query);
-    console.log(`[social] getFeed START - userId: ${userId}, page: ${page}, limit: ${limit}`);
-    console.log("[getFeed] Params:", { userId, page, limit, offset, query: req.query });
+    const filter = req.query.filter === "friends" ? "friends" : "all";
+    console.log(`[social] getFeed START - userId: ${userId}, page: ${page}, limit: ${limit}, filter: ${filter}`);
+    console.log("[getFeed] Params:", { userId, page, limit, offset, filter, query: req.query });
 
     console.log("[getFeed] Step 1: Counting combined feed rows...");
     const countResult = await pool.query<{ count: string }>(
@@ -278,27 +440,44 @@ export async function getFeed(req: Request, res: Response): Promise<void> {
         FROM trail_reviews tr
         JOIN user_follows uf ON uf.following_id = tr.user_id
         WHERE uf.follower_id = $1::uuid
+          AND (
+            $2::text = 'all'
+            OR EXISTS (
+              SELECT 1
+              FROM user_follows reverse_follow
+              WHERE reverse_follow.follower_id = tr.user_id
+                AND reverse_follow.following_id = $1::uuid
+            )
+          )
         UNION ALL
         SELECT ap.id
         FROM activity_posts ap
-        WHERE ap.visibility = 'public'
-           OR (
-             ap.visibility = 'friends'
-             AND (
-               ap.user_id = $1::uuid
-               OR EXISTS (
-                 SELECT 1
-                 FROM user_follows activity_post_follow
-                 WHERE activity_post_follow.follower_id = $1::uuid
-                   AND activity_post_follow.following_id = ap.user_id
-               )
-             )
-           )
+        JOIN user_follows uf ON uf.following_id = ap.user_id
+        WHERE uf.follower_id = $1::uuid
+          AND ap.visibility <> 'private'
+          AND (
+            $2::text = 'all'
+            OR EXISTS (
+              SELECT 1
+              FROM user_follows reverse_follow
+              WHERE reverse_follow.follower_id = ap.user_id
+                AND reverse_follow.following_id = $1::uuid
+            )
+          )
+          AND (
+            ap.visibility = 'public'
+            OR EXISTS (
+              SELECT 1
+              FROM user_follows reverse_visibility_follow
+              WHERE reverse_visibility_follow.follower_id = ap.user_id
+                AND reverse_visibility_follow.following_id = $1::uuid
+            )
+          )
       )
       SELECT COUNT(*) AS count
       FROM feed_rows
       `,
-      [userId]
+      [userId, filter]
     );
 
     const total = parseInt(countResult.rows[0]?.count ?? "0", 10);
@@ -355,7 +534,7 @@ export async function getFeed(req: Request, res: Response): Promise<void> {
             SELECT 1
             FROM review_likes review_like_lookup
             WHERE review_like_lookup.review_id = tr.id
-              AND review_like_lookup.user_id = $4::uuid
+              AND review_like_lookup.user_id = $1::uuid
           ) AS is_liked_by_user
         FROM trail_reviews tr
         JOIN user_follows uf ON uf.following_id = tr.user_id
@@ -364,6 +543,15 @@ export async function getFeed(req: Request, res: Response): Promise<void> {
         LEFT JOIN review_likes rl ON rl.review_id = tr.id
         LEFT JOIN review_comments rc ON rc.review_id = tr.id
         WHERE uf.follower_id = $1::uuid
+          AND (
+            $4::text = 'all'
+            OR EXISTS (
+              SELECT 1
+              FROM user_follows reverse_follow
+              WHERE reverse_follow.follower_id = tr.user_id
+                AND reverse_follow.following_id = $1::uuid
+            )
+          )
         GROUP BY tr.id, p.user_id, p.full_name, p.avatar_url, t.id, t.name, t.image
 
         UNION ALL
@@ -393,29 +581,37 @@ export async function getFeed(req: Request, res: Response): Promise<void> {
           '0'::text AS comments_count,
           false AS is_liked_by_user
         FROM activity_posts ap
+        JOIN user_follows uf ON uf.following_id = ap.user_id
         JOIN activities a ON a.id = ap.activity_id
         JOIN profiles p ON p.id = ap.user_id
         LEFT JOIN trails t ON t.id = a.trail_id
-        WHERE ap.visibility = 'public'
-           OR (
-             ap.visibility = 'friends'
-             AND (
-               ap.user_id = $1::uuid
-               OR EXISTS (
-                 SELECT 1
-                 FROM user_follows activity_post_follow
-                 WHERE activity_post_follow.follower_id = $1::uuid
-                   AND activity_post_follow.following_id = ap.user_id
-               )
-             )
-           )
+        WHERE uf.follower_id = $1::uuid
+          AND ap.visibility <> 'private'
+          AND (
+            $4::text = 'all'
+            OR EXISTS (
+              SELECT 1
+              FROM user_follows reverse_follow
+              WHERE reverse_follow.follower_id = ap.user_id
+                AND reverse_follow.following_id = $1::uuid
+            )
+          )
+          AND (
+            ap.visibility = 'public'
+            OR EXISTS (
+              SELECT 1
+              FROM user_follows reverse_visibility_follow
+              WHERE reverse_visibility_follow.follower_id = ap.user_id
+                AND reverse_visibility_follow.following_id = $1::uuid
+            )
+          )
       )
       SELECT *
       FROM feed_rows
       ORDER BY created_at DESC
       LIMIT $2 OFFSET $3
       `,
-      [userId, limit, offset, userId]
+      [userId, limit, offset, filter]
     );
     console.log("[getFeed] Step 4: Feed rows returned:", result.rows.length);
 

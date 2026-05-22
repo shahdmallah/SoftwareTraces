@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import multer from "multer";
 import {
+  analyzeRoute,
   calculateTrailStats,
   checkSavedStatus,
   createTrail,
@@ -17,18 +18,19 @@ import {
   getTrailConditions,
   getTrailPhotos,
   getTrailReviews,
+  parseTrailDescription,
   getSavedTrails,
   publishTrail,
-  recalculateTrailReviewStats,
   saveTrail,
+  searchOrGenerateTrail,
   searchTrails,
   setPrimaryPhoto,
   unsaveTrail,
   updateTrail,
   uploadTrailPhoto,
 } from "./trails.controller";
-import { getMyTrails } from "./ownedTrails.controller";
 import { getMyTrailDrafts } from "./trailDrafts.controller";
+import { getMyTrails } from "./ownedTrails.controller";
 import { asyncHandler } from "../../lib/asyncHandler";
 import { authenticate } from "../../middleware/auth";
 import { validate } from "../../middleware/validate";
@@ -45,20 +47,22 @@ router.get("/ping", (_req, res) => {
 });
 
 router.post("/calculate", asyncHandler(calculateTrailStats));
+router.post("/analyze-route", asyncHandler(analyzeRoute));
+router.post("/parse-description", asyncHandler(parseTrailDescription));
+router.post("/search-or-generate", asyncHandler(searchOrGenerateTrail));
 router.post("/", authenticate, asyncHandler(createTrail));
 router.get("/", asyncHandler(getAllTrails));
-router.get("/mine", authenticate, asyncHandler(getMyTrails));
-router.get("/drafts", authenticate, asyncHandler(getMyTrailDrafts));
 router.get("/nearby", validate(z.object({ lat: z.coerce.number(), lng: z.coerce.number(), radius: z.coerce.number().optional() }), "query"), asyncHandler(getNearbyTrails));
 router.get("/search", validate(z.object({ q: z.string().optional(), difficulty: z.string().optional(), minLength: z.coerce.number().optional(), maxLength: z.coerce.number().optional() }), "query"), asyncHandler(searchTrails));
 router.get("/saved", authenticate, asyncHandler(getSavedTrails));
+router.get("/mine", authenticate, asyncHandler(getMyTrails));
+router.get("/drafts", authenticate, asyncHandler(getMyTrailDrafts));
 router.get("/:id/elevation-profile", asyncHandler(getElevationProfile));
 router.get("/:id/photos", asyncHandler(getTrailPhotos));
 router.get("/:id", asyncHandler(getTrailById));
 router.patch("/:id/publish", authenticate, asyncHandler(publishTrail));
 router.get("/:id/reviews", asyncHandler(getTrailReviews));
 router.post("/:id/reviews", authenticate, upload.array("photos", 10), asyncHandler(createTrailReview));
-router.post("/:id/reviews/recalculate", authenticate, asyncHandler(recalculateTrailReviewStats));
 router.get("/:id/conditions", asyncHandler(getTrailConditions));
 router.post("/:id/conditions", authenticate, validate(z.object({ condition_type: z.enum(['snow', 'ice', 'mud', 'flood', 'fallen_trees', 'wildfire', 'closure', 'good', 'fair']), severity: z.enum(['low', 'medium', 'high', 'extreme']).optional(), description: z.string().optional() })), asyncHandler(createTrailCondition));
 router.post("/:id/photos", authenticate, upload.single("photo"), asyncHandler(uploadTrailPhoto));

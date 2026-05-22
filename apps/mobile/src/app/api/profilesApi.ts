@@ -23,6 +23,13 @@ export type Profile = {
     total_likes_received: number;
     total_followers: number;
     total_following: number;
+    total_friends?: number;
+    friends_count?: number;
+  };
+  relationship?: {
+    is_following: boolean;
+    is_follower: boolean;
+    is_friend: boolean;
   };
   recent_reviews?: ProfileReview[];
   recent_photos?: ProfilePhoto[];
@@ -67,38 +74,12 @@ export async function getProfile(profileId: string) {
   return response.data;
 }
 
-export async function updateMyProfile(payload: UpdateProfilePayload) {
-  const response = await apiRequest<Envelope<Profile>>('/api/profiles/me', {
-    method: 'PATCH',
-    body: JSON.stringify(payload),
-  });
+export async function getProfileReviews(profileId: string, params: { page?: number; limit?: number } = {}) {
+  const response = await apiRequest<Envelope<ProfileReview[]>>(`/api/profiles/${profileId}/reviews`, {}, params);
   return response.data;
 }
 
-export async function uploadMyAvatar(uri: string, mimeType?: string | null, fileName?: string | null) {
-  const formData = new FormData();
-  const inferredName = fileName || uri.split('/').pop() || 'avatar.jpg';
-  const inferredType = mimeType || (inferredName.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg');
-
-  formData.append('avatar', {
-    uri,
-    name: inferredName,
-    type: inferredType,
-  } as unknown as Blob);
-
-  const response = await apiRequest<Envelope<Profile>>('/api/profiles/me/avatar', {
-    method: 'POST',
-    body: formData,
-  });
-  return response.data;
-}
-
-export async function getProfileReviews(profileId: string) {
-  const response = await apiRequest<Envelope<ProfileReview[]>>(`/api/profiles/${profileId}/reviews`);
-  return response.data;
-}
-
-export async function getProfilePhotos(profileId: string) {
-  const response = await apiRequest<Envelope<ProfilePhoto[]>>(`/api/profiles/${profileId}/photos`);
+export async function getProfilePhotos(profileId: string, params: { page?: number; limit?: number } = {}) {
+  const response = await apiRequest<Envelope<ProfilePhoto[]>>(`/api/profiles/${profileId}/photos`, {}, params);
   return response.data;
 }

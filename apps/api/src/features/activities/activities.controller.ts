@@ -371,8 +371,6 @@ export async function getMyActivities(req: Request, res: Response): Promise<void
           a.distance_meters,
           a.elapsed_time_seconds,
           a.elevation_gain_meters,
-          a.avg_speed_mps,
-          a.max_speed_mps,
           a.start_time,
           a.end_time,
           a.status

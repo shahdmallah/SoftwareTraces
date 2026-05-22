@@ -57,7 +57,7 @@ export async function getMyTrails(req: Request, res: Response): Promise<void> {
            FROM trails t
          WHERE t.user_id = $1::uuid
            AND t.deleted_at IS NULL
-           AND t.status = 'published'`,
+           AND t.status <> 'draft'`,
         [auth.sub]
       ),
       pool.query(
@@ -66,7 +66,7 @@ export async function getMyTrails(req: Request, res: Response): Promise<void> {
          FROM trails t
          WHERE t.user_id = $1::uuid
            AND t.deleted_at IS NULL
-           AND t.status = 'published'
+           AND t.status <> 'draft'
          ORDER BY COALESCE(t.published_at, t.updated_at, t.created_at) DESC
          LIMIT $2 OFFSET $3`,
         [auth.sub, limit, offset]

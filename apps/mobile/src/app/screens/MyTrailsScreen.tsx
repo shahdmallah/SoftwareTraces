@@ -7,6 +7,7 @@ import { RootStackParamList } from '../navigation/types';
 import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
 import { deleteTrail, getTrailById, type Trail } from '../api/trailsApi';
 import { getMyCreatedTrails } from '../api/ownedTrailsApi';
+import { getMyTrailDrafts } from '../api/trailDraftsApi';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ltrRow, ltrText, rtlRow, rtlText } from '../utils/direction';
@@ -19,8 +20,8 @@ export function MyTrailsScreen() {
   const { language } = useLanguage();
   const insets = useSafeAreaInsets();
   const isArabic = language === 'ar';
-  const trackedTrails = useOwnedTrails('published');
-  const trackedTrailIds = trackedTrails.map((record) => record.trailId).join('|');
+  const trackedTrails = useOwnedTrails();
+  const trackedTrailIds = trackedTrails.map((record) => `${record.trailId}:${record.status}`).join('|');
   const [trails, setTrails] = useState<Trail[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [busyTrailId, setBusyTrailId] = useState<string | null>(null);
@@ -34,14 +35,20 @@ export function MyTrailsScreen() {
       setIsLoading(true);
       setErrorMessage('');
       try {
-        const response = await getMyCreatedTrails({ limit: 100 });
-        const serverTrailIds = new Set(response.items.map((trail) => trail.id));
+        const [response, draftResponse] = await Promise.all([
+          getMyCreatedTrails({ limit: 100 }).catch(() => ({ items: [] as Trail[] })),
+          getMyTrailDrafts({ limit: 100 }).catch(() => ({ items: [] as Trail[] })),
+        ]);
+        const draftIds = new Set(draftResponse.items.map((trail) => trail.id));
+        const ownerTrails = response.items.filter((trail) => trail.status?.toLowerCase() !== 'draft' && !draftIds.has(trail.id));
+        const serverTrailIds = new Set(ownerTrails.map((trail) => trail.id));
         const localOnlyTrails = await Promise.all(
           trackedTrails
+            .filter((record) => record.status !== 'draft')
             .filter((record) => !serverTrailIds.has(record.trailId))
             .map((record) => getTrailById(record.trailId).catch(() => null)),
         );
-        const nextTrails = [...response.items, ...localOnlyTrails.filter((trail): trail is Trail => Boolean(trail))];
+        const nextTrails = [...ownerTrails, ...localOnlyTrails.filter((trail): trail is Trail => Boolean(trail))];
         if (!cancelled) {
           setTrails(nextTrails);
         }
@@ -104,6 +111,9 @@ export function MyTrailsScreen() {
           <View style={styles.headerCopy}>
             <Text style={[styles.title, isArabic ? rtlText : ltrText]}>{isArabic ? 'مساراتي' : 'My Trails'}</Text>
             <Text style={[styles.subtitle, isArabic ? rtlText : ltrText]}>
+              {isArabic ? 'ط§ظ„ظ…ط³ط§ط±ط§طھ ط§ظ„ط¹ط§ظ…ط© ظˆط§ظ„ط®ط§طµط© ط§ظ„طھظٹ ط£ظ†ط´ط£طھظ‡ط§.' : 'Public and private trails created by your account.'}
+            </Text>
+            <Text style={[styles.subtitle, styles.hiddenSubtitle, isArabic ? rtlText : ltrText]}>
               {isArabic ? 'المسارات المنشورة التي أنشأتها.' : 'Published trails created by your account.'}
             </Text>
           </View>
@@ -163,8 +173,10 @@ export function MyTrailsScreen() {
                       </Text>
                       <Text style={[styles.trailSubMeta, isArabic ? rtlText : ltrText]}>Created by your account</Text>
                     </View>
-                    <View style={styles.statusPill}>
-                      <Text style={styles.statusText}>Live</Text>
+                    <View style={[styles.statusPill, (trail.status?.toLowerCase() === 'private' || trail.isPublic === false) && styles.privateStatusPill]}>
+                      <Text style={[styles.statusText, (trail.status?.toLowerCase() === 'private' || trail.isPublic === false) && styles.privateStatusText]}>
+                        {trail.status?.toLowerCase() === 'private' || trail.isPublic === false ? 'Private' : 'Public'}
+                      </Text>
                     </View>
                   </View>
                   <View style={[styles.actionRow, isArabic ? rtlRow : ltrRow]}>
@@ -196,6 +208,7 @@ const styles = StyleSheet.create({
   headerCopy: { flex: 1 },
   title: { color: '#2C2418', fontSize: 24, fontWeight: '900' },
   subtitle: { marginTop: 4, color: '#6B5D4E', fontSize: 13, lineHeight: 18 },
+  hiddenSubtitle: { display: 'none' },
   summaryRow: { flexDirection: 'row', gap: 10, marginBottom: 16 },
   summaryCard: { flex: 1, borderRadius: 18, padding: 14, backgroundColor: '#fff' },
   summaryValue: { color: '#2C2418', fontSize: 17, fontWeight: '900' },
@@ -210,6 +223,8 @@ const styles = StyleSheet.create({
   trailSubMeta: { marginTop: 4, color: '#8A7A6A', fontSize: 11 },
   statusPill: { borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6, backgroundColor: '#E7F3E9' },
   statusText: { color: '#1E7A46', fontSize: 11, fontWeight: '900' },
+  privateStatusPill: { backgroundColor: '#F1E7F3' },
+  privateStatusText: { color: '#6F367A' },
   actionRow: { flexDirection: 'row', gap: 10, marginTop: 14 },
   secondaryButton: { flex: 1, minHeight: 42, borderRadius: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, backgroundColor: '#F7EBE8' },
   secondaryButtonText: { color: '#630E13', fontSize: 13, fontWeight: '900' },

@@ -3,7 +3,7 @@ import { Alert, Pressable, Share, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import type { StackNavigationProp } from '@react-navigation/stack';
 import { AnimatedEntrance } from '../AnimatedUI';
-import { shareActivityPost } from '../../api/activitiesApi';
+import { shareActivityPost, uploadActivityMedia, type ActivityMediaFile } from '../../api/activitiesApi';
 import { addLocalFeedItem } from '../../data/localSocial';
 import { completionRadii } from '../../features/trailCompletion/theme';
 import type { TrailCompletionDraft } from '../../features/trailCompletion/types';
@@ -22,6 +22,69 @@ type Props = {
   delay?: number;
   onSaveJournal?: () => void;
 };
+
+function imageUriToActivityFile(uri: string): ActivityMediaFile {
+  const filename = uri.split('/').pop()?.split('?')[0] || `activity-photo-${Date.now()}.jpg`;
+  const extension = filename.split('.').pop()?.toLowerCase();
+  const type = extension === 'png'
+    ? 'image/png'
+    : extension === 'webp'
+      ? 'image/webp'
+      : extension === 'gif'
+        ? 'image/gif'
+        : 'image/jpeg';
+
+  return { uri, name: filename, type };
+}
+
+function coordinateForPhoto(draft: TrailCompletionDraft, uri: string): [number, number] | null {
+  const taggedPhoto = draft.activityPhotoTags?.find((photo) => photo.uri === uri);
+
+  if (taggedPhoto) {
+    return taggedPhoto.coordinate;
+  }
+
+  if (draft.trailCoordinates) {
+    return [draft.trailCoordinates[1], draft.trailCoordinates[0]];
+  }
+
+  return null;
+}
+
+function capturedAtForPhoto(draft: TrailCompletionDraft, uri: string) {
+  const taggedPhoto = draft.activityPhotoTags?.find((photo) => photo.uri === uri);
+  return new Date(taggedPhoto?.capturedAt ?? draft.completedAtIso).toISOString();
+}
+
+async function uploadRecapPhotosToActivity(draft: TrailCompletionDraft, caption: string) {
+  if (!draft.activityId || draft.postVisibility === 'private') {
+    return;
+  }
+
+  const selectedUris = draft.postPhotoUris?.length ? draft.postPhotoUris : draft.photoUris;
+  const fallbackTaggedUris = draft.activityPhotoTags?.map((photo) => photo.uri) ?? [];
+  const uris = Array.from(new Set((selectedUris.length ? selectedUris : fallbackTaggedUris).filter((uri) => uri && !/^https?:\/\//i.test(uri))));
+
+  await Promise.all(
+    uris.map(async (uri) => {
+      const coordinate = coordinateForPhoto(draft, uri);
+
+      if (!coordinate) {
+        return;
+      }
+
+      const [lng, lat] = coordinate;
+
+      await uploadActivityMedia(draft.activityId!, {
+        photo: imageUriToActivityFile(uri),
+        latitude: lat,
+        longitude: lng,
+        capturedAt: capturedAtForPhoto(draft, uri),
+        caption,
+      });
+    }),
+  );
+}
 
 export function ShareActions({ draft, isArabic, navigation, isOwner = true, ownerName, delay = 400, onSaveJournal }: Props) {
   const displayName = ownerName?.trim() || draft.publisherName?.trim() || 'Trail friend';
@@ -72,6 +135,7 @@ export function ShareActions({ draft, isArabic, navigation, isOwner = true, owne
 
     if (draft.activityId) {
       try {
+        await uploadRecapPhotosToActivity(draft, postCaption || message);
         await shareActivityPost(draft.activityId, {
           visibility: postVisibility,
           caption: postCaption || message,

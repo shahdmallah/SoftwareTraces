@@ -7,8 +7,10 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
 import { addReviewComment, commentOnActivity, followUser, getFollowing, getReviewComments, likeActivity, likeReview, unfollowUser, unlikeReview, getSocialFeed, type ActivityComment, type ReviewComment } from '../api/socialApi';
+import { listMeetups } from '../api/meetupsApi';
 import { type FeedCommentPreview, type FeedItem } from '../data/activitySocial';
 import { getLocalFeedItems } from '../data/localSocial';
+import { mapMeetupToFeedItem } from '../utils/meetupFeedMap';
 import { mapSocialFeedItemToFeedItem } from '../utils/socialFeedMap';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
@@ -716,6 +718,7 @@ export function ActivityScreen() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [remoteRecaps, setRemoteRecaps] = useState<FeedItem[]>([]);
+  const [remoteMeetups, setRemoteMeetups] = useState<FeedItem[]>([]);
   const [localFeedItems, setLocalFeedItems] = useState<FeedItem[]>([]);
   const [feedError, setFeedError] = useState('');
   const [isFeedLoading, setIsFeedLoading] = useState(false);
@@ -725,14 +728,23 @@ export function ActivityScreen() {
   const normalizedQuery = useMemo(() => normalize(searchQuery), [searchQuery]);
 
   const feedData = useMemo(() => {
-    if (!isAuthenticated) return localFeedItems;
-    return [...localFeedItems, ...remoteRecaps];
-  }, [isAuthenticated, localFeedItems, remoteRecaps]);
+    return [...localFeedItems, ...remoteMeetups, ...(isAuthenticated ? remoteRecaps : [])];
+  }, [isAuthenticated, localFeedItems, remoteMeetups, remoteRecaps]);
+
+  const refreshMeetups = useCallback(async () => {
+    try {
+      const response = await listMeetups({ page: 1, limit: 30 });
+      setRemoteMeetups(response.data.map(mapMeetupToFeedItem));
+    } catch {
+      setRemoteMeetups([]);
+    }
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
       setLocalFeedItems(getLocalFeedItems());
-    }, []),
+      void refreshMeetups();
+    }, [refreshMeetups]),
   );
 
   useEffect(() => {

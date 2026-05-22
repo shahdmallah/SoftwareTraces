@@ -9,14 +9,37 @@ import { requireAuth } from "../../middleware/auth";
 import { HttpError } from "../../lib/httpError";
 import { formatTrailForApp } from "../../utils/formatTrail";
 import { getElevationForPoint } from "../../services/elevationService";
+import {
+  generateTrailMetadata,
+  type ParsedTrailDescription,
+  parseTrailDescription as parseTrailDescriptionWithAi,
+} from "../../services/aiService";
+import { generateTrailFromDescription } from "../../services/trailGenerationService";
+import { searchTrailsByCriteria } from "../../services/trailSearchService";
 
 const calculateTrailStatsBodySchema = z.object({
   coordinates: z.array(z.tuple([z.number(), z.number()])).min(2),
 });
 
+const analyzeRouteBodySchema = z.object({
+  coordinates: z.array(z.tuple([z.number(), z.number()])).min(2),
+});
+
+const parseTrailDescriptionBodySchema = z.object({
+  description: z.string().trim().min(1, "Description is required"),
+});
+
+const searchOrGenerateTrailBodySchema = z.object({
+  description: z.string().trim().min(1, "Description is required"),
+});
+
 const createTrailBodySchema = z.object({
   name: z.string().min(1),
   description: z.string().optional(),
+  region: z.string().trim().optional(),
+  features: z.array(z.string().trim().min(1)).optional().default([]),
+  tags: z.array(z.string().trim().min(1)).optional().default([]),
+  status: z.enum(["draft", "published"]).optional().default("draft"),
   coordinates: z.array(z.tuple([z.number(), z.number()])).min(2),
   stats: z.object({
     length_meters: z.number().nonnegative(),
@@ -79,6 +102,16 @@ interface ElevationProfileCacheEntry {
 const elevationProfileCache = new Map<string, ElevationProfileCacheEntry>();
 const ELEVATION_PROFILE_CACHE_TTL = 60 * 60 * 1000;
 const DEFAULT_SMOOTHING_WINDOW = 3;
+
+const knownRegionCenters = [
+  { name: "Ramallah", lng: 35.2044, lat: 31.9038 },
+  { name: "Jericho", lng: 35.4444, lat: 31.8560 },
+  { name: "Jerusalem", lng: 35.2137, lat: 31.7683 },
+  { name: "Bethlehem", lng: 35.2024, lat: 31.7054 },
+  { name: "Nablus", lng: 35.2621, lat: 32.2211 },
+  { name: "Hebron", lng: 35.0998, lat: 31.5326 },
+];
+
 function getTrailSelectFields(alias?: string): string {
   const prefix = alias ? `${alias}.` : "";
   return `
@@ -310,6 +343,70 @@ function createTrailSlug(name: string): string {
 
 function getRequestId(value: string | string[] | undefined): string {
   return Array.isArray(value) ? value[0] : (value ?? "");
+}
+
+function getRouteCenter(coordinates: [number, number][]): [number, number] {
+  const totals = coordinates.reduce(
+    (accumulator, [lng, lat]) => ({
+      lng: accumulator.lng + lng,
+      lat: accumulator.lat + lat,
+    }),
+    { lng: 0, lat: 0 }
+  );
+
+  return [totals.lng / coordinates.length, totals.lat / coordinates.length];
+}
+
+function getNearestKnownRegion([lng, lat]: [number, number]): string {
+  const nearest = knownRegionCenters
+    .map((region) => ({
+      name: region.name,
+      distanceSquared: (region.lng - lng) ** 2 + (region.lat - lat) ** 2,
+    }))
+    .sort((left, right) => left.distanceSquared - right.distanceSquared)[0];
+
+  return nearest?.name ?? "Unknown";
+}
+
+function extractRegionFromMapboxFeature(feature: Record<string, any> | undefined): string | null {
+  if (!feature) {
+    return null;
+  }
+
+  const context = Array.isArray(feature.context) ? feature.context : [];
+  const place = context.find((item: any) => typeof item?.id === "string" && item.id.startsWith("place."));
+  const region = context.find((item: any) => typeof item?.id === "string" && item.id.startsWith("region."));
+  const text = place?.text ?? region?.text ?? feature.text;
+
+  return typeof text === "string" && text.trim() !== "" ? text.trim() : null;
+}
+
+async function determineRegionFromCoordinates(coordinates: [number, number][]): Promise<string> {
+  const center = getRouteCenter(coordinates);
+
+  if (!env.MAPBOX_TOKEN) {
+    return getNearestKnownRegion(center);
+  }
+
+  try {
+    const [lng, lat] = center;
+    const url = new URL(`https://api.mapbox.com/geocoding/v5/mapbox.places/${lng},${lat}.json`);
+    url.searchParams.set("access_token", env.MAPBOX_TOKEN);
+    url.searchParams.set("types", "place,locality,region");
+    url.searchParams.set("limit", "1");
+
+    const response = await fetch(url);
+
+    if (!response.ok) {
+      throw new Error(`Mapbox reverse geocoding failed with status ${response.status}`);
+    }
+
+    const body = await response.json() as { features?: Array<Record<string, any>> };
+    return extractRegionFromMapboxFeature(body.features?.[0]) ?? getNearestKnownRegion(center);
+  } catch (error) {
+    console.warn("[analyzeRoute] Falling back to nearest known region:", error);
+    return getNearestKnownRegion(center);
+  }
 }
 
 export async function getNearbyTrails(req: Request, res: Response): Promise<void> {
@@ -544,21 +641,179 @@ export async function calculateTrailStats(req: Request, res: Response): Promise<
   res.json({ data: stats });
 }
 
-export async function recalculateTrailReviewStats(req: Request, res: Response): Promise<void> {
+export async function analyzeRoute(req: Request, res: Response): Promise<void> {
   try {
-    const trailId = getRequestId(req.params.id);
-    const stats = await trailStatsService.recalculateTrailReviewStats(trailId);
+    const { coordinates } = analyzeRouteBodySchema.parse(req.body);
+    const stats = await trailStatsService.calculateTrailStats(coordinates);
+    let region = "Palestine";
+    let aiName = "Unnamed Trail";
+    let aiDescription = "A scenic trail worth exploring.";
+    let aiLabels = ["viewpoint"];
 
-    res.json({ data: stats });
+    try {
+      region = await determineRegionFromCoordinates(coordinates);
+    } catch (geoError) {
+      console.warn("[analyzeRoute] Geocoding failed, using fallback region:", geoError);
+    }
+
+    try {
+      const metadata = await generateTrailMetadata(stats, region);
+
+      aiName = metadata.name ?? aiName;
+      aiDescription = metadata.description ?? aiDescription;
+      aiLabels = metadata.labels.length > 0 ? metadata.labels : aiLabels;
+    } catch (aiError) {
+      console.warn(
+        "[analyzeRoute] AI failed, using fallback:",
+        aiError instanceof Error ? aiError.message : aiError
+      );
+    }
+
+    res.json({
+      data: {
+        length_meters: Math.round(stats.length_meters),
+        elevation_gain_meters: Math.round(stats.elevation_gain_meters),
+        estimated_duration_minutes: Math.round(stats.estimated_duration_minutes),
+        difficulty: stats.difficulty,
+        region,
+        ai_name: aiName,
+        ai_description: aiDescription,
+        ai_labels: aiLabels,
+      },
+    });
   } catch (error) {
-    console.error("[recalculateTrailReviewStats] Error:", error);
+    console.error("[analyzeRoute] Error:", error);
 
-    if (error instanceof Error && error.message === "Trail not found") {
-      res.status(404).json({ error: "Trail not found" });
+    if (error instanceof ZodError) {
+      res.status(400).json({ error: "Validation failed", details: error.flatten() });
       return;
     }
 
-    res.status(500).json({ error: "Internal server error", details: error instanceof Error ? error.message : String(error) });
+    res.status(500).json({ error: "Unable to analyze route" });
+  }
+}
+
+export async function parseTrailDescription(req: Request, res: Response): Promise<void> {
+  try {
+    const { description } = parseTrailDescriptionBodySchema.parse(req.body);
+    let parsedDescription: ParsedTrailDescription = {
+      length_km: null,
+      difficulty: null,
+      region: null,
+      duration_minutes: null,
+      labels: [],
+      name_suggestion: "Suggested Trail",
+      description_suggestion: "A scenic trail to explore.",
+    };
+
+    try {
+      parsedDescription = await parseTrailDescriptionWithAi(description);
+    } catch (aiError) {
+      console.warn(
+        "[parseTrailDescription] AI failed, using fallback:",
+        aiError instanceof Error ? aiError.message : aiError
+      );
+    }
+
+    res.json({ data: parsedDescription });
+  } catch (error) {
+    console.error("[parseTrailDescription] Error:", error);
+
+    if (error instanceof ZodError) {
+      res.status(400).json({ error: "Validation failed", details: error.flatten() });
+      return;
+    }
+
+    res.status(500).json({ error: "Unable to parse trail description" });
+  }
+}
+
+export async function searchOrGenerateTrail(req: Request, res: Response): Promise<void> {
+  try {
+    const { description } = searchOrGenerateTrailBodySchema.parse(req.body);
+    let parsed: ParsedTrailDescription = {
+      difficulty: null,
+      region: null,
+      labels: [],
+      length_km: null,
+      duration_minutes: null,
+      name_suggestion: "Suggested Trail",
+      description_suggestion: "A scenic trail to explore.",
+    };
+
+    try {
+      parsed = await parseTrailDescriptionWithAi(description);
+    } catch (aiError) {
+      console.warn(
+        "[searchOrGenerateTrail] AI parsing failed, using fallback:",
+        aiError instanceof Error ? aiError.message : aiError
+      );
+    }
+
+    const hasSearchCriteria = Boolean(
+      parsed.difficulty || parsed.region || parsed.length_km || parsed.labels.length > 0
+    );
+
+    let existingTrails = hasSearchCriteria
+      ? await searchTrailsByCriteria({
+          length_km: parsed.length_km,
+          difficulty: parsed.difficulty,
+          region: parsed.region,
+          labels: parsed.labels,
+        })
+      : [];
+
+    if (!hasSearchCriteria) {
+      const popularTrails = await pool.query(
+        `SELECT
+           id,
+           name,
+           region,
+           difficulty,
+           length_meters / 1000.0 AS distance_km,
+           tags,
+           features
+         FROM trails
+         WHERE deleted_at IS NULL
+           AND is_active = TRUE
+           AND status = 'published'
+         ORDER BY average_rating DESC, total_reviews DESC, name ASC
+         LIMIT 10`
+      );
+
+      existingTrails = popularTrails.rows.map((trail) => {
+        const distanceKm = Number(trail.distance_km ?? 0);
+
+        return {
+          id: trail.id,
+          name: trail.name,
+          region: trail.region,
+          match_score: 0,
+          distance_km: Number(distanceKm.toFixed(1)),
+          difficulty: trail.difficulty,
+          labels: Array.from(new Set([...(trail.tags ?? []), ...(trail.features ?? [])])),
+        };
+      });
+    }
+
+    const generatedTrail = existingTrails.length > 0 ? null : await generateTrailFromDescription(parsed);
+
+    res.json({
+      data: {
+        parsed,
+        existing_trails: existingTrails,
+        generated_trail: generatedTrail,
+      },
+    });
+  } catch (error) {
+    console.error("[searchOrGenerateTrail] Error:", error);
+
+    if (error instanceof ZodError) {
+      res.status(400).json({ error: "Validation failed", details: error.flatten() });
+      return;
+    }
+
+    res.status(500).json({ error: "Unable to search or generate trail" });
   }
 }
 
@@ -570,7 +825,7 @@ export async function createTrail(req: Request, res: Response): Promise<void> {
     console.error("[createTrail] auth.userId:", userId);
     console.error("[createTrail] request body:", JSON.stringify(req.body, null, 2));
 
-    const { name, description, coordinates, stats } = createTrailBodySchema.parse(req.body);
+    const { name, description, region, features, tags, status, coordinates, stats } = createTrailBodySchema.parse(req.body);
 
     if (!Array.isArray(coordinates) || coordinates.length < 2) {
       throw new Error("Coordinates must contain at least 2 points");
@@ -607,7 +862,7 @@ export async function createTrail(req: Request, res: Response): Promise<void> {
     });
 
     const slug = createTrailSlug(name);
-    const region = "Unknown";
+    const trailRegion = region?.trim() || "Unknown";
     const linestring = `LINESTRING(${coordinates.map(([lng, lat]) => `${lng} ${lat}`).join(", ")})`;
     const [startLng, startLat] = coordinates[0];
 
@@ -616,6 +871,8 @@ export async function createTrail(req: Request, res: Response): Promise<void> {
       name,
       description,
       region,
+      features,
+      tags,
       difficulty,
       length_meters,
       elevation_gain_meters,
@@ -626,19 +883,21 @@ export async function createTrail(req: Request, res: Response): Promise<void> {
       is_active,
       status
     ) VALUES (
-      $1, $2, $3, $4, $5, $6, $7, $8,
-      ST_GeomFromText($9, 4326),
-      ST_GeogFromText($10),
-      $11,
-      $12,
-      $13
+      $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+      ST_GeomFromText($11, 4326),
+      ST_GeogFromText($12),
+      $13,
+      $14,
+      $15
     ) RETURNING id`;
 
     const queryValues = [
       slug,
       name,
       description ?? "",
-      region,
+      trailRegion,
+      features,
+      tags,
       stats.difficulty,
       Math.round(stats.length_meters),
       stats.elevation_gain_meters,
@@ -647,7 +906,7 @@ export async function createTrail(req: Request, res: Response): Promise<void> {
       linestring,
       userId,
       true,
-      "draft",
+      status,
     ];
 
     console.error("[createTrail] insert query:", insertQuery);
@@ -862,10 +1121,7 @@ export async function createTrailReview(req: Request, res: Response): Promise<vo
         }
       }
 
-      console.log("[createTrailReview] Step 7: Recalculating trail review stats");
-      const trailReviewStats = await trailStatsService.recalculateTrailReviewStats(trailId, client);
-
-      console.log("[createTrailReview] Step 8: All photos uploaded, committing transaction");
+      console.log("[createTrailReview] Step 7: All photos uploaded, committing transaction");
       await client.query("COMMIT");
       console.log("[createTrailReview] Transaction committed successfully");
 
@@ -873,7 +1129,6 @@ export async function createTrailReview(req: Request, res: Response): Promise<vo
         data: {
           ...review,
           photos: uploadedPhotos,
-          trail_stats: trailReviewStats,
         },
       });
     } catch (transactionError) {
