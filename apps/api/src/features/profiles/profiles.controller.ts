@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import { createClient } from "@supabase/supabase-js";
 import { env } from "../../config/env";
 import { pool } from "../../db/pool";
+import { areFriends, isFollowing } from "../../services/friendService";
 
 interface ProfileRow {
   id: string;
@@ -18,6 +19,7 @@ interface ProfileStatsRow {
   total_likes_received: string;
   total_followers: string;
   total_following: string;
+  total_friends: string;
 }
 
 interface ProfileReviewRow {
@@ -107,6 +109,7 @@ export async function getProfile(req: Request, res: Response): Promise<void> {
   try {
     const requestedId = getRequestId(req.params.id);
     const profile = await getProfileByUserId(requestedId);
+    const viewerId = req.auth?.sub ?? null;
 
     const [statsResult, recentReviewsResult, recentPhotosResult] = await Promise.all([
       pool.query<ProfileStatsRow>(
@@ -124,8 +127,16 @@ export async function getProfile(req: Request, res: Response): Promise<void> {
              WHERE tr.user_id = $1
            ) AS total_likes_received,
            (SELECT COUNT(*) FROM user_follows uf WHERE uf.following_id = $1) AS total_followers,
-           (SELECT COUNT(*) FROM user_follows uf WHERE uf.follower_id = $1) AS total_following`,
-        [profile.user_id]
+           (SELECT COUNT(*) FROM user_follows uf WHERE uf.follower_id = $1) AS total_following,
+           (
+             SELECT COUNT(*)
+             FROM user_follows f1
+             JOIN user_follows f2
+               ON f2.follower_id = f1.following_id
+              AND f2.following_id = f1.follower_id
+             WHERE f1.follower_id = $1
+           ) AS total_friends`,
+        [profile.id]
       ),
       pool.query<ProfileReviewRow>(
         `SELECT
@@ -195,6 +206,13 @@ export async function getProfile(req: Request, res: Response): Promise<void> {
     ]);
 
     const stats = statsResult.rows[0];
+    const [isViewerFollowing, isViewerFollower, isViewerFriend] = viewerId
+      ? await Promise.all([
+          isFollowing(viewerId, profile.id),
+          isFollowing(profile.id, viewerId),
+          areFriends(viewerId, profile.id),
+        ])
+      : [false, false, false];
 
     res.json({
       data: {
@@ -210,6 +228,13 @@ export async function getProfile(req: Request, res: Response): Promise<void> {
           total_likes_received: Number(stats.total_likes_received),
           total_followers: Number(stats.total_followers),
           total_following: Number(stats.total_following),
+          total_friends: Number(stats.total_friends),
+          friends_count: Number(stats.total_friends),
+        },
+        relationship: {
+          is_following: isViewerFollowing,
+          is_follower: isViewerFollower,
+          is_friend: isViewerFriend,
         },
         recent_reviews: recentReviewsResult.rows.map((row) => ({
           id: row.id,

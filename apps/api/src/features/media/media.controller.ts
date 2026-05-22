@@ -237,34 +237,35 @@ export async function getMapBubbles(req: Request, res: Response): Promise<void> 
             `
             WITH map_media AS (
               SELECT
-                latitude,
-                longitude,
-                thumbnail_url AS preview_image,
-                id,
+                m.latitude,
+                m.longitude,
+                m.thumbnail_url AS preview_image,
+                m.id,
                 'media' AS source,
-                created_at
-              FROM media
-              WHERE is_public = true
-                AND latitude IS NOT NULL
-                AND longitude IS NOT NULL
-                AND latitude BETWEEN $1 AND $2
-                AND longitude BETWEEN $3 AND $4
+                m.created_at
+              FROM media m
+              WHERE m.is_public = true
+                AND m.latitude IS NOT NULL
+                AND m.longitude IS NOT NULL
+                AND m.latitude BETWEEN $1 AND $2
+                AND m.longitude BETWEEN $3 AND $4
 
               UNION ALL
 
               SELECT
-                latitude,
-                longitude,
-                public_url AS preview_image,
-                id,
+                am.latitude,
+                am.longitude,
+                am.public_url AS preview_image,
+                am.id,
                 'activity_media' AS source,
-                created_at
-              FROM activity_media
-              WHERE is_public = true
-                AND latitude IS NOT NULL
-                AND longitude IS NOT NULL
-                AND latitude BETWEEN $1 AND $2
-                AND longitude BETWEEN $3 AND $4
+                am.created_at
+              FROM activity_media am
+              JOIN activities a ON a.id = am.activity_id
+              WHERE a.is_public = true
+                AND am.latitude IS NOT NULL
+                AND am.longitude IS NOT NULL
+                AND am.latitude BETWEEN $1 AND $2
+                AND am.longitude BETWEEN $3 AND $4
             )
             SELECT
               latitude AS cluster_lat,
@@ -282,34 +283,35 @@ export async function getMapBubbles(req: Request, res: Response): Promise<void> 
             `
             WITH map_media AS (
               SELECT
-                latitude,
-                longitude,
-                thumbnail_url AS preview_image,
-                id,
+                m.latitude,
+                m.longitude,
+                m.thumbnail_url AS preview_image,
+                m.id,
                 'media' AS source,
-                created_at
-              FROM media
-              WHERE is_public = true
-                AND latitude IS NOT NULL
-                AND longitude IS NOT NULL
-                AND latitude BETWEEN $3 AND $4
-                AND longitude BETWEEN $5 AND $6
+                m.created_at
+              FROM media m
+              WHERE m.is_public = true
+                AND m.latitude IS NOT NULL
+                AND m.longitude IS NOT NULL
+                AND m.latitude BETWEEN $3 AND $4
+                AND m.longitude BETWEEN $5 AND $6
 
               UNION ALL
 
               SELECT
-                latitude,
-                longitude,
-                public_url AS preview_image,
-                id,
+                am.latitude,
+                am.longitude,
+                am.public_url AS preview_image,
+                am.id,
                 'activity_media' AS source,
-                created_at
-              FROM activity_media
-              WHERE is_public = true
-                AND latitude IS NOT NULL
-                AND longitude IS NOT NULL
-                AND latitude BETWEEN $3 AND $4
-                AND longitude BETWEEN $5 AND $6
+                am.created_at
+              FROM activity_media am
+              JOIN activities a ON a.id = am.activity_id
+              WHERE a.is_public = true
+                AND am.latitude IS NOT NULL
+                AND am.longitude IS NOT NULL
+                AND am.latitude BETWEEN $3 AND $4
+                AND am.longitude BETWEEN $5 AND $6
             ),
             clustered_media AS (
               SELECT
@@ -411,9 +413,10 @@ export async function getBubblePhotos(req: Request, res: Response): Promise<void
           p.full_name,
           p.avatar_url
         FROM activity_media am
+        JOIN activities a ON a.id = am.activity_id
         JOIN profiles p ON p.id = am.user_id
         WHERE am.id = ANY($1::uuid[])
-          AND am.is_public = true
+          AND a.is_public = true
       )
       SELECT
         id,
