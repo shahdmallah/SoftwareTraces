@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router';
-import { DesktopNavigation, MobileNavigation } from './components/Navigation';
+import { DesktopNavigation, MobileNavigation } from './components/navigation';
 import { LandingPage } from './pages/LandingPage';
 import { ExplorePage } from './pages/ExplorePage';
 import { MapPage } from './pages/MapPage';
@@ -22,32 +22,36 @@ export default function App() {
     setIsAuthenticated(Boolean(getAccessToken()));
   }, []);
 
-  if (!isAuthenticated) {
-    return (
-      <BrowserRouter>
-        <LandingPage onAuth={() => setIsAuthenticated(true)} />
-      </BrowserRouter>
-    );
-  }
-
   return (
     <BrowserRouter>
-      <div className="min-h-screen bg-background">
-        <DesktopNavigation onSignOut={() => { logout(); setIsAuthenticated(false); }} />
-        <Routes>
-          <Route path="/" element={<ExplorePage />} />
-          <Route path="/map" element={<MapPage />} />
-          <Route path="/trail/:id" element={<TrailDetailPage />} />
-          <Route path="/create" element={<CreateTrailPage />} />
-          <Route path="/drafts" element={<TrailDraftsPage />} />
-          <Route path="/saved" element={<SavedTrailsPage />} />
-          <Route path="/activity" element={<ActivityPage />} />
-          <Route path="/recording" element={<RecordingPage />} />
-          <Route path="/profile" element={<ProfilePage />} />
-          <Route path="/downloads" element={<OfflineDownloadsPage />} />
-        </Routes>
-        <MobileNavigation />
-      </div>
+      <Routes>
+        <Route path="/" element={<LandingPage onAuth={() => setIsAuthenticated(true)} />} />
+        <Route
+          path="/*"
+          element={(
+            <div className="min-h-screen bg-background">
+              <DesktopNavigation
+                isAuthenticated={isAuthenticated}
+                onSignIn={() => setIsAuthenticated(Boolean(getAccessToken()))}
+                onSignOut={() => { logout(); setIsAuthenticated(false); }}
+              />
+              <Routes>
+                <Route path="/explore" element={<ExplorePage />} />
+                <Route path="/map" element={<MapPage />} />
+                <Route path="/trail/:id" element={<TrailDetailPage />} />
+                <Route path="/create" element={<CreateTrailPage />} />
+                <Route path="/drafts" element={<TrailDraftsPage />} />
+                <Route path="/saved" element={<SavedTrailsPage />} />
+                <Route path="/activity" element={<ActivityPage />} />
+                <Route path="/recording" element={<RecordingPage />} />
+                <Route path="/profile" element={<ProfilePage />} />
+                <Route path="/downloads" element={<OfflineDownloadsPage />} />
+              </Routes>
+              <MobileNavigation />
+            </div>
+          )}
+        />
+      </Routes>
     </BrowserRouter>
   );
 }

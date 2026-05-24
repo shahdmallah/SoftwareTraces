@@ -2,8 +2,72 @@ import { useState } from 'react';
 import { ArrowLeft, Save, Send, MapPin, Image as ImageIcon, RotateCcw } from 'lucide-react';
 import { Link, useNavigate } from 'react-router';
 import { MapboxTrailMap } from '../components/MapboxTrailMap';
-import { createTrail, getTrailStats } from '../api/trails';
+import { createTrail, getNearbyTrails, getTrailStats, type Trail } from '../api/trails';
+import { getAccessToken } from '../api/client';
 import { translateTrailContentToArabic } from '../utils/translateTrailContent';
+
+const DUPLICATE_LOOKUP_RADIUS_METERS = 160;
+const DUPLICATE_ENDPOINT_THRESHOLD_METERS = 45;
+const DUPLICATE_LENGTH_TOLERANCE_METERS = 120;
+const DUPLICATE_LENGTH_TOLERANCE_RATIO = 0.04;
+
+function getDistanceMeters(left: [number, number], right: [number, number]) {
+  const earthRadiusMeters = 6371000;
+  const toRadians = (value: number) => (value * Math.PI) / 180;
+  const [leftLng, leftLat] = left;
+  const [rightLng, rightLat] = right;
+  const deltaLat = toRadians(rightLat - leftLat);
+  const deltaLng = toRadians(rightLng - leftLng);
+  const a =
+    Math.sin(deltaLat / 2) * Math.sin(deltaLat / 2) +
+    Math.cos(toRadians(leftLat)) *
+      Math.cos(toRadians(rightLat)) *
+      Math.sin(deltaLng / 2) *
+      Math.sin(deltaLng / 2);
+
+  return earthRadiusMeters * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function getPathDistanceMeters(points: [number, number][]) {
+  return points.reduce((sum, point, index) => (index === 0 ? sum : sum + getDistanceMeters(points[index - 1], point)), 0);
+}
+
+function normalizeTrailName(value: string) {
+  return value.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function hasSimilarEndpoints(candidate: [number, number][], existing: [number, number][]) {
+  const candidateStart = candidate[0];
+  const candidateEnd = candidate[candidate.length - 1];
+  const existingStart = existing[0];
+  const existingEnd = existing[existing.length - 1];
+
+  if (!candidateStart || !candidateEnd || !existingStart || !existingEnd) return false;
+
+  const sameDirection =
+    getDistanceMeters(candidateStart, existingStart) <= DUPLICATE_ENDPOINT_THRESHOLD_METERS &&
+    getDistanceMeters(candidateEnd, existingEnd) <= DUPLICATE_ENDPOINT_THRESHOLD_METERS;
+  const reverseDirection =
+    getDistanceMeters(candidateStart, existingEnd) <= DUPLICATE_ENDPOINT_THRESHOLD_METERS &&
+    getDistanceMeters(candidateEnd, existingStart) <= DUPLICATE_ENDPOINT_THRESHOLD_METERS;
+
+  return sameDirection || reverseDirection;
+}
+
+function isSimilarLength(leftMeters: number, rightMeters: number) {
+  const tolerance = Math.max(DUPLICATE_LENGTH_TOLERANCE_METERS, Math.max(leftMeters, rightMeters) * DUPLICATE_LENGTH_TOLERANCE_RATIO);
+  return Math.abs(leftMeters - rightMeters) <= tolerance;
+}
+
+function isPotentialDuplicateTrail(candidateName: string, candidateRoute: [number, number][], candidateLengthMeters: number, existingTrail: Trail) {
+  const existingRoute = existingTrail.routeCoordinates;
+  if (!existingRoute || existingRoute.length < 2 || candidateRoute.length < 2) return false;
+
+  const sameName = normalizeTrailName(candidateName) === normalizeTrailName(existingTrail.name);
+  const existingLengthMeters = existingTrail.distance > 0 ? existingTrail.distance * 1000 : getPathDistanceMeters(existingRoute);
+
+  return hasSimilarEndpoints(candidateRoute, existingRoute) && (sameName || isSimilarLength(candidateLengthMeters, existingLengthMeters));
+}
 
 export function CreateTrailPage() {
   const navigate = useNavigate();
@@ -15,8 +79,14 @@ export function CreateTrailPage() {
   ]);
   const [isSaving, setIsSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
+  const isGuest = !getAccessToken();
 
   const handleSubmit = async () => {
+    if (isGuest) {
+      setErrorMessage('Sign in to create and publish trails. You can still use this page to sketch a route.');
+      return;
+    }
+
     if (!trailName.trim()) {
       setErrorMessage('Trail name is required.');
       return;
@@ -30,6 +100,23 @@ export function CreateTrailPage() {
     setErrorMessage('');
     try {
       const stats = await getTrailStats(routePoints);
+      const start = routePoints[0];
+      const nearbyTrails = start
+        ? await getNearbyTrails({ lat: start[1], lng: start[0], radius: DUPLICATE_LOOKUP_RADIUS_METERS }).catch(() => [])
+        : [];
+      const duplicateTrail = nearbyTrails.find((trail) =>
+        isPotentialDuplicateTrail(trailName.trim(), routePoints, stats.length_meters, trail),
+      );
+
+      if (duplicateTrail) {
+        const shouldCreateAnyway = window.confirm(
+          `"${duplicateTrail.name}" already starts near this route and looks very similar.\n\nCreate this trail anyway?`,
+        );
+        if (!shouldCreateAnyway) {
+          return;
+        }
+      }
+
       const translatedTrail = await translateTrailContentToArabic({
         name: trailName.trim(),
         description: description.trim() || undefined,
@@ -97,7 +184,7 @@ export function CreateTrailPage() {
                 type="text"
                 value={trailName}
                 onChange={(e) => setTrailName(e.target.value)}
-                placeholder="e.g., Wadi Qelt Canyon Trail"
+                placeholder="e.g., Canyon Ridge Trail"
                 className="w-full px-4 py-3 bg-input-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20"
               />
             </div>

@@ -8,6 +8,7 @@ import { ImageWithFallback } from '../components/ImageWithFallback';
 import { StatCard } from '../components/StatCard';
 import { MapboxTrailMap } from '../components/MapboxTrailMap';
 import { downloadOfflineMap } from '../api/offline';
+import { getAccessToken } from '../api/client';
 import {
   getTrailById,
   getTrailConditions,
@@ -40,6 +41,7 @@ export function TrailDetailPage() {
   const [saved, setSaved] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [isLoading, setIsLoading] = useState(true);
+  const isGuest = !getAccessToken();
 
   useEffect(() => {
     if (!id) return;
@@ -74,6 +76,11 @@ export function TrailDetailPage() {
 
   const toggleSave = async () => {
     if (!trail) return;
+    if (isGuest) {
+      setErrorMessage('Sign in to save trails across devices.');
+      return;
+    }
+
     const shouldSave = !saved;
     setSaved(shouldSave);
     try {
@@ -86,6 +93,11 @@ export function TrailDetailPage() {
 
   const handleDownload = async () => {
     if (!trail) return;
+    if (isGuest) {
+      setErrorMessage('Sign in to download offline map packs.');
+      return;
+    }
+
     try {
       await downloadOfflineMap(trail.id);
     } catch (error) {
@@ -101,7 +113,7 @@ export function TrailDetailPage() {
     return (
       <div className="min-h-screen bg-background p-8 text-center">
         <p className="text-red-700 mb-4">{errorMessage || 'Trail not found.'}</p>
-        <Link to="/" className="text-primary font-medium">Back to Explore</Link>
+        <Link to="/explore" className="text-primary font-medium">Back to Explore</Link>
       </div>
     );
   }

@@ -2,22 +2,26 @@ import { useEffect, useState } from 'react';
 import { Pause, Play, Square, AlertCircle, Navigation2, WifiOff, Satellite } from 'lucide-react';
 import { MapboxTrailMap } from '../components/MapboxTrailMap';
 import { sendSosAlert, startActivity, updateActivityStatus, type Activity } from '../api/activities';
+import { getAccessToken } from '../api/client';
 
 export function RecordingPage() {
   const [activity, setActivity] = useState<Activity | null>(null);
   const [isPaused, setIsPaused] = useState(false);
   const [routePoints, setRoutePoints] = useState<[number, number][]>([]);
   const [errorMessage, setErrorMessage] = useState('');
+  const isGuest = !getAccessToken();
 
   useEffect(() => {
-    startActivity()
-      .then(setActivity)
-      .catch((error) => setErrorMessage(error instanceof Error ? error.message : 'Unable to start activity.'));
+    if (!isGuest) {
+      startActivity()
+        .then(setActivity)
+        .catch((error) => setErrorMessage(error instanceof Error ? error.message : 'Unable to start activity.'));
+    }
 
     navigator.geolocation.getCurrentPosition((position) => {
       setRoutePoints([[position.coords.longitude, position.coords.latitude]]);
     });
-  }, []);
+  }, [isGuest]);
 
   const handleTogglePause = async () => {
     const nextPaused = !isPaused;
@@ -31,6 +35,11 @@ export function RecordingPage() {
   };
 
   const handleSos = async () => {
+    if (isGuest) {
+      setErrorMessage('Sign in to send account-linked SOS alerts.');
+      return;
+    }
+
     try {
       await sendSosAlert({ activityId: activity?.id, location: routePoints.at(-1) });
       alert('SOS alert sent.');
@@ -47,8 +56,8 @@ export function RecordingPage() {
             <div className="flex items-center gap-3">
               <div className={`w-3 h-3 rounded-full ${isPaused ? 'bg-accent' : 'bg-destructive animate-pulse'}`}></div>
               <div>
-                <h3 className="font-semibold text-foreground">{isPaused ? 'Paused' : 'Recording'}</h3>
-                <p className="text-xs text-secondary">{activity?.title || 'Live activity'}</p>
+                <h3 className="font-semibold text-foreground">{isPaused ? 'Paused' : isGuest ? 'Preview recording' : 'Recording'}</h3>
+                <p className="text-xs text-secondary">{activity?.title || (isGuest ? 'Sign in to save this activity' : 'Live activity')}</p>
               </div>
             </div>
             <div className="flex items-center gap-2">

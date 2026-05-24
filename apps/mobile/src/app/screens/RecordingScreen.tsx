@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, View, Text, StyleSheet, Pressable, ScrollView, Image, ActivityIndicator } from 'react-native';
+import { Alert, View, Text, StyleSheet, Pressable, ScrollView, Image, ActivityIndicator, useWindowDimensions } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
@@ -17,6 +17,7 @@ import {
   safetyAlertWarning,
   type NearbySafetyAlert,
 } from '../api/safetyApi';
+import { buildTrailBuddyMessage } from '../utils/trailBuddy';
 
 const MAPBOX_STYLE_URL =
   process.env.EXPO_PUBLIC_MAPBOX_STYLE_URL ?? 'mapbox://styles/shahdmallah/cmnqgt687000h01s66inve68a';
@@ -153,6 +154,7 @@ export function RecordingScreen() {
   const navigation = useNavigation<RecordingNavigationProp>();
   const route = useRoute<RecordingRouteProp>();
   const insets = useSafeAreaInsets();
+  const { height: windowHeight } = useWindowDimensions();
   const { trailId, activityId } = route.params;
   const cameraRef = useRef<any>(null);
   const hasStartedSessionRef = useRef(false);
@@ -174,10 +176,18 @@ export function RecordingScreen() {
   const [isSendingSos, setIsSendingSos] = useState(false);
   const [isPanelExpanded, setIsPanelExpanded] = useState(false);
   const [isPhotosExpanded, setIsPhotosExpanded] = useState(false);
+  const panelMaxHeight = isPanelExpanded
+    ? Math.min(460, Math.max(320, Math.round(windowHeight * 0.48)))
+    : Math.min(300, Math.max(230, Math.round(windowHeight * 0.34)));
+  const photoSheetMaxHeight = isPhotosExpanded
+    ? Math.min(280, Math.max(210, Math.round(windowHeight * 0.32)))
+    : 74;
+  const mapPanelBottomClearance = photoSheetMaxHeight + 12;
   const [safetyAlerts, setSafetyAlerts] = useState<NearbySafetyAlert[]>([]);
   const [selectedSafetyAlert, setSelectedSafetyAlert] = useState<NearbySafetyAlert | null>(null);
   const [safetyError, setSafetyError] = useState<string | null>(null);
   const [isSafetyLoading, setIsSafetyLoading] = useState(false);
+  const [trailBuddyFactRequests, setTrailBuddyFactRequests] = useState(0);
 
   const [zoomLevel, setZoomLevel] = useState(12.2);
   const [pitch, setPitch] = useState(0); // 0 for 2D, 45 for 3D
@@ -294,6 +304,7 @@ export function RecordingScreen() {
     setSelectedSafetyAlert(null);
     setSafetyError(null);
     setIsSafetyLoading(false);
+    setTrailBuddyFactRequests(0);
   }, [trailId]);
 
   useEffect(() => {
@@ -400,34 +411,33 @@ export function RecordingScreen() {
     }
   };
 
-  const guideMessage = useMemo(() => {
-    if (!trail) {
-      return {
-        title: 'Nour is getting your route ready',
-        body: 'Once the trail loads, your guide will start sharing directions, warnings, and interesting facts.',
-      };
-    }
-
-    if (nearestDistance != null && nearestDistance > 120) {
-      return {
-        title: 'Nour: you are drifting off the route',
-        body: `You are about ${Math.round(nearestDistance)} m from the planned path. Head back toward the white route line to stay on track.`,
-      };
-    }
-
-    const route = trail.routeCoordinates?.length ? trail.routeCoordinates : null;
-    const progress = route?.length && recordedPath.length ? Math.min(0.96, recordedPath.length / route.length) : 0;
-    const remainingKm = trail.distance ? Math.max(0, (1 - progress) * trail.distance).toFixed(1) : null;
-    const feature = trail.features[0] ?? trail.tags[0] ?? 'the trail landscape';
-    const checkpoint = trail.checkpointNote?.trim();
-
-    return {
-      title: 'Nour: guide update',
-      body: checkpoint
-        ? `${checkpoint} Keep following the route. You still have about ${remainingKm ?? trail.distance.toFixed(1)} km left.`
-        : `Stay with the route line and enjoy ${feature}. You still have about ${remainingKm ?? trail.distance.toFixed(1)} km to the finish.`,
-    };
-  }, [nearestDistance, recordedPath.length, trail]);
+  const trailBuddyMessage = useMemo(
+    () =>
+      buildTrailBuddyMessage({
+        trail,
+        currentLocation,
+        routeCoordinates,
+        nearestDistance,
+        elapsedMs,
+        recordedPointCount: recordedPath.length,
+        progressPercent: navigationProgressPercent,
+        navigationOffTrack,
+        navigationDeviationMeters,
+        factRequestCount: trailBuddyFactRequests,
+      }),
+    [
+      currentLocation,
+      elapsedMs,
+      navigationDeviationMeters,
+      navigationOffTrack,
+      navigationProgressPercent,
+      nearestDistance,
+      recordedPath.length,
+      routeCoordinates,
+      trail,
+      trailBuddyFactRequests,
+    ],
+  );
 
   const handleFinish = () => {
     const completed = finishTrailSession();
@@ -608,7 +618,7 @@ export function RecordingScreen() {
           })}
         </Mapbox.MapView>
 
-        <View style={styles.mapControls}>
+        <View style={[styles.mapControls, { bottom: photoSheetMaxHeight + 18 }]}>
           <Pressable style={styles.controlButton} onPress={zoomIn}>
             <Ionicons name="add" size={24} color="#2C2418" />
           </Pressable>
@@ -634,7 +644,16 @@ export function RecordingScreen() {
         </View>
       )}
 
-      <View style={[styles.topOverlay, { paddingTop: Math.max(insets.top + 8, 20) }]}>
+      <View
+        pointerEvents="box-none"
+        style={[
+          styles.topOverlay,
+          {
+            paddingTop: Math.max(insets.top + 8, 20),
+            bottom: mapPanelBottomClearance,
+          },
+        ]}
+      >
         <View style={styles.headerRow}>
           <Pressable style={styles.backButton} onPress={() => navigation.goBack()}>
             <Ionicons name="arrow-back" size={22} color="#2C2418" />
@@ -655,7 +674,12 @@ export function RecordingScreen() {
           </View>
         </View>
 
-        <View style={styles.heroCard}>
+        <ScrollView
+          style={[styles.heroCard, isPanelExpanded && styles.heroCardExpanded, { maxHeight: panelMaxHeight }]}
+          contentContainerStyle={styles.heroCardContent}
+          showsVerticalScrollIndicator={isPanelExpanded}
+          bounces={false}
+        >
           {isTrailLoading ? (
             <View style={styles.loadingRow}>
               <ActivityIndicator color="#630E13" />
@@ -750,6 +774,41 @@ export function RecordingScreen() {
                     <Text style={styles.secondaryActionButtonText}>{isCapturingPhoto ? 'Opening camera...' : 'Tag photo here'}</Text>
                   ) : null}
                 </Pressable>
+              </View>
+
+              <View
+                style={[
+                  styles.guideCard,
+                  trailBuddyMessage.tone === 'warning' && styles.guideCardWarning,
+                  trailBuddyMessage.tone === 'celebration' && styles.guideCardCelebration,
+                  trailBuddyMessage.tone === 'navigation' && styles.guideCardNavigation,
+                ]}
+              >
+                <View style={styles.guideAvatar}>
+                  <View style={styles.guideHat}>
+                    <Ionicons name="leaf" size={13} color="#1E7A46" />
+                  </View>
+                  <View style={styles.guideEyesRow}>
+                    <View style={styles.guideEye} />
+                    <View style={styles.guideEye} />
+                  </View>
+                  <View style={styles.guideSmile} />
+                </View>
+                <View style={styles.guideCopy}>
+                  <View style={styles.guideHeaderRow}>
+                    <Text style={styles.guideTitle}>{trailBuddyMessage.title}</Text>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="Tell me something cool"
+                      style={styles.guideFactButton}
+                      onPress={() => setTrailBuddyFactRequests((count) => count + 1)}
+                    >
+                      <Ionicons name="sparkles-outline" size={13} color="#630E13" />
+                      <Text style={styles.guideFactButtonText}>Cool fact</Text>
+                    </Pressable>
+                  </View>
+                  <Text style={styles.guideText}>{trailBuddyMessage.body}</Text>
+                </View>
               </View>
 
               {isPanelExpanded ? (
@@ -862,16 +921,6 @@ export function RecordingScreen() {
                     </View>
                   ) : null}
 
-                  <View style={[styles.guideCard, nearestDistance != null && nearestDistance > 120 && styles.guideCardWarning]}>
-                    <View style={styles.guideAvatar}>
-                      <Text style={styles.guideAvatarText}>N</Text>
-                    </View>
-                    <View style={styles.guideCopy}>
-                      <Text style={styles.guideTitle}>{guideMessage.title}</Text>
-                      <Text style={styles.guideText}>{guideMessage.body}</Text>
-                    </View>
-                  </View>
-
                   <View style={styles.actionButtonsRow}>
                     <Pressable style={[styles.actionButton, styles.finishButton]} onPress={handleFinish}>
                       <Ionicons name="flag-outline" size={16} color="#fff" />
@@ -897,10 +946,18 @@ export function RecordingScreen() {
               )}
             </>
           )}
-        </View>
+        </ScrollView>
       </View>
 
-      <View style={[styles.bottomSheet, { paddingBottom: Math.max(insets.bottom + 12, 20) }]}>
+      <View
+        style={[
+          styles.bottomSheet,
+          {
+            maxHeight: photoSheetMaxHeight,
+            paddingBottom: Math.max(insets.bottom + 12, 20),
+          },
+        ]}
+      >
         <Pressable style={styles.bottomSheetHeader} onPress={() => setIsPhotosExpanded((current) => !current)}>
           <Text style={styles.bottomSheetTitle}>Tagged photos</Text>
           <View style={styles.bottomSheetHeaderRight}>
@@ -976,6 +1033,7 @@ const styles = StyleSheet.create({
     top: 0,
     left: 0,
     right: 0,
+    bottom: 86,
     paddingHorizontal: 16,
     gap: 12,
   },
@@ -1034,11 +1092,18 @@ const styles = StyleSheet.create({
   },
   heroCard: {
     borderRadius: 28,
-    padding: 16,
     backgroundColor: 'rgba(250,248,242,0.94)',
-    gap: 12,
     maxWidth: 420,
+    maxHeight: '100%',
+    flexShrink: 1,
     alignSelf: 'flex-end',
+  },
+  heroCardExpanded: {
+    width: '100%',
+  },
+  heroCardContent: {
+    padding: 16,
+    gap: 12,
   },
   trailName: {
     color: '#2C2418',
@@ -1249,26 +1314,87 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#F1B38A',
   },
+  guideCardNavigation: {
+    backgroundColor: '#EEF7EF',
+    borderWidth: 1,
+    borderColor: '#CFE4C8',
+  },
+  guideCardCelebration: {
+    backgroundColor: '#FFF8E8',
+    borderWidth: 1,
+    borderColor: '#E9D38B',
+  },
   guideAvatar: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
+    width: 50,
+    height: 50,
+    borderRadius: 25,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#630E13',
+    backgroundColor: '#FFF8F1',
+    borderWidth: 2,
+    borderColor: '#630E13',
   },
-  guideAvatarText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '900',
+  guideHat: {
+    position: 'absolute',
+    top: -8,
+    right: 2,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#DDECCB',
+    borderWidth: 1,
+    borderColor: '#BFD9A7',
+  },
+  guideEyesRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 4,
+  },
+  guideEye: {
+    width: 5,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: '#2C2418',
+  },
+  guideSmile: {
+    width: 16,
+    height: 8,
+    marginTop: 6,
+    borderBottomWidth: 2,
+    borderBottomColor: '#630E13',
+    borderRadius: 8,
   },
   guideCopy: {
     flex: 1,
+    minWidth: 0,
+  },
+  guideHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
   },
   guideTitle: {
+    flex: 1,
     color: '#2C2418',
     fontSize: 13,
     fontWeight: '800',
+  },
+  guideFactButton: {
+    minHeight: 30,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 9,
+    borderRadius: 15,
+    backgroundColor: '#FFFFFF',
+  },
+  guideFactButtonText: {
+    color: '#630E13',
+    fontSize: 10,
+    fontWeight: '900',
   },
   guideText: {
     marginTop: 4,
@@ -1344,6 +1470,7 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
+    overflow: 'hidden',
     paddingTop: 14,
     paddingHorizontal: 16,
     backgroundColor: 'rgba(250,248,242,0.97)',

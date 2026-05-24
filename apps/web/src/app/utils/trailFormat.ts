@@ -20,7 +20,7 @@ export function toTrailCard(trail: Trail) {
     id: trail.id,
     name: trail.name || 'Untitled trail',
     nameAr: trail.nameAr,
-    region: trail.region || 'Palestine',
+    region: trail.region || 'Unspecified region',
     regionAr: trail.regionAr,
     distance: formatDistance(trail.distance),
     duration: trail.duration || 'Unknown',

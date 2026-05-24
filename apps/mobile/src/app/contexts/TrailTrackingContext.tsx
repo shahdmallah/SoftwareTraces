@@ -1,5 +1,6 @@
 import React, { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import * as Location from 'expo-location';
+import * as SecureStore from 'expo-secure-store';
 import { Pedometer } from 'expo-sensors';
 import type { Trail } from '../api/trailsApi';
 import { getTrailById } from '../api/trailsApi';
@@ -84,6 +85,7 @@ const locationOptions: Location.LocationOptions = {
 };
 const LIVE_POINT_SYNC_INTERVAL_MS = 20000;
 const NAVIGATION_CHECK_INTERVAL_MS = 12000;
+const ACTIVITY_SESSION_SNAPSHOT_PREFIX = 'traces.activity-session.';
 
 const TrailTrackingContext = createContext<TrailTrackingContextValue | undefined>(undefined);
 
@@ -132,7 +134,12 @@ function toTimestamp(value?: string | null) {
 function estimateElapsedMsFromActivity(
   activity: Awaited<ReturnType<typeof getActivityById>>,
   photoCapturedTimes: number[],
+  cachedElapsedMs?: number | null,
 ) {
+  if (cachedElapsedMs != null && Number.isFinite(cachedElapsedMs) && cachedElapsedMs > 0) {
+    return Math.max(0, cachedElapsedMs);
+  }
+
   if (typeof activity.elapsed_time_seconds === 'number' && Number.isFinite(activity.elapsed_time_seconds)) {
     return Math.max(0, activity.elapsed_time_seconds * 1000);
   }
@@ -153,6 +160,44 @@ function estimateElapsedMsFromActivity(
   const lastRecordedMs = Math.max(...pointTimes, ...photoTimes);
 
   return Number.isFinite(lastRecordedMs) ? Math.max(0, lastRecordedMs - startMs) : 0;
+}
+
+function activitySessionSnapshotKey(activityId: string) {
+  return `${ACTIVITY_SESSION_SNAPSHOT_PREFIX}${activityId}`;
+}
+
+async function readActivityElapsedSnapshot(activityId: string) {
+  try {
+    const rawValue = await SecureStore.getItemAsync(activitySessionSnapshotKey(activityId));
+    if (!rawValue) {
+      return null;
+    }
+
+    const snapshot = JSON.parse(rawValue) as { elapsedMs?: unknown };
+    const elapsedMs = typeof snapshot.elapsedMs === 'number' ? snapshot.elapsedMs : null;
+    return elapsedMs != null && Number.isFinite(elapsedMs) && elapsedMs >= 0 ? elapsedMs : null;
+  } catch {
+    return null;
+  }
+}
+
+async function writeActivityElapsedSnapshot(activityId: string, trailId: string, elapsedMs: number) {
+  if (!Number.isFinite(elapsedMs) || elapsedMs < 0) {
+    return;
+  }
+
+  await SecureStore.setItemAsync(
+    activitySessionSnapshotKey(activityId),
+    JSON.stringify({
+      trailId,
+      elapsedMs,
+      pausedAt: new Date().toISOString(),
+    }),
+  ).catch(() => undefined);
+}
+
+async function clearActivityElapsedSnapshot(activityId: string) {
+  await SecureStore.deleteItemAsync(activitySessionSnapshotKey(activityId)).catch(() => undefined);
 }
 
 function mediaFileFromUri(uri: string, id: string) {
@@ -690,10 +735,11 @@ export function TrailTrackingProvider({ children }: { children: ReactNode }) {
       attachNavigationSession(trailId, runId);
 
       try {
-        const [trail, activity, media] = await Promise.all([
+        const [trail, activity, media, cachedElapsedMs] = await Promise.all([
           getTrailById(trailId),
           getActivityById(activityId),
           getActivityMedia(activityId).catch(() => []),
+          readActivityElapsedSnapshot(activityId),
         ]);
 
         if (sessionRunIdRef.current !== runId) {
@@ -731,7 +777,7 @@ export function TrailTrackingProvider({ children }: { children: ReactNode }) {
 
           return photos;
         }, []);
-        const elapsedMsFromActivity = estimateElapsedMsFromActivity(activity, mediaCapturedTimes);
+        const elapsedMsFromActivity = estimateElapsedMsFromActivity(activity, mediaCapturedTimes, cachedElapsedMs);
 
         setActiveSession((current) =>
           current && current.backendActivityId === activityId
@@ -827,6 +873,11 @@ export function TrailTrackingProvider({ children }: { children: ReactNode }) {
 
   const pauseOrResumeTracking = useCallback(() => {
     const wasTracking = activeSession?.isTracking;
+    const backendActivityId = activeSession?.backendActivityId;
+    const pausedElapsedMs =
+      activeSession?.isTracking && activeSession.startedAt
+        ? Date.now() - activeSession.startedAt
+        : activeSession?.elapsedMs ?? null;
 
     setActiveSession((current) => {
       if (!current) {
@@ -850,15 +901,18 @@ export function TrailTrackingProvider({ children }: { children: ReactNode }) {
       };
     });
 
+    if (backendActivityId && activeSession?.trailId && wasTracking && pausedElapsedMs != null) {
+      void writeActivityElapsedSnapshot(backendActivityId, activeSession.trailId, pausedElapsedMs);
+    }
+
     if (wasTracking === false && pedometerEnabledRef.current) {
       beginPedometerWatch(sessionRunIdRef.current);
     }
 
-    const backendActivityId = activeSession?.backendActivityId;
     if (backendActivityId && typeof wasTracking === 'boolean') {
       void updateActivityStatus(backendActivityId, wasTracking ? 'paused' : 'recording').catch(() => undefined);
     }
-  }, [activeSession?.backendActivityId, activeSession?.isTracking, beginPedometerWatch, stopPedometer]);
+  }, [activeSession?.backendActivityId, activeSession?.elapsedMs, activeSession?.isTracking, activeSession?.startedAt, activeSession?.trailId, beginPedometerWatch, stopPedometer]);
 
   const addSessionPhoto = useCallback((photo: SessionPhoto) => {
     setActiveSession((current) =>
@@ -947,6 +1001,7 @@ export function TrailTrackingProvider({ children }: { children: ReactNode }) {
         maxSpeedMps: elapsedMs > 0 ? distanceMeters / (elapsedMs / 1000) : 0,
         avgSpeedMps: elapsedMs > 0 ? distanceMeters / (elapsedMs / 1000) : 0,
       }).catch(() => undefined);
+      void clearActivityElapsedSnapshot(backendActivityId);
     }
 
     if (navigationSessionId) {
@@ -962,9 +1017,13 @@ export function TrailTrackingProvider({ children }: { children: ReactNode }) {
   }, [activeSession, cleanupSubscriptions]);
 
   const cancelTrailSession = useCallback(() => {
+    const backendActivityId = activeSessionRef.current?.backendActivityId;
     const navigationSessionId = activeSessionRef.current?.navigationSessionId;
     if (navigationSessionId) {
       void endNavigationSession(navigationSessionId).catch(() => undefined);
+    }
+    if (backendActivityId) {
+      void clearActivityElapsedSnapshot(backendActivityId);
     }
 
     sessionRunIdRef.current += 1;

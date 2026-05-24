@@ -10,9 +10,11 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   analyzeTrailRoute,
   createTrail,
+  getNearbyTrails,
   uploadTrailPhoto,
   publishTrail,
   type GeneratedTrailSuggestion,
+  type Trail,
   type TrailAnalysisResponse,
   type TrailStatsResponse,
 } from '../api/trailsApi';
@@ -56,6 +58,10 @@ export type TrailCreatorProps = {
 };
 
 const MAPBOX_ACCESS_TOKEN = process.env.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN ?? '';
+const DUPLICATE_LOOKUP_RADIUS_METERS = 160;
+const DUPLICATE_ENDPOINT_THRESHOLD_METERS = 45;
+const DUPLICATE_LENGTH_TOLERANCE_METERS = 120;
+const DUPLICATE_LENGTH_TOLERANCE_RATIO = 0.04;
 
 function formatDuration(minutes: number) {
   if (!Number.isFinite(minutes) || minutes <= 0) return '--';
@@ -255,6 +261,77 @@ function getPathDistanceMeters(points: LngLat[]) {
 
     return sum + getDistanceMeters(points[index - 1], point);
   }, 0);
+}
+
+function normalizeTrailName(value: string) {
+  return value.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function isSimilarLength(leftMeters: number, rightMeters: number) {
+  const tolerance = Math.max(DUPLICATE_LENGTH_TOLERANCE_METERS, Math.max(leftMeters, rightMeters) * DUPLICATE_LENGTH_TOLERANCE_RATIO);
+  return Math.abs(leftMeters - rightMeters) <= tolerance;
+}
+
+function hasSimilarEndpoints(candidate: LngLat[], existing: LngLat[]) {
+  const candidateStart = candidate[0];
+  const candidateEnd = candidate[candidate.length - 1];
+  const existingStart = existing[0];
+  const existingEnd = existing[existing.length - 1];
+
+  if (!candidateStart || !candidateEnd || !existingStart || !existingEnd) {
+    return false;
+  }
+
+  const sameDirection =
+    getDistanceMeters(candidateStart, existingStart) <= DUPLICATE_ENDPOINT_THRESHOLD_METERS &&
+    getDistanceMeters(candidateEnd, existingEnd) <= DUPLICATE_ENDPOINT_THRESHOLD_METERS;
+  const reverseDirection =
+    getDistanceMeters(candidateStart, existingEnd) <= DUPLICATE_ENDPOINT_THRESHOLD_METERS &&
+    getDistanceMeters(candidateEnd, existingStart) <= DUPLICATE_ENDPOINT_THRESHOLD_METERS;
+
+  return sameDirection || reverseDirection;
+}
+
+function isPotentialDuplicateTrail(candidateName: string, candidateRoute: LngLat[], candidateStats: TrailStatsResponse, existingTrail: Trail) {
+  const existingRoute = existingTrail.routeCoordinates;
+  if (!existingRoute || existingRoute.length < 2 || candidateRoute.length < 2) {
+    return false;
+  }
+
+  const sameName = normalizeTrailName(candidateName) === normalizeTrailName(existingTrail.name);
+  const similarEndpoints = hasSimilarEndpoints(candidateRoute, existingRoute);
+  const existingLengthMeters = existingTrail.distance > 0 ? existingTrail.distance * 1000 : getPathDistanceMeters(existingRoute);
+  const similarLength = isSimilarLength(candidateStats.length_meters, existingLengthMeters);
+
+  return similarEndpoints && (sameName || similarLength);
+}
+
+async function findPotentialDuplicateTrail(candidateName: string, routeCoordinates: LngLat[], stats: TrailStatsResponse) {
+  const start = routeCoordinates[0];
+  if (!start) {
+    return null;
+  }
+
+  const nearbyTrails = await getNearbyTrails({
+    lat: start[1],
+    lng: start[0],
+    radius: DUPLICATE_LOOKUP_RADIUS_METERS,
+  });
+
+  return nearbyTrails.find((trail) => isPotentialDuplicateTrail(candidateName, routeCoordinates, stats, trail)) ?? null;
+}
+
+function confirmDuplicateTrail(existingTrail: Trail) {
+  return new Promise<boolean>((resolve) => {
+    Alert.alert(
+      'Possible duplicate trail',
+      `"${existingTrail.name}" already starts near this route and looks very similar. Open the existing trail instead of creating another copy, unless this is intentionally different.`,
+      [
+        { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+        { text: 'Create anyway', style: 'destructive', onPress: () => resolve(true) },
+      ],
+    );
+  });
 }
 
 function buildDirectionsUrl(waypoints: LngLat[]) {
@@ -673,6 +750,14 @@ export function TrailCreator({
     setSaveError(null);
     setSaveSuccess(null);
     try {
+      const potentialDuplicate = await findPotentialDuplicateTrail(name.trim(), routeCoordinates, stats);
+      if (potentialDuplicate) {
+        const shouldCreateAnyway = await confirmDuplicateTrail(potentialDuplicate);
+        if (!shouldCreateAnyway) {
+          return;
+        }
+      }
+
       const translatedTrail = await translateTrailContentToArabic({
         name: name.trim(),
         description: description.trim() || undefined,

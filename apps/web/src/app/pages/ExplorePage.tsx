@@ -3,6 +3,7 @@ import { Search, SlidersHorizontal } from 'lucide-react';
 import { TrailCard } from '../components/TrailCard';
 import { FilterChip, FilterChipsContainer } from '../components/FilterChips';
 import { downloadOfflineMap } from '../api/offline';
+import { getAccessToken } from '../api/client';
 import {
   getSavedTrails,
   getTrails,
@@ -14,7 +15,7 @@ import {
 } from '../api/trails';
 import { toTrailCard } from '../utils/trailFormat';
 
-const regions = ['All Regions', 'Nablus', 'Ramallah', 'Bethlehem', 'Jericho', 'Hebron', 'Jenin'];
+const regions = ['All Regions', 'Northern Range', 'Central Hills', 'Coastal Paths', 'Desert Trails', 'Forest Routes', 'River Valleys'];
 const difficulties = ['All', 'Easy', 'Moderate', 'Hard'];
 
 export function ExplorePage() {
@@ -26,6 +27,7 @@ export function ExplorePage() {
   const [downloadedTrails, setDownloadedTrails] = useState<Set<string>>(new Set());
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState('');
+  const isGuest = !getAccessToken();
 
   useEffect(() => {
     let cancelled = false;
@@ -53,12 +55,19 @@ export function ExplorePage() {
   }, [search, selectedDifficulty]);
 
   useEffect(() => {
+    if (isGuest) return;
+
     getSavedTrails()
       .then((items) => setSavedTrails(new Set(items.map((trail) => trail.id))))
       .catch(() => setSavedTrails(new Set()));
-  }, []);
+  }, [isGuest]);
 
   const toggleSave = async (id: string) => {
+    if (isGuest) {
+      setErrorMessage('Sign in to save trails across devices.');
+      return;
+    }
+
     const shouldSave = !savedTrails.has(id);
     setSavedTrails((prev) => {
       const next = new Set(prev);
@@ -76,6 +85,11 @@ export function ExplorePage() {
   };
 
   const handleDownload = async (id: string) => {
+    if (isGuest) {
+      setErrorMessage('Sign in to download offline map packs.');
+      return;
+    }
+
     try {
       await downloadOfflineMap(id);
       setDownloadedTrails((prev) => new Set(prev).add(id));

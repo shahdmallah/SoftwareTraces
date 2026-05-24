@@ -4,6 +4,7 @@ import { TrailCard } from '../components/TrailCard';
 import { FilterChip, FilterChipsContainer } from '../components/FilterChips';
 import { downloadOfflineMap } from '../api/offline';
 import { getSavedTrails, unsaveTrail, type Trail } from '../api/trails';
+import { getAccessToken } from '../api/client';
 import { toTrailCard } from '../utils/trailFormat';
 
 export function SavedTrailsPage() {
@@ -13,13 +14,19 @@ export function SavedTrailsPage() {
   const [downloadedTrails, setDownloadedTrails] = useState<Set<string>>(new Set());
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState('');
+  const isGuest = !getAccessToken();
 
   useEffect(() => {
+    if (isGuest) {
+      setIsLoading(false);
+      return;
+    }
+
     getSavedTrails()
       .then(setTrails)
       .catch((error) => setErrorMessage(error instanceof Error ? error.message : 'Unable to load saved trails.'))
       .finally(() => setIsLoading(false));
-  }, []);
+  }, [isGuest]);
 
   const removeSaved = async (id: string) => {
     setTrails((prev) => prev.filter((trail) => trail.id !== id));
@@ -86,6 +93,12 @@ export function SavedTrailsPage() {
 
         {isLoading ? (
           <div className="bg-card rounded-xl border border-border p-12 text-center text-muted-foreground">Loading saved trails...</div>
+        ) : isGuest ? (
+          <div className="bg-card rounded-xl border border-border p-12 text-center">
+            <BookmarkX className="w-16 h-16 text-muted mx-auto mb-4" />
+            <h3 className="mb-2">No saved trails yet</h3>
+            <p className="text-secondary">Browse trails freely. Sign in when you want saved trails to sync across devices.</p>
+          </div>
         ) : filteredTrails.length === 0 ? (
           <div className="bg-card rounded-xl border border-border p-12 text-center">
             <BookmarkX className="w-16 h-16 text-muted mx-auto mb-4" />

@@ -1,7 +1,18 @@
 import { useState } from 'react';
+import { Link } from 'react-router';
 import {
-  Compass, Map, Download, Activity, Star, ChevronRight,
-  MapPin, Clock, TrendingUp, ArrowRight, Menu, X,
+  Compass,
+  Map,
+  Download,
+  Activity,
+  Star,
+  ChevronRight,
+  MapPin,
+  Clock,
+  TrendingUp,
+  ArrowRight,
+  Menu,
+  X,
 } from 'lucide-react';
 import { ImageWithFallback } from '../components/ImageWithFallback';
 import { AuthModal } from '../components/AuthModal';
@@ -14,33 +25,30 @@ const CTA_IMG = 'https://images.unsplash.com/photo-1771600245581-c3b2f6043626?w=
 const featuredTrails = [
   {
     id: '1',
-    name: 'Wadi Qelt Trail',
-    nameAr: 'وادي القلط',
-    region: 'Jericho',
+    name: 'Canyon Ridge Trail',
+    region: 'Desert Highlands',
     distance: '8.5 km',
-    duration: '3–4 hrs',
+    duration: '3-4 hrs',
     difficulty: 'moderate' as const,
     rating: 4.8,
     image: 'https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?w=600&auto=format&fit=crop',
   },
   {
     id: '2',
-    name: 'Mount Gerizim Summit',
-    nameAr: 'جبل جرزيم',
-    region: 'Nablus',
+    name: 'Summit Loop',
+    region: 'Mountain Range',
     distance: '12.3 km',
-    duration: '5–6 hrs',
+    duration: '5-6 hrs',
     difficulty: 'hard' as const,
     rating: 4.9,
     image: 'https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=600&auto=format&fit=crop',
   },
   {
     id: '3',
-    name: 'Battir Terraces',
-    nameAr: 'مدرجات بتير',
-    region: 'Bethlehem',
+    name: 'Terrace Walk',
+    region: 'Valley Farms',
     distance: '6.3 km',
-    duration: '2.5–3 hrs',
+    duration: '2.5-3 hrs',
     difficulty: 'easy' as const,
     rating: 4.7,
     image: 'https://images.unsplash.com/photo-1469474968028-56623f02e42e?w=600&auto=format&fit=crop',
@@ -51,34 +59,30 @@ const features = [
   {
     icon: Map,
     title: 'Detailed Trail Maps',
-    titleAr: 'خرائط تفصيلية',
-    desc: 'Accurate offline-ready topographic maps covering every trail across the West Bank and beyond.',
+    desc: 'Accurate offline-ready topographic maps for routes across many landscapes and regions.',
   },
   {
     icon: Activity,
     title: 'Activity Tracking',
-    titleAr: 'تتبع النشاط',
     desc: 'Record your hikes with GPS, track elevation, pace, and distance in real time.',
   },
   {
     icon: Download,
     title: 'Offline Access',
-    titleAr: 'وصول بلا إنترنت',
     desc: 'Download trail maps before you go and navigate confidently without a signal.',
   },
   {
     icon: Compass,
     title: 'Discover Trails',
-    titleAr: 'اكتشف المسارات',
-    desc: 'Browse hundreds of verified trails curated by local hikers across all regions.',
+    desc: 'Browse curated routes, compare difficulty, and find trails that fit the day.',
   },
 ];
 
 const stats = [
-  { value: '240+', label: 'Trails', labelAr: 'مسار' },
-  { value: '18', label: 'Regions', labelAr: 'منطقة' },
-  { value: '12K+', label: 'Hikers', labelAr: 'مشي' },
-  { value: '4.8★', label: 'Rating', labelAr: 'التقييم' },
+  { value: '240+', label: 'Trails' },
+  { value: '18', label: 'Regions' },
+  { value: '12K+', label: 'Hikers' },
+  { value: '4.8', label: 'Rating' },
 ];
 
 const difficultyStyle = {
@@ -86,6 +90,13 @@ const difficultyStyle = {
   moderate: { bg: 'bg-yellow-500/20', text: 'text-yellow-200', label: 'Moderate' },
   hard: { bg: 'bg-red-500/20', text: 'text-red-200', label: 'Hard' },
 };
+
+const navLinks = [
+  { label: 'Explore', to: '/explore' },
+  { label: 'Map', to: '/map' },
+  { label: 'Trails', to: '/explore' },
+  { label: 'Activity', to: '/activity' },
+];
 
 interface LandingPageProps {
   onAuth: () => void;
@@ -97,28 +108,25 @@ export function LandingPage({ onAuth }: LandingPageProps) {
 
   return (
     <div className="min-h-screen" style={{ backgroundColor: '#f7f7f7', fontFamily: 'system-ui, sans-serif' }}>
-      {/* Navigation */}
       <nav className="fixed top-0 left-0 right-0 z-40 transition-all">
         <div className="max-w-7xl mx-auto px-6 lg:px-8">
           <div className="flex items-center justify-between h-16 lg:h-18">
-            <div className="flex items-center gap-2.5">
+            <Link to="/" className="flex items-center gap-2.5">
               <div className="w-9 h-9 rounded-xl flex items-center justify-center shadow" style={{ backgroundColor: '#630E13' }}>
                 <Compass className="w-5 h-5 text-white" />
               </div>
-              <div>
-                <span className="text-white font-semibold text-lg leading-none">Traces</span>
-                <span className="block text-white/60 text-xs leading-none">تريسز</span>
-              </div>
-            </div>
+              <span className="text-white font-semibold text-lg leading-none">Traces</span>
+            </Link>
 
             <div className="hidden md:flex items-center gap-8">
-              {['Explore', 'Map', 'Trails', 'Community'].map((item) => (
-                <button
-                  key={item}
+              {navLinks.map((item) => (
+                <Link
+                  key={item.label}
+                  to={item.to}
                   className="text-white/80 hover:text-white transition-colors text-sm font-medium"
                 >
-                  {item}
-                </button>
+                  {item.label}
+                </Link>
               ))}
             </div>
 
@@ -129,13 +137,13 @@ export function LandingPage({ onAuth }: LandingPageProps) {
               >
                 Sign In
               </button>
-              <button
-                onClick={() => setAuthMode('signup')}
+              <Link
+                to="/explore"
                 className="px-5 py-2 text-white text-sm font-medium rounded-lg transition-all hover:opacity-90"
                 style={{ backgroundColor: '#630E13' }}
               >
-                Get Started
-              </button>
+                Explore
+              </Link>
             </div>
 
             <button
@@ -149,10 +157,15 @@ export function LandingPage({ onAuth }: LandingPageProps) {
 
         {mobileMenuOpen && (
           <div className="md:hidden bg-[#2C2418]/95 backdrop-blur-md border-t border-white/10 px-6 py-4 space-y-3">
-            {['Explore', 'Map', 'Trails', 'Community'].map((item) => (
-              <button key={item} className="block w-full text-left text-white/80 py-2 text-sm">
-                {item}
-              </button>
+            {navLinks.map((item) => (
+              <Link
+                key={item.label}
+                to={item.to}
+                onClick={() => setMobileMenuOpen(false)}
+                className="block w-full text-left text-white/80 py-2 text-sm"
+              >
+                {item.label}
+              </Link>
             ))}
             <div className="flex gap-3 pt-3 border-t border-white/10">
               <button
@@ -161,23 +174,23 @@ export function LandingPage({ onAuth }: LandingPageProps) {
               >
                 Sign In
               </button>
-              <button
-                onClick={() => { setAuthMode('signup'); setMobileMenuOpen(false); }}
-                className="flex-1 py-2.5 text-white rounded-lg text-sm"
+              <Link
+                to="/explore"
+                onClick={() => setMobileMenuOpen(false)}
+                className="flex-1 py-2.5 text-white rounded-lg text-sm text-center"
                 style={{ backgroundColor: '#630E13' }}
               >
-                Get Started
-              </button>
+                Explore
+              </Link>
             </div>
           </div>
         )}
       </nav>
 
-      {/* Hero */}
       <section className="relative h-screen min-h-[640px] flex items-center">
         <ImageWithFallback
           src={HERO_IMG}
-          alt="Palestinian valley landscape"
+          alt="Mountain valley landscape"
           className="absolute inset-0 w-full h-full object-cover"
         />
         <div className="absolute inset-0 bg-gradient-to-b from-[#2C2418]/55 via-[#630E13]/35 to-[#2C2418]/70" />
@@ -186,35 +199,33 @@ export function LandingPage({ onAuth }: LandingPageProps) {
           <div className="max-w-3xl">
             <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/10 border border-white/20 backdrop-blur-sm mb-6">
               <MapPin className="w-3.5 h-3.5 text-yellow-300" />
-              <span className="text-white/90 text-xs font-medium">Palestine Trail Network • شبكة مسارات فلسطين</span>
+              <span className="text-white/90 text-xs font-medium">Trail discovery platform</span>
             </div>
 
             <h1 className="text-white mb-6 leading-tight" style={{ fontSize: 'clamp(2.5rem, 6vw, 5rem)', fontWeight: 700, lineHeight: 1.1 }}>
-              Discover the{' '}
-              <span style={{ color: '#D4A843' }}>Trails</span>
-              <br />of Palestine
+              Discover your next{' '}
+              <span style={{ color: '#D4A843' }}>Trail</span>
             </h1>
 
             <p className="text-white/75 mb-8 max-w-xl" style={{ fontSize: '1.125rem', lineHeight: 1.7 }}>
-              Navigate ancient wadis, summit storied peaks, and walk through terraced olive groves.
-              Every step connects you deeper to this land.
+              Find scenic routes, navigate with confidence, and keep track of the journeys that matter to you.
             </p>
 
             <div className="flex flex-wrap gap-4">
-              <button
-                onClick={() => setAuthMode('signup')}
+              <Link
+                to="/explore"
                 className="flex items-center gap-2 px-8 py-4 rounded-xl text-white font-semibold transition-all hover:opacity-90 hover:shadow-lg shadow-md"
                 style={{ backgroundColor: '#630E13' }}
               >
                 Start Exploring
                 <ArrowRight className="w-5 h-5" />
-              </button>
-              <button
-                onClick={() => setAuthMode('signin')}
+              </Link>
+              <Link
+                to="/map"
                 className="flex items-center gap-2 px-8 py-4 rounded-xl text-white font-semibold border border-white/30 hover:bg-white/10 backdrop-blur-sm transition-all"
               >
-                Sign In
-              </button>
+                Open Map
+              </Link>
             </div>
           </div>
         </div>
@@ -228,7 +239,7 @@ export function LandingPage({ onAuth }: LandingPageProps) {
                   className="text-center p-4 rounded-xl bg-white/10 backdrop-blur-md border border-white/15"
                 >
                   <p className="text-white font-bold text-2xl mb-0.5">{stat.value}</p>
-                  <p className="text-white/60 text-xs">{stat.label} • {stat.labelAr}</p>
+                  <p className="text-white/60 text-xs">{stat.label}</p>
                 </div>
               ))}
             </div>
@@ -236,7 +247,6 @@ export function LandingPage({ onAuth }: LandingPageProps) {
         </div>
       </section>
 
-      {/* Features */}
       <section className="py-24 px-6 lg:px-8" style={{ backgroundColor: '#f7f7f7' }}>
         <div className="max-w-7xl mx-auto">
           <div className="text-center mb-16">
@@ -244,7 +254,7 @@ export function LandingPage({ onAuth }: LandingPageProps) {
               Everything you need on the trail
             </h2>
             <p className="text-[#6B5D4E] max-w-xl mx-auto">
-              Traces is built for hikers who want to explore Palestine with confidence, connection, and care for the land.
+              Traces is built for hikers who want a calmer way to plan, navigate, record, and share routes.
             </p>
           </div>
 
@@ -262,8 +272,7 @@ export function LandingPage({ onAuth }: LandingPageProps) {
                   >
                     <Icon className="w-6 h-6" style={{ color: '#630E13' }} />
                   </div>
-                  <h3 className="text-[#2C2418] mb-1" style={{ fontSize: '1rem', fontWeight: 600 }}>{feature.title}</h3>
-                  <p className="text-xs mb-3" style={{ color: '#7A9A3A' }}>{feature.titleAr}</p>
+                  <h3 className="text-[#2C2418] mb-3" style={{ fontSize: '1rem', fontWeight: 600 }}>{feature.title}</h3>
                   <p className="text-[#6B5D4E] text-sm leading-relaxed">{feature.desc}</p>
                 </div>
               );
@@ -272,19 +281,18 @@ export function LandingPage({ onAuth }: LandingPageProps) {
         </div>
       </section>
 
-      {/* Split section: trails + landscape image */}
       <section className="relative overflow-hidden">
         <div className="grid grid-cols-1 lg:grid-cols-2 min-h-[600px]">
           <div className="relative">
             <ImageWithFallback
               src={SECTION_IMG_1}
-              alt="Palestinian mountain landscape"
+              alt="Mountain trail landscape"
               className="w-full h-full object-cover min-h-[360px]"
             />
             <div className="absolute inset-0 bg-gradient-to-r from-[#2C2418]/35 to-transparent" />
             <div className="absolute bottom-8 left-8">
-              <span className="text-white/80 text-sm">جبال فلسطين</span>
-              <p className="text-white font-semibold text-xl mt-1">The Mountains of Palestine</p>
+              <span className="text-white/80 text-sm">Featured terrain</span>
+              <p className="text-white font-semibold text-xl mt-1">Mountains, valleys, and open paths</p>
             </div>
           </div>
 
@@ -296,20 +304,20 @@ export function LandingPage({ onAuth }: LandingPageProps) {
               </span>
             </div>
             <h2 className="text-[#2C2418] mb-3" style={{ fontSize: '1.75rem', fontWeight: 700 }}>
-              Start with the best
+              Start with a route that fits
             </h2>
             <p className="text-[#6B5D4E] text-sm mb-8">
-              Handpicked by local hikers. Verified for accuracy. Ready to explore.
+              Compare route length, difficulty, rating, and expected duration before you head out.
             </p>
 
             <div className="space-y-4">
               {featuredTrails.map((trail) => {
                 const d = difficultyStyle[trail.difficulty];
                 return (
-                  <div
+                  <Link
                     key={trail.id}
                     className="flex items-center gap-4 p-4 rounded-xl bg-[#fbfaf8] border border-[#C4B896]/40 hover:border-[#D4A843]/70 hover:shadow-sm transition-all cursor-pointer group"
-                    onClick={() => setAuthMode('signup')}
+                    to="/explore"
                   >
                     <div className="w-16 h-16 rounded-xl overflow-hidden flex-shrink-0">
                       <ImageWithFallback
@@ -320,31 +328,31 @@ export function LandingPage({ onAuth }: LandingPageProps) {
                     </div>
                     <div className="flex-1 min-w-0">
                       <p className="font-semibold text-[#2C2418] text-sm">{trail.name}</p>
-                      <p className="text-xs text-[#8A7A6A] mb-2">{trail.nameAr} • {trail.region}</p>
+                      <p className="text-xs text-[#8A7A6A] mb-2">{trail.region}</p>
                       <div className="flex items-center gap-3 text-xs text-[#6B5D4E]">
                         <span className="flex items-center gap-1"><TrendingUp className="w-3 h-3" />{trail.distance}</span>
                         <span className="flex items-center gap-1"><Clock className="w-3 h-3" />{trail.duration}</span>
                         <span className="flex items-center gap-1"><Star className="w-3 h-3 fill-yellow-400 text-yellow-400" />{trail.rating}</span>
+                        <span className={`${d.bg} ${d.text} px-2 py-0.5 rounded-full`}>{d.label}</span>
                       </div>
                     </div>
                     <ChevronRight className="w-4 h-4 text-[#D4A843] group-hover:text-[#6B5D4E] flex-shrink-0 transition-colors" />
-                  </div>
+                  </Link>
                 );
               })}
             </div>
 
-            <button
-              onClick={() => setAuthMode('signup')}
+            <Link
+              to="/explore"
               className="mt-8 flex items-center gap-2 text-sm font-medium hover:gap-3 transition-all"
               style={{ color: '#630E13' }}
             >
-              View all 240+ trails <ArrowRight className="w-4 h-4" />
-            </button>
+              View all trails <ArrowRight className="w-4 h-4" />
+            </Link>
           </div>
         </div>
       </section>
 
-      {/* How it works */}
       <section className="py-24 px-6 lg:px-8" style={{ backgroundColor: '#f7f7f7' }}>
         <div className="max-w-5xl mx-auto">
           <div className="text-center mb-16">
@@ -355,9 +363,9 @@ export function LandingPage({ onAuth }: LandingPageProps) {
           </div>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
             {[
-              { step: '01', title: 'Create your account', desc: 'Sign up free and set your hiking preferences and region.' },
-              { step: '02', title: 'Browse & save trails', desc: 'Explore curated trails, filter by region and difficulty, save your favorites.' },
-              { step: '03', title: 'Hit the trail', desc: 'Download for offline use, start recording your hike, and share your journey.' },
+              { step: '01', title: 'Browse trails', desc: 'Explore curated routes and filter by region, length, and difficulty.' },
+              { step: '02', title: 'Plan your route', desc: 'Review maps, photos, terrain notes, and trail details before you go.' },
+              { step: '03', title: 'Track the journey', desc: 'Record your hike, save favorites, and keep maps ready for offline use.' },
             ].map((s) => (
               <div key={s.step} className="relative">
                 <div className="text-6xl font-bold mb-4 leading-none" style={{ color: '#630E13' + '18' }}>{s.step}</div>
@@ -370,23 +378,21 @@ export function LandingPage({ onAuth }: LandingPageProps) {
         </div>
       </section>
 
-      {/* Olive groves image strip */}
       <section className="relative h-72 overflow-hidden">
         <ImageWithFallback
           src={SECTION_IMG_2}
-          alt="Olive tree hills"
+          alt="Trail through trees"
           className="w-full h-full object-cover"
         />
         <div className="absolute inset-0 bg-[#2C2418]/45" />
         <div className="absolute inset-0 flex items-center justify-center">
           <div className="text-center">
-            <p className="text-white/70 text-sm mb-2">مسارات الزيتون</p>
-            <p className="text-white text-2xl font-semibold">Ancient olive groves. Timeless paths.</p>
+            <p className="text-white/70 text-sm mb-2">Routes for every pace</p>
+            <p className="text-white text-2xl font-semibold">Quiet paths. Long climbs. Better days outside.</p>
           </div>
         </div>
       </section>
 
-      {/* CTA */}
       <section className="relative py-32 px-6 lg:px-8 overflow-hidden">
         <ImageWithFallback
           src={CTA_IMG}
@@ -400,17 +406,15 @@ export function LandingPage({ onAuth }: LandingPageProps) {
             Begin your journey today
           </h2>
           <p className="text-white/70 mb-10 text-lg">
-            Join the community of hikers mapping and sharing the trails of Palestine.
-            <br />
-            <span className="text-white/50 text-sm">انضم إلى مجتمع المشاة الذين يستكشفون مسارات فلسطين</span>
+            Browse trails freely, then sign in whenever you want to save, record, or share your routes.
           </p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
-            <button
-              onClick={() => setAuthMode('signup')}
+            <Link
+              to="/explore"
               className="px-10 py-4 rounded-xl text-white font-semibold text-lg border-2 border-white hover:bg-white hover:text-[#2C2418] transition-all"
             >
-              Create Free Account
-            </button>
+              Explore Trails
+            </Link>
             <button
               onClick={() => setAuthMode('signin')}
               className="px-10 py-4 rounded-xl font-semibold text-lg transition-all hover:opacity-90"
@@ -422,7 +426,6 @@ export function LandingPage({ onAuth }: LandingPageProps) {
         </div>
       </section>
 
-      {/* Footer */}
       <footer className="py-12 px-6 lg:px-8 bg-[#2C2418]">
         <div className="max-w-7xl mx-auto">
           <div className="flex flex-col md:flex-row items-start justify-between gap-8 mb-10">
@@ -431,10 +434,10 @@ export function LandingPage({ onAuth }: LandingPageProps) {
                 <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ backgroundColor: '#630E13' }}>
                   <Compass className="w-4 h-4 text-white" />
                 </div>
-                <span className="text-white font-semibold">Traces • تريسز</span>
+                <span className="text-white font-semibold">Traces</span>
               </div>
               <p className="text-[#8A7A6A] text-sm leading-relaxed">
-                A trail discovery and activity tracking platform dedicated to the landscapes of Palestine.
+                A trail discovery and activity tracking platform for hikers, route builders, and outdoor communities.
               </p>
             </div>
 
@@ -449,7 +452,7 @@ export function LandingPage({ onAuth }: LandingPageProps) {
                   <ul className="space-y-2">
                     {col.links.map((link) => (
                       <li key={link}>
-                        <button className="text-[#6B5D4E] hover:text-[#D4A843] transition-colors">{link}</button>
+                        <Link to="/explore" className="text-[#6B5D4E] hover:text-[#D4A843] transition-colors">{link}</Link>
                       </li>
                     ))}
                   </ul>
@@ -459,8 +462,8 @@ export function LandingPage({ onAuth }: LandingPageProps) {
           </div>
 
           <div className="border-t border-white/10 pt-8 flex flex-col md:flex-row items-center justify-between gap-4">
-            <p className="text-white/40 text-sm">© 2026 Traces. Made with care for Palestine.</p>
-            <p className="text-white/40 text-sm">صُنع بعناية من أجل فلسطين 🌿</p>
+            <p className="text-white/40 text-sm">Copyright 2026 Traces. Built for the trail.</p>
+            <p className="text-white/40 text-sm">Plan. Navigate. Remember.</p>
           </div>
         </div>
       </footer>

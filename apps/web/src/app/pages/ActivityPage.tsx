@@ -3,6 +3,7 @@ import { TrendingUp, Clock, Mountain, Zap, Calendar, Users, MessageCircle, Play 
 import { Link } from 'react-router';
 import { StatCard } from '../components/StatCard';
 import { getMyActivities, type Activity } from '../api/activities';
+import { getAccessToken } from '../api/client';
 
 function km(activity: Activity) {
   return Number(activity.distance_km ?? (activity.distance_meters ? activity.distance_meters / 1000 : 0));
@@ -19,12 +20,15 @@ function durationHours(activity: Activity) {
 export function ActivityPage() {
   const [activities, setActivities] = useState<Activity[]>([]);
   const [errorMessage, setErrorMessage] = useState('');
+  const isGuest = !getAccessToken();
 
   useEffect(() => {
+    if (isGuest) return;
+
     getMyActivities()
       .then(setActivities)
       .catch((error) => setErrorMessage(error instanceof Error ? error.message : 'Unable to load activities.'));
-  }, []);
+  }, [isGuest]);
 
   const totals = useMemo(() => ({
     distance: activities.reduce((sum, activity) => sum + km(activity), 0),
@@ -50,6 +54,15 @@ export function ActivityPage() {
         </div>
 
         {errorMessage && <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 mb-6">{errorMessage}</div>}
+
+        {isGuest && (
+          <div className="bg-card rounded-xl border border-border p-6 mb-6">
+            <h3 className="text-foreground mb-2">Activity sync is optional</h3>
+            <p className="text-sm text-secondary">
+              You can browse trails without signing in. Sign in when you want activities, stats, and recordings saved to your account.
+            </p>
+          </div>
+        )}
 
         {activeActivity && (
           <div className="bg-gradient-to-br from-primary/10 to-success/10 rounded-xl border border-primary/20 p-6 mb-6">

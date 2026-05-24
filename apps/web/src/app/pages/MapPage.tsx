@@ -150,7 +150,7 @@ export function MapPage() {
         )}
 
         <div className="absolute top-4 left-4 bg-card/90 backdrop-blur-sm rounded-lg border border-border px-3 py-2 text-xs text-muted-foreground">
-          Palestine Trail Network • {filtered.length} trails • {bubbles.length} photo clusters
+          Trail map - {filtered.length} trails - {bubbles.length} photo clusters
         </div>
       </div>
     </div>

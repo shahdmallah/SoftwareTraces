@@ -3,16 +3,20 @@ import { Download, Trash2, HardDrive, MapPin } from 'lucide-react';
 import { ImageWithFallback } from '../components/ImageWithFallback';
 import { getSavedTrails, type Trail } from '../api/trails';
 import { downloadOfflineMap } from '../api/offline';
+import { getAccessToken } from '../api/client';
 
 export function OfflineDownloadsPage() {
   const [downloads, setDownloads] = useState<Trail[]>([]);
   const [errorMessage, setErrorMessage] = useState('');
+  const isGuest = !getAccessToken();
 
   useEffect(() => {
+    if (isGuest) return;
+
     getSavedTrails()
       .then(setDownloads)
       .catch((error) => setErrorMessage(error instanceof Error ? error.message : 'Unable to load downloadable trails.'));
-  }, []);
+  }, [isGuest]);
 
   const handleDownload = async (trail: Trail) => {
     try {
@@ -59,7 +63,9 @@ export function OfflineDownloadsPage() {
           <div className="bg-card rounded-xl border border-border p-12 text-center">
             <Download className="w-16 h-16 text-muted mx-auto mb-4" />
             <h3 className="mb-2">No offline maps</h3>
-            <p className="text-secondary mb-2">Save trails first, then download their map packs here.</p>
+            <p className="text-secondary mb-2">
+              {isGuest ? 'Browse trails freely. Sign in when you want offline map packs synced to your account.' : 'Save trails first, then download their map packs here.'}
+            </p>
           </div>
         ) : (
           <div className="space-y-4 mb-6">

@@ -4,6 +4,7 @@ import { Link } from 'react-router';
 import { StatCard } from '../components/StatCard';
 import { ImageWithFallback } from '../components/ImageWithFallback';
 import { deleteTrail, getMyTrailDrafts, getTrailById, publishTrail, updateTrail, type Trail } from '../api/trails';
+import { getAccessToken } from '../api/client';
 import { cardDifficulty, formatDistance } from '../utils/trailFormat';
 
 export function TrailDraftsPage() {
@@ -14,8 +15,15 @@ export function TrailDraftsPage() {
   const [trackId, setTrackId] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState('');
+  const isGuest = !getAccessToken();
 
   const loadDrafts = async () => {
+    if (isGuest) {
+      setDrafts([]);
+      setIsLoading(false);
+      return;
+    }
+
     setIsLoading(true);
     setErrorMessage('');
     try {
@@ -29,7 +37,7 @@ export function TrailDraftsPage() {
 
   useEffect(() => {
     void loadDrafts();
-  }, []);
+  }, [isGuest]);
 
   const handleTrack = async () => {
     if (!trackId.trim()) return;
@@ -128,6 +136,15 @@ export function TrailDraftsPage() {
 
         {isLoading ? (
           <div className="bg-card rounded-xl border border-border p-12 text-center text-muted-foreground">Loading drafts...</div>
+        ) : isGuest ? (
+          <div className="bg-card rounded-xl border border-border p-12 text-center">
+            <FileText className="w-16 h-16 text-muted mx-auto mb-4" />
+            <h3 className="mb-2">Drafts are available after sign-in</h3>
+            <p className="text-secondary mb-6">You can still browse trails and use the map without an account.</p>
+            <Link to="/explore" className="inline-block px-6 py-3 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors">
+              Explore Trails
+            </Link>
+          </div>
         ) : drafts.length === 0 ? (
           <div className="bg-card rounded-xl border border-border p-12 text-center">
             <FileText className="w-16 h-16 text-muted mx-auto mb-4" />

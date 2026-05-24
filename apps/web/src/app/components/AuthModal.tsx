@@ -44,7 +44,7 @@ export function AuthModal({ mode, onClose, onSuccess, onToggleMode }: AuthModalP
         <div className="hidden md:flex md:w-1/2 relative flex-col justify-between p-10">
           <ImageWithFallback
             src="https://images.unsplash.com/photo-1595195253172-f4e9dc4e322a?w=800&auto=format&fit=crop"
-            alt="Palestinian mountains"
+            alt="Mountain trail"
             className="absolute inset-0 w-full h-full object-cover"
           />
           <div className="absolute inset-0 bg-gradient-to-br from-[#630E13]/80 via-[#630E13]/55 to-[#2C2418]/70" />
@@ -55,13 +55,13 @@ export function AuthModal({ mode, onClose, onSuccess, onToggleMode }: AuthModalP
               </div>
               <span className="text-white text-xl font-semibold">Traces</span>
             </div>
-            <p className="text-white/70 text-sm">تريسز</p>
+            <p className="text-white/70 text-sm">Trail planning made simple</p>
           </div>
           <div className="relative z-10">
             <blockquote className="text-white text-lg leading-relaxed mb-4">
-              "Every trail tells the story of this land. Walk it, remember it, share it."
+              "Save the routes you love, record the days you want to remember, and keep the map close."
             </blockquote>
-            <p className="text-white/60 text-sm">— Palestine Trail Network</p>
+            <p className="text-white/60 text-sm">Traces</p>
           </div>
         </div>
 
@@ -79,8 +79,8 @@ export function AuthModal({ mode, onClose, onSuccess, onToggleMode }: AuthModalP
             </h2>
             <p className="text-[#6B5D4E] text-sm">
               {mode === 'signin'
-                ? 'Sign in to continue exploring Palestinian trails'
-                : 'Join thousands of hikers discovering Palestine'}
+                ? 'Sign in to save trails, track activity, and manage your routes.'
+                : 'Create an account to save, record, and share your trail journeys.'}
             </p>
           </div>
 
@@ -94,7 +94,7 @@ export function AuthModal({ mode, onClose, onSuccess, onToggleMode }: AuthModalP
                     type="text"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
-                    placeholder="Ahmad Khalil"
+                    placeholder="Alex Morgan"
                     className="w-full pl-10 pr-4 py-3 border border-[#C4B896]/50 rounded-xl focus:outline-none focus:ring-2 focus:border-transparent bg-[#fbfaf8] text-[#2C2418]"
                     style={{ '--tw-ring-color': '#630E13' } as React.CSSProperties}
                     required
@@ -111,7 +111,7 @@ export function AuthModal({ mode, onClose, onSuccess, onToggleMode }: AuthModalP
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="ahmad@example.com"
+                  placeholder="you@example.com"
                   className="w-full pl-10 pr-4 py-3 border border-[#C4B896]/50 rounded-xl focus:outline-none bg-[#fbfaf8] text-[#2C2418]"
                   required
                 />
@@ -126,7 +126,7 @@ export function AuthModal({ mode, onClose, onSuccess, onToggleMode }: AuthModalP
                   type={showPassword ? 'text' : 'password'}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••"
+                  placeholder="********"
                   className="w-full pl-10 pr-12 py-3 border border-[#C4B896]/50 rounded-xl focus:outline-none bg-[#fbfaf8] text-[#2C2418]"
                   required
                 />

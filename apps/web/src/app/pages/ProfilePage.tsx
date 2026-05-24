@@ -5,19 +5,23 @@ import { StatCard } from '../components/StatCard';
 import { getMe, type AuthUser } from '../api/auth';
 import { getMyActivities } from '../api/activities';
 import { getMyTrailDrafts } from '../api/trails';
+import { getAccessToken } from '../api/client';
 
 export function ProfilePage() {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [activityCount, setActivityCount] = useState(0);
   const [draftCount, setDraftCount] = useState(0);
+  const isGuest = !getAccessToken();
 
   useEffect(() => {
+    if (isGuest) return;
+
     getMe().then(setUser).catch(() => setUser(null));
     getMyActivities().then((items) => setActivityCount(items.length)).catch(() => setActivityCount(0));
     getMyTrailDrafts().then((items) => setDraftCount(items.length)).catch(() => setDraftCount(0));
-  }, []);
+  }, [isGuest]);
 
-  const initials = (user?.full_name || user?.email || 'TR').slice(0, 2).toUpperCase();
+  const initials = (user?.full_name || user?.email || (isGuest ? 'Guest' : 'TR')).slice(0, 2).toUpperCase();
   const menuSections = [
     {
       title: 'My Content',
@@ -55,8 +59,8 @@ export function ProfilePage() {
             <div className="flex-1">
               <div className="flex items-start justify-between mb-2">
                 <div>
-                  <h2 className="text-foreground mb-1">{user?.full_name || 'Traces user'}</h2>
-                  <p className="text-secondary">{user?.email || 'Signed in'}</p>
+                  <h2 className="text-foreground mb-1">{user?.full_name || (isGuest ? 'Guest explorer' : 'Traces user')}</h2>
+                  <p className="text-secondary">{user?.email || (isGuest ? 'Browsing without an account' : 'Signed in')}</p>
                 </div>
                 <button className="p-2 hover:bg-white/50 rounded-lg transition-colors">
                   <Edit className="w-5 h-5 text-secondary" />
@@ -64,7 +68,7 @@ export function ProfilePage() {
               </div>
               <div className="flex items-center gap-2 text-secondary mb-4">
                 <MapPin className="w-4 h-4" />
-                <span>{user?.location || 'Palestine'}</span>
+                <span>{user?.location || 'Location not set'}</span>
               </div>
               <button className="px-4 py-2 bg-white border border-border rounded-lg text-sm font-medium hover:bg-muted/20 transition-colors">
                 View Public Profile

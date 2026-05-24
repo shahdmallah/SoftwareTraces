@@ -18,6 +18,7 @@ import { useTrailTracking } from '../contexts/TrailTrackingContext';
 import { saveJournalEntry } from '../data/localSocial';
 import type { TrailCompletionDraft } from '../features/trailCompletion/types';
 import type { RootStackParamList } from '../navigation/types';
+import { buildTrailBuddyReviewMessage } from '../utils/trailBuddy';
 
 type TrailReviewNavigationProp = StackNavigationProp<RootStackParamList>;
 type PhotoTarget = 'review' | 'post';
@@ -99,6 +100,18 @@ export function TrailReviewScreen() {
 
     const minutes = Math.max(1, Math.round(finishedSession.elapsedMs / 60000));
     return `${minutes} min, ${finishedSession.stepCount} steps, ${finishedSession.sessionPhotos.length} photos`;
+  }, [finishedSession]);
+  const trailBuddyMessage = useMemo(() => {
+    if (!finishedSession) {
+      return null;
+    }
+
+    return buildTrailBuddyReviewMessage({
+      trail: finishedSession.trail,
+      elapsedMs: finishedSession.elapsedMs,
+      stepCount: finishedSession.stepCount,
+      photoCount: finishedSession.sessionPhotos.length,
+    });
   }, [finishedSession]);
 
   const handlePickPhoto = async (target: PhotoTarget) => {
@@ -293,6 +306,25 @@ export function TrailReviewScreen() {
           </View>
           <Text style={styles.summaryText}>{summary}</Text>
         </View>
+
+        {trailBuddyMessage ? (
+          <View style={styles.trailBuddyCard}>
+            <View style={styles.trailBuddyAvatar}>
+              <View style={styles.trailBuddyHat}>
+                <Ionicons name="leaf" size={13} color="#1E7A46" />
+              </View>
+              <View style={styles.trailBuddyEyesRow}>
+                <View style={styles.trailBuddyEye} />
+                <View style={styles.trailBuddyEye} />
+              </View>
+              <View style={styles.trailBuddySmile} />
+            </View>
+            <View style={styles.trailBuddyCopy}>
+              <Text style={styles.trailBuddyTitle}>{trailBuddyMessage.title}</Text>
+              <Text style={styles.trailBuddyText}>{trailBuddyMessage.body}</Text>
+            </View>
+          </View>
+        ) : null}
 
         <Text style={styles.sectionTitle}>Photos from the way</Text>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.photoRow}>
@@ -654,6 +686,73 @@ const styles = StyleSheet.create({
     color: '#4A4131',
     fontSize: 14,
     fontWeight: '700',
+  },
+  trailBuddyCard: {
+    marginTop: 12,
+    flexDirection: 'row',
+    gap: 12,
+    borderRadius: 22,
+    padding: 14,
+    backgroundColor: '#EEF7EF',
+    borderWidth: 1,
+    borderColor: '#CFE4C8',
+  },
+  trailBuddyAvatar: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFF8F1',
+    borderWidth: 2,
+    borderColor: '#1E7A46',
+  },
+  trailBuddyHat: {
+    position: 'absolute',
+    top: -8,
+    right: 2,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#DDECCB',
+    borderWidth: 1,
+    borderColor: '#BFD9A7',
+  },
+  trailBuddyEyesRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 4,
+  },
+  trailBuddyEye: {
+    width: 5,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: '#2C2418',
+  },
+  trailBuddySmile: {
+    width: 16,
+    height: 8,
+    marginTop: 6,
+    borderBottomWidth: 2,
+    borderBottomColor: '#1E7A46',
+    borderRadius: 8,
+  },
+  trailBuddyCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  trailBuddyTitle: {
+    color: '#2C2418',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  trailBuddyText: {
+    marginTop: 4,
+    color: '#5E4E40',
+    fontSize: 12,
+    lineHeight: 18,
   },
   sectionTitle: {
     marginTop: 20,
