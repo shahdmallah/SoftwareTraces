@@ -17,15 +17,20 @@ import {
   type TrailStatsResponse,
 } from '../api/trailsApi';
 import { setTrailRouteCoordinates } from '../state/trailRoutes';
+import { translateTrailContentToArabic } from '../utils/translateTrailContent';
 
 type LngLat = [number, number];
 type DrawingStage = 'start' | 'middle' | 'end';
 
 type SaveTrailBody = {
   name: string;
+  nameAr?: string;
   description?: string;
+  descriptionAr?: string;
   region?: string;
+  regionAr?: string;
   features?: string[];
+  featuresAr?: string[];
   tags?: string[];
   status?: 'draft' | 'published';
   coordinates: LngLat[];
@@ -668,11 +673,21 @@ export function TrailCreator({
     setSaveError(null);
     setSaveSuccess(null);
     try {
-      const payload: SaveTrailBody = {
+      const translatedTrail = await translateTrailContentToArabic({
         name: name.trim(),
         description: description.trim() || undefined,
         region: region.trim() || undefined,
         features,
+      });
+      const payload: SaveTrailBody = {
+        name: name.trim(),
+        nameAr: translatedTrail.nameAr,
+        description: description.trim() || undefined,
+        descriptionAr: translatedTrail.descriptionAr,
+        region: region.trim() || undefined,
+        regionAr: translatedTrail.regionAr,
+        features,
+        featuresAr: translatedTrail.featuresAr,
         tags: features,
         status: 'draft',
         coordinates: routeCoordinates,

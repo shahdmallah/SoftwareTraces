@@ -2,7 +2,7 @@ import type { Request, Response } from "express";
 import { ZodError, z } from "zod";
 import { requireAuth } from "../../middleware/auth";
 import {
-  createMeetup,
+  createMeetupFull,
   getMeetup,
   joinMeetup,
   leaveMeetup,
@@ -113,8 +113,8 @@ export async function createMeetupHandler(req: Request, res: Response): Promise<
     const validated = createMeetupSchema.parse(req.body);
     console.log("[meetups.createMeetupHandler] 5. Validation passed:", JSON.stringify(validated, null, 2));
 
-    console.log("[meetups.createMeetupHandler] 6. Calling service.createMeetup...");
-    const meetup = await createMeetup(auth.sub, validated);
+    console.log("[meetups.createMeetupHandler] 6. Calling service.createMeetupFull...");
+    const meetup = await createMeetupFull(auth.sub, validated);
     console.log("[meetups.createMeetupHandler] 7. Meetup created:", meetup.id);
 
     res.status(201).json({ data: meetup });

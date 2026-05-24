@@ -6,7 +6,7 @@ import { StackNavigationProp } from '@react-navigation/stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
-import { getFollowers, getFollowing, type SocialProfile } from '../api/socialApi';
+import { getMyFriends, type SocialProfile } from '../api/socialApi';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { RootStackParamList } from '../navigation/types';
@@ -14,6 +14,13 @@ import { ltrRow, ltrText, rtlRow, rtlText } from '../utils/direction';
 
 type ThreadRouteProp = RouteProp<RootStackParamList, 'ActivityThread'>;
 type ThreadNavigationProp = StackNavigationProp<RootStackParamList, 'ActivityThread'>;
+type ThreadMessage = {
+  id: string;
+  mine: boolean;
+  bodyAr: string;
+  bodyEn: string;
+  time: string;
+};
 
 export function ActivityThreadScreen() {
   const route = useRoute<ThreadRouteProp>();
@@ -36,14 +43,9 @@ export function ActivityThreadScreen() {
 
     const loadContacts = async () => {
       try {
-        const [followingResponse, followersResponse] = await Promise.all([
-          getFollowing(user.id, { page: 1, limit: 40 }).catch(() => ({ data: [] as SocialProfile[] })),
-          getFollowers(user.id, { page: 1, limit: 40 }).catch(() => ({ data: [] as SocialProfile[] })),
-        ]);
+        const friendsResponse = await getMyFriends({ page: 1, limit: 40 }).catch(() => ({ data: [] as SocialProfile[] }));
         if (!cancelled) {
-          const merged = [...followingResponse.data, ...followersResponse.data];
-          const unique = Array.from(new Map(merged.map((profile) => [profile.id, profile])).values());
-          setContacts(unique);
+          setContacts(friendsResponse.data);
         }
       } catch {
         if (!cancelled) setContacts([]);
@@ -61,7 +63,7 @@ export function ActivityThreadScreen() {
     [contacts, route.params.friendId],
   );
 
-  const messages = useMemo(
+  const messages = useMemo<ThreadMessage[]>(
     () => [],
     [],
   );
@@ -76,9 +78,6 @@ export function ActivityThreadScreen() {
         <View style={styles.headerCopy}>
           <Text style={[styles.title, isArabic ? rtlText : ltrText]} numberOfLines={1}>
             {friend?.full_name ?? (isArabic ? 'محادثة' : 'Conversation')}
-          </Text>
-          <Text style={[styles.subtitle, isArabic ? rtlText : ltrText]} numberOfLines={1}>
-            {friend ? `@${friend.full_name.toLowerCase().replace(/\s+/g, '.')}` : ''}
           </Text>
         </View>
       </View>

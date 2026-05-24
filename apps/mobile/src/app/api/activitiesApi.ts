@@ -94,6 +94,7 @@ export type ActivityDetail = {
 export type ActivityJournalRow = {
   id: string;
   activity_id: string;
+  visibility?: 'private' | string;
   caption?: string | null;
   created_at: string;
   trail_id?: string | null;
@@ -261,6 +262,19 @@ export async function completeActivity(
   });
 }
 
+export async function updateActivityStatus(activityId: string, status: 'paused' | 'recording') {
+  return apiRequest<Envelope<{ id: string; status: string; paused_duration_sec?: number; updated_at?: string }>>(
+    `/api/activities/${activityId}/status`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({
+        status,
+        occurred_at: new Date().toISOString(),
+      }),
+    },
+  );
+}
+
 export async function shareActivityPost(
   activityId: string,
   payload: {
@@ -326,6 +340,10 @@ export async function uploadActivityMedia(
 
 export async function deleteActivity(activityId: string) {
   await apiRequest<void>(`/api/activities/${activityId}`, { method: 'DELETE' });
+}
+
+export async function deleteActivityPost(postId: string) {
+  return apiRequest<{ message: string }>(`/api/activities/posts/${postId}`, { method: 'DELETE' });
 }
 
 export async function getActivityGpx(activityId: string) {

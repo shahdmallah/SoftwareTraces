@@ -412,6 +412,83 @@ export async function getMyActivities(req: Request, res: Response): Promise<void
   }
 }
 
+export async function getMyActivityJournal(req: Request, res: Response): Promise<void> {
+  try {
+    console.log("[activities.getMyActivityJournal] requiring auth");
+    const auth = requireAuth(req);
+
+    console.log("[activities.getMyActivityJournal] validating auth subject");
+    assertUuid(auth.sub, "Authenticated user", 401);
+
+    const page = Math.max(Number.parseInt(String(req.query.page ?? "1"), 10) || 1, 1);
+    const requestedLimit = Number.parseInt(String(req.query.limit ?? "20"), 10) || 20;
+    const limit = Math.min(Math.max(requestedLimit, 1), 100);
+    const offset = (page - 1) * limit;
+
+    console.log("[activities.getMyActivityJournal] querying private activity posts", { page, limit });
+    const [journalResult, countResult] = await Promise.all([
+      pool.query(
+        `
+        SELECT
+          ap.id,
+          ap.activity_id,
+          ap.visibility,
+          ap.caption,
+          ap.created_at,
+          a.trail_id,
+          t.name AS trail_name,
+          t.image AS trail_image,
+          a.distance_meters,
+          a.elapsed_time_seconds,
+          a.elevation_gain_meters,
+          a.start_time,
+          a.end_time,
+          first_media.photo_url
+        FROM activity_posts ap
+        JOIN activities a ON a.id = ap.activity_id
+        LEFT JOIN trails t ON t.id = a.trail_id
+        LEFT JOIN LATERAL (
+          SELECT am.public_url AS photo_url
+          FROM activity_media am
+          WHERE am.activity_id = ap.activity_id
+          ORDER BY am.captured_at ASC, am.created_at ASC
+          LIMIT 1
+        ) first_media ON TRUE
+        WHERE ap.user_id = $1::uuid
+          AND ap.visibility = 'private'
+        ORDER BY ap.created_at DESC
+        LIMIT $2 OFFSET $3
+        `,
+        [auth.sub, limit, offset]
+      ),
+      pool.query(
+        `
+        SELECT COUNT(*)::int AS total
+        FROM activity_posts ap
+        WHERE ap.user_id = $1::uuid
+          AND ap.visibility = 'private'
+        `,
+        [auth.sub]
+      )
+    ]);
+
+    const total = Number(countResult.rows[0]?.total ?? 0);
+
+    console.log("[activities.getMyActivityJournal] returning private journal posts", { count: journalResult.rowCount, total });
+    res.json({
+      data: journalResult.rows,
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: total === 0 ? 0 : Math.ceil(total / limit)
+      }
+    });
+  } catch (error) {
+    handleActivityError("getMyActivityJournal", error);
+  }
+}
+
 export async function getActivityById(req: Request, res: Response): Promise<void> {
   try {
     const auth = req.auth;

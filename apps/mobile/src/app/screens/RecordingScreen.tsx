@@ -9,6 +9,14 @@ import { RootStackParamList } from '../navigation/types';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTrailTracking } from '../contexts/TrailTrackingContext';
 import { sendSosAlert } from '../api/sosApi';
+import {
+  formatSafetyDistance,
+  getNearbySafetyAlerts,
+  getRiskColor,
+  safetyAlertTitle,
+  safetyAlertWarning,
+  type NearbySafetyAlert,
+} from '../api/safetyApi';
 
 const MAPBOX_STYLE_URL =
   process.env.EXPO_PUBLIC_MAPBOX_STYLE_URL ?? 'mapbox://styles/shahdmallah/cmnqgt687000h01s66inve68a';
@@ -19,6 +27,9 @@ type RecordingRouteProp = RouteProp<RootStackParamList, 'Recording'>;
 type MapboxModule = typeof import('@rnmapbox/maps');
 
 const fallbackCenter: [number, number] = [35.24, 31.78];
+const SAFETY_ALERT_RADIUS_METERS = 5000;
+const SAFETY_ALERT_REFRESH_MS = 60000;
+const SAFETY_ALERT_REFRESH_DISTANCE_METERS = 250;
 
 let Mapbox: MapboxModule | null = null;
 let mapboxLoadError: string | null = null;
@@ -130,18 +141,30 @@ function buildNavigationHint(
   return `Navigation: Continue ${heading} for about ${Math.max(distanceToTarget, 20)} m along the next trail segment.`;
 }
 
+function getSafetyAlertSeverity(alert: NearbySafetyAlert) {
+  return alert.kind === 'location' ? alert.risk_level : alert.severity;
+}
+
+function getSafetyAlertIcon(alert: NearbySafetyAlert): keyof typeof Ionicons.glyphMap {
+  return alert.kind === 'location' ? 'business-outline' : 'warning-outline';
+}
+
 export function RecordingScreen() {
   const navigation = useNavigation<RecordingNavigationProp>();
   const route = useRoute<RecordingRouteProp>();
   const insets = useSafeAreaInsets();
-  const { trailId } = route.params;
+  const { trailId, activityId } = route.params;
   const cameraRef = useRef<any>(null);
   const hasStartedSessionRef = useRef(false);
   const closingActionRef = useRef<'finish' | 'cancel' | null>(null);
+  const safetyFetchInFlightRef = useRef(false);
+  const safetyRequestIdRef = useRef(0);
+  const lastSafetyFetchRef = useRef<{ coordinate: [number, number]; timestamp: number } | null>(null);
   const {
     activeSession,
     finishedSession,
     startTrailSession,
+    resumeTrailSession,
     pauseOrResumeTracking,
     addSessionPhoto,
     finishTrailSession,
@@ -151,6 +174,10 @@ export function RecordingScreen() {
   const [isSendingSos, setIsSendingSos] = useState(false);
   const [isPanelExpanded, setIsPanelExpanded] = useState(false);
   const [isPhotosExpanded, setIsPhotosExpanded] = useState(false);
+  const [safetyAlerts, setSafetyAlerts] = useState<NearbySafetyAlert[]>([]);
+  const [selectedSafetyAlert, setSelectedSafetyAlert] = useState<NearbySafetyAlert | null>(null);
+  const [safetyError, setSafetyError] = useState<string | null>(null);
+  const [isSafetyLoading, setIsSafetyLoading] = useState(false);
 
   const [zoomLevel, setZoomLevel] = useState(12.2);
   const [pitch, setPitch] = useState(0); // 0 for 2D, 45 for 3D
@@ -177,22 +204,116 @@ export function RecordingScreen() {
   const plannedRouteFeature = useMemo(() => toLineFeature(plannedRoute), [plannedRoute]);
   const recordedRouteFeature = useMemo(() => toLineFeature(recordedPath), [recordedPath]);
   const nearestDistance = session?.nearestDistance ?? null;
+  const navigationInstruction = session?.navigationInstruction ?? null;
+  const navigationProgressPercent = session?.navigationProgressPercent ?? null;
+  const navigationOffTrack = session?.navigationOffTrack ?? null;
+  const navigationDeviationMeters = session?.navigationDeviationMeters ?? null;
   const routeCoordinates = trail?.routeCoordinates?.length ? trail.routeCoordinates : [];
   const navigationHint = useMemo(
     () => buildNavigationHint(currentLocation, routeCoordinates, nearestDistance),
     [currentLocation, nearestDistance, routeCoordinates],
   );
+  const primarySafetyAlert = selectedSafetyAlert ?? safetyAlerts[0] ?? null;
+  const seriousSafetyAlertCount = useMemo(
+    () =>
+      safetyAlerts.filter((alert) => {
+        const severity = getSafetyAlertSeverity(alert);
+        return severity === 'critical' || severity === 'high';
+      }).length,
+    [safetyAlerts],
+  );
+
+  const fetchSafetyAlerts = React.useCallback(async (coordinate: [number, number], force = false) => {
+    const now = Date.now();
+    const lastFetch = lastSafetyFetchRef.current;
+
+    if (!force && lastFetch) {
+      const movedMeters = getDistanceMeters(lastFetch.coordinate, coordinate);
+      const fetchedRecently = now - lastFetch.timestamp < SAFETY_ALERT_REFRESH_MS;
+
+      if (fetchedRecently && movedMeters < SAFETY_ALERT_REFRESH_DISTANCE_METERS) {
+        return;
+      }
+    }
+
+    if (safetyFetchInFlightRef.current) {
+      return;
+    }
+
+    const requestId = safetyRequestIdRef.current + 1;
+    safetyRequestIdRef.current = requestId;
+    safetyFetchInFlightRef.current = true;
+    setIsSafetyLoading(true);
+
+    try {
+      const alerts = await getNearbySafetyAlerts({
+        lat: coordinate[1],
+        lng: coordinate[0],
+        radius: SAFETY_ALERT_RADIUS_METERS,
+      });
+
+      if (safetyRequestIdRef.current !== requestId) {
+        return;
+      }
+
+      lastSafetyFetchRef.current = { coordinate, timestamp: now };
+      setSafetyAlerts(alerts);
+      setSelectedSafetyAlert((current) => {
+        if (!current) return alerts[0] ?? null;
+        return alerts.find((alert) => alert.kind === current.kind && alert.id === current.id) ?? alerts[0] ?? null;
+      });
+      setSafetyError(null);
+    } catch (error) {
+      if (safetyRequestIdRef.current !== requestId) {
+        return;
+      }
+
+      setSafetyAlerts([]);
+      setSelectedSafetyAlert(null);
+      setSafetyError(error instanceof Error ? error.message : 'Unable to load nearby safety alerts.');
+    } finally {
+      if (safetyRequestIdRef.current === requestId) {
+        safetyFetchInFlightRef.current = false;
+        setIsSafetyLoading(false);
+      }
+    }
+  }, []);
+
+  const refreshSafetyAlerts = React.useCallback(() => {
+    if (currentLocation) {
+      void fetchSafetyAlerts(currentLocation, true);
+    }
+  }, [currentLocation, fetchSafetyAlerts]);
 
   useEffect(() => {
     hasStartedSessionRef.current = false;
+    safetyRequestIdRef.current += 1;
+    safetyFetchInFlightRef.current = false;
+    lastSafetyFetchRef.current = null;
+    setSafetyAlerts([]);
+    setSelectedSafetyAlert(null);
+    setSafetyError(null);
+    setIsSafetyLoading(false);
   }, [trailId]);
 
   useEffect(() => {
     if (!session && !hasStartedSessionRef.current && !closingActionRef.current) {
       hasStartedSessionRef.current = true;
-      void startTrailSession(trailId);
+      if (activityId) {
+        void resumeTrailSession(trailId, activityId);
+      } else {
+        void startTrailSession(trailId);
+      }
     }
-  }, [session, startTrailSession, trailId]);
+  }, [activityId, resumeTrailSession, session, startTrailSession, trailId]);
+
+  useEffect(() => {
+    if (!currentLocation) {
+      return;
+    }
+
+    void fetchSafetyAlerts(currentLocation);
+  }, [currentLocation, fetchSafetyAlerts]);
 
   useEffect(() => {
     if (closingActionRef.current === 'finish' && finishedSession?.trailId === trailId) {
@@ -418,13 +539,73 @@ export function RecordingScreen() {
             </Mapbox.PointAnnotation>
           ) : null}
 
-          {sessionPhotos.map((photo) => (
-            <Mapbox.PointAnnotation key={photo.id} id={`photo-${photo.id}`} coordinate={photo.coordinate}>
-              <View style={styles.photoPin}>
-                <Ionicons name="camera" size={14} color="#fff" />
-              </View>
-            </Mapbox.PointAnnotation>
-          ))}
+          {safetyAlerts
+            .filter((alert) => Number.isFinite(alert.latitude) && Number.isFinite(alert.longitude))
+            .map((alert) => {
+              const tone = getRiskColor(getSafetyAlertSeverity(alert));
+              const isSelected = primarySafetyAlert?.kind === alert.kind && primarySafetyAlert.id === alert.id;
+
+              return (
+                <Mapbox.MarkerView
+                  key={`safety-${alert.kind}-${alert.id}`}
+                  coordinate={[alert.longitude, alert.latitude]}
+                  anchor={{ x: 0.5, y: 0.5 }}
+                  allowOverlap
+                >
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={safetyAlertTitle(alert)}
+                    onPress={() => {
+                      setSelectedSafetyAlert(alert);
+                      setIsPanelExpanded(true);
+                    }}
+                    style={[
+                      styles.safetyMarker,
+                      isSelected && styles.safetyMarkerSelected,
+                      { borderColor: tone },
+                    ]}
+                  >
+                    <Ionicons name={getSafetyAlertIcon(alert)} size={17} color={tone} />
+                  </Pressable>
+                </Mapbox.MarkerView>
+              );
+            })}
+
+          {sessionPhotos.map((photo) => {
+            const size = 48;
+
+            return (
+              <Mapbox.MarkerView
+                key={photo.id}
+                coordinate={photo.coordinate}
+                anchor={{ x: 0.5, y: 0.5 }}
+                allowOverlap
+              >
+                <View
+                  style={[
+                    styles.photoBubbleMarker,
+                    {
+                      width: size,
+                      height: size,
+                      borderRadius: size / 2,
+                    },
+                  ]}
+                >
+                  <Image
+                    source={{ uri: photo.uri }}
+                    style={[
+                      styles.photoBubbleImage,
+                      {
+                        width: size - 8,
+                        height: size - 8,
+                        borderRadius: (size - 8) / 2,
+                      },
+                    ]}
+                  />
+                </View>
+              </Mapbox.MarkerView>
+            );
+          })}
         </Mapbox.MapView>
 
         <View style={styles.mapControls}>
@@ -487,12 +668,69 @@ export function RecordingScreen() {
 
               <Text style={styles.timerText}>{formatElapsed(elapsedMs)}</Text>
               <Text style={styles.timerCaption}>
-                {nearestDistance == null
+                {navigationOffTrack != null
+                  ? navigationOffTrack
+                    ? `${Math.round(navigationDeviationMeters ?? nearestDistance ?? 0)} m off route`
+                    : 'Navigation says you are on route'
+                  : nearestDistance == null
                   ? 'Checking your trail position...'
                   : nearestDistance <= 120
                   ? 'You are on the route'
                   : `${Math.round(nearestDistance)} m off route`}
               </Text>
+
+              <View
+                style={[
+                  styles.safetyLiveCard,
+                  primarySafetyAlert && {
+                    borderColor: `${getRiskColor(getSafetyAlertSeverity(primarySafetyAlert))}55`,
+                  },
+                ]}
+              >
+                <View
+                  style={[
+                    styles.safetyLiveIcon,
+                    {
+                      backgroundColor: primarySafetyAlert
+                        ? getRiskColor(getSafetyAlertSeverity(primarySafetyAlert))
+                        : '#1E7A46',
+                    },
+                  ]}
+                >
+                  {isSafetyLoading ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <Ionicons name={primarySafetyAlert ? getSafetyAlertIcon(primarySafetyAlert) : 'shield-checkmark-outline'} size={16} color="#fff" />
+                  )}
+                </View>
+                <View style={styles.safetyLiveCopy}>
+                  <Text style={styles.safetyLiveTitle}>
+                    {primarySafetyAlert
+                      ? seriousSafetyAlertCount > 0
+                        ? `${seriousSafetyAlertCount} serious safety alert${seriousSafetyAlertCount === 1 ? '' : 's'} nearby`
+                        : `${safetyAlerts.length} safety alert${safetyAlerts.length === 1 ? '' : 's'} nearby`
+                      : safetyError
+                      ? 'Safety alerts unavailable'
+                      : isSafetyLoading
+                      ? 'Checking nearby safety alerts'
+                      : 'No safety alerts nearby'}
+                  </Text>
+                  <Text style={styles.safetyLiveText} numberOfLines={2}>
+                    {primarySafetyAlert
+                      ? safetyAlertWarning(primarySafetyAlert)
+                      : safetyError ?? `Scanning within ${formatSafetyDistance(SAFETY_ALERT_RADIUS_METERS)} of your live GPS point.`}
+                  </Text>
+                </View>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Refresh safety alerts"
+                  style={[styles.safetyRefreshButton, (!currentLocation || isSafetyLoading) && styles.safetyRefreshButtonDisabled]}
+                  onPress={refreshSafetyAlerts}
+                  disabled={!currentLocation || isSafetyLoading}
+                >
+                  <Ionicons name="refresh" size={17} color="#2C2418" />
+                </Pressable>
+              </View>
 
               <View style={styles.actionButtonsRow}>
                 <Pressable style={[styles.actionButton, styles.primaryActionButton]} onPress={pauseOrResumeTracking}>
@@ -517,6 +755,12 @@ export function RecordingScreen() {
               {isPanelExpanded ? (
                 <>
                   <View style={styles.metricsRow}>
+                    {navigationProgressPercent != null ? (
+                      <View style={styles.metricChip}>
+                        <Ionicons name="flag-outline" size={15} color="#630E13" />
+                        <Text style={styles.metricChipText}>{navigationProgressPercent}% trail progress</Text>
+                      </View>
+                    ) : null}
                     <View style={styles.metricChip}>
                       <Ionicons name="navigate-outline" size={15} color="#630E13" />
                       <Text style={styles.metricChipText}>
@@ -537,7 +781,11 @@ export function RecordingScreen() {
 
                   <View style={styles.statusCard}>
                     <Text style={styles.statusTitle}>
-                      {nearestDistance == null
+                      {navigationOffTrack != null
+                        ? navigationOffTrack
+                          ? `Navigation alert: ${Math.round(navigationDeviationMeters ?? nearestDistance ?? 0)} m off route`
+                          : 'Navigation confirms you are on route'
+                        : nearestDistance == null
                         ? 'Checking your trail position...'
                         : nearestDistance <= 120
                         ? 'You are on the trail preview'
@@ -546,8 +794,73 @@ export function RecordingScreen() {
                     <Text style={styles.statusText}>
                       {locationMessage ?? stepMessage ?? trailError ?? 'Your GPS path overlays the trail map in real time.'}
                     </Text>
-                    {navigationHint ? <Text style={styles.navigationHintText}>{navigationHint}</Text> : null}
+                    {navigationInstruction ? (
+                      <Text style={styles.navigationHintText}>{navigationInstruction}</Text>
+                    ) : navigationHint ? (
+                      <Text style={styles.navigationHintText}>{navigationHint}</Text>
+                    ) : null}
                   </View>
+
+                  {primarySafetyAlert ? (
+                    <View style={styles.safetyDetailCard}>
+                      <View style={styles.safetyDetailHeader}>
+                        <View
+                          style={[
+                            styles.safetyDetailIcon,
+                            { backgroundColor: getRiskColor(getSafetyAlertSeverity(primarySafetyAlert)) },
+                          ]}
+                        >
+                          <Ionicons name={getSafetyAlertIcon(primarySafetyAlert)} size={18} color="#fff" />
+                        </View>
+                        <View style={styles.safetyDetailCopy}>
+                          <Text style={styles.safetyDetailEyebrow}>Closest safety alert</Text>
+                          <Text style={styles.safetyDetailTitle}>{safetyAlertTitle(primarySafetyAlert)}</Text>
+                        </View>
+                        <Text style={styles.safetyDetailDistance}>{formatSafetyDistance(primarySafetyAlert.distance_meters)}</Text>
+                      </View>
+                      <Text style={styles.safetyDetailText}>{safetyAlertWarning(primarySafetyAlert)}</Text>
+
+                      {safetyAlerts.length > 1 ? (
+                        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.safetyAlertStrip}>
+                          {safetyAlerts.slice(0, 6).map((alert) => {
+                            const selected = primarySafetyAlert.kind === alert.kind && primarySafetyAlert.id === alert.id;
+                            const tone = getRiskColor(getSafetyAlertSeverity(alert));
+
+                            return (
+                              <Pressable
+                                key={`${alert.kind}-${alert.id}`}
+                                style={[
+                                  styles.safetyAlertChip,
+                                  selected && styles.safetyAlertChipSelected,
+                                  selected && { borderColor: tone },
+                                ]}
+                                onPress={() => setSelectedSafetyAlert(alert)}
+                              >
+                                <Ionicons name={getSafetyAlertIcon(alert)} size={14} color={tone} />
+                                <Text style={styles.safetyAlertChipText} numberOfLines={1}>
+                                  {formatSafetyDistance(alert.distance_meters)}
+                                </Text>
+                              </Pressable>
+                            );
+                          })}
+                        </ScrollView>
+                      ) : null}
+
+                      <Pressable
+                        style={styles.safetyReportButton}
+                        onPress={() =>
+                          navigation.navigate('ReportIssue', {
+                            latitude: currentLocation?.[1] ?? primarySafetyAlert.latitude,
+                            longitude: currentLocation?.[0] ?? primarySafetyAlert.longitude,
+                            locationName: trail?.name ?? safetyAlertTitle(primarySafetyAlert),
+                          })
+                        }
+                      >
+                        <Ionicons name="warning-outline" size={15} color="#630E13" />
+                        <Text style={styles.safetyReportButtonText}>Report an incident from here</Text>
+                      </Pressable>
+                    </View>
+                  ) : null}
 
                   <View style={[styles.guideCard, nearestDistance != null && nearestDistance > 120 && styles.guideCardWarning]}>
                     <View style={styles.guideAvatar}>
@@ -793,6 +1106,137 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     fontWeight: '700',
   },
+  safetyLiveCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderRadius: 18,
+    padding: 11,
+    backgroundColor: '#F7F3E7',
+    borderWidth: 1,
+    borderColor: '#E7DDCD',
+  },
+  safetyLiveIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  safetyLiveCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  safetyLiveTitle: {
+    color: '#2C2418',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  safetyLiveText: {
+    marginTop: 2,
+    color: '#6B5D4E',
+    fontSize: 11,
+    lineHeight: 16,
+    fontWeight: '700',
+  },
+  safetyRefreshButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#EFE4D3',
+  },
+  safetyRefreshButtonDisabled: {
+    opacity: 0.55,
+  },
+  safetyDetailCard: {
+    borderRadius: 20,
+    padding: 14,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#EADFD0',
+    gap: 10,
+  },
+  safetyDetailHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  safetyDetailIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  safetyDetailCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  safetyDetailEyebrow: {
+    color: '#8A7A6A',
+    fontSize: 10,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
+  safetyDetailTitle: {
+    marginTop: 2,
+    color: '#2C2418',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  safetyDetailDistance: {
+    color: '#630E13',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  safetyDetailText: {
+    color: '#5E4E40',
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: '700',
+  },
+  safetyAlertStrip: {
+    gap: 8,
+    paddingVertical: 2,
+  },
+  safetyAlertChip: {
+    minWidth: 72,
+    minHeight: 34,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    borderRadius: 17,
+    backgroundColor: '#F7F3E7',
+    borderWidth: 1,
+    borderColor: '#E7DDCD',
+  },
+  safetyAlertChipSelected: {
+    backgroundColor: '#FFF8F1',
+    borderWidth: 2,
+  },
+  safetyAlertChipText: {
+    color: '#4A4131',
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  safetyReportButton: {
+    minHeight: 42,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    borderRadius: 15,
+    backgroundColor: '#F7EBE8',
+  },
+  safetyReportButtonText: {
+    color: '#630E13',
+    fontSize: 12,
+    fontWeight: '900',
+  },
   guideCard: {
     flexDirection: 'row',
     gap: 12,
@@ -990,15 +1434,38 @@ const styles = StyleSheet.create({
     borderRadius: 5,
     backgroundColor: '#39FF14',
   },
-  photoPin: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+  photoBubbleMarker: {
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#630E13',
-    borderWidth: 2,
-    borderColor: '#FFFFFF',
+    backgroundColor: '#FFFEF9',
+    borderWidth: 3,
+    borderColor: '#7A9A3A',
+    shadowColor: '#000',
+    shadowOpacity: 0.24,
+    shadowOffset: { width: 0, height: 6 },
+    shadowRadius: 12,
+    elevation: 7,
+  },
+  photoBubbleImage: {
+    backgroundColor: '#EAE2CC',
+  },
+  safetyMarker: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    borderWidth: 3,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOpacity: 0.22,
+    shadowOffset: { width: 0, height: 5 },
+    shadowRadius: 10,
+    elevation: 7,
+  },
+  safetyMarkerSelected: {
+    transform: [{ scale: 1.12 }],
+    backgroundColor: '#FFF8F1',
   },
   fallbackMap: {
     flex: 1,

@@ -35,9 +35,17 @@ const searchOrGenerateTrailBodySchema = z.object({
 
 const createTrailBodySchema = z.object({
   name: z.string().min(1),
+  nameAr: z.string().trim().optional(),
+  name_ar: z.string().trim().optional(),
   description: z.string().optional(),
+  descriptionAr: z.string().trim().optional(),
+  description_ar: z.string().trim().optional(),
   region: z.string().trim().optional(),
+  regionAr: z.string().trim().optional(),
+  region_ar: z.string().trim().optional(),
   features: z.array(z.string().trim().min(1)).optional().default([]),
+  featuresAr: z.array(z.string().trim().min(1)).optional(),
+  features_ar: z.array(z.string().trim().min(1)).optional(),
   tags: z.array(z.string().trim().min(1)).optional().default([]),
   status: z.enum(["draft", "published"]).optional().default("draft"),
   coordinates: z.array(z.tuple([z.number(), z.number()])).min(2),
@@ -825,7 +833,24 @@ export async function createTrail(req: Request, res: Response): Promise<void> {
     console.error("[createTrail] auth.userId:", userId);
     console.error("[createTrail] request body:", JSON.stringify(req.body, null, 2));
 
-    const { name, description, region, features, tags, status, coordinates, stats } = createTrailBodySchema.parse(req.body);
+    const {
+      name,
+      nameAr,
+      name_ar,
+      description,
+      descriptionAr,
+      description_ar,
+      region,
+      regionAr,
+      region_ar,
+      features,
+      featuresAr,
+      features_ar,
+      tags,
+      status,
+      coordinates,
+      stats,
+    } = createTrailBodySchema.parse(req.body);
 
     if (!Array.isArray(coordinates) || coordinates.length < 2) {
       throw new Error("Coordinates must contain at least 2 points");
@@ -863,15 +888,23 @@ export async function createTrail(req: Request, res: Response): Promise<void> {
 
     const slug = createTrailSlug(name);
     const trailRegion = region?.trim() || "Unknown";
+    const trailNameAr = nameAr?.trim() || name_ar?.trim() || null;
+    const trailDescriptionAr = descriptionAr?.trim() || description_ar?.trim() || null;
+    const trailRegionAr = regionAr?.trim() || region_ar?.trim() || null;
+    const trailFeaturesAr = featuresAr ?? features_ar ?? [];
     const linestring = `LINESTRING(${coordinates.map(([lng, lat]) => `${lng} ${lat}`).join(", ")})`;
     const [startLng, startLat] = coordinates[0];
 
     const insertQuery = `INSERT INTO trails (
       slug,
       name,
+      name_ar,
       description,
+      description_ar,
       region,
+      region_ar,
       features,
+      features_ar,
       tags,
       difficulty,
       length_meters,
@@ -884,19 +917,24 @@ export async function createTrail(req: Request, res: Response): Promise<void> {
       status
     ) VALUES (
       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-      ST_GeomFromText($11, 4326),
-      ST_GeogFromText($12),
-      $13,
-      $14,
-      $15
+      $11, $12, $13, $14,
+      ST_GeomFromText($15, 4326),
+      ST_GeogFromText($16),
+      $17,
+      $18,
+      $19
     ) RETURNING id`;
 
     const queryValues = [
       slug,
       name,
+      trailNameAr,
       description ?? "",
+      trailDescriptionAr,
       trailRegion,
+      trailRegionAr,
       features,
+      trailFeaturesAr,
       tags,
       stats.difficulty,
       Math.round(stats.length_meters),

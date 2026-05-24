@@ -289,9 +289,13 @@ export function normalizeTrail(trail: Trail): Trail {
 
 export async function createTrail(payload: {
   name: string;
+  nameAr?: string;
   description?: string;
+  descriptionAr?: string;
   region?: string;
+  regionAr?: string;
   features?: string[];
+  featuresAr?: string[];
   tags?: string[];
   status?: 'draft' | 'published';
   coordinates: [number, number][];
@@ -461,6 +465,10 @@ export async function recalculateTrailReviewStats(id: string) {
 export async function getTrailReviews(id: string) {
   const response = await apiRequest<Envelope<TrailReview[]>>(`/api/trails/${id}/reviews`);
   return response.data;
+}
+
+export async function deleteTrailReview(reviewId: string) {
+  return apiRequest<{ message: string }>(`/api/trails/reviews/${reviewId}`, { method: 'DELETE' });
 }
 
 export async function addTrailCondition(

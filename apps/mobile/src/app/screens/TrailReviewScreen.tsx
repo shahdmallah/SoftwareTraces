@@ -6,7 +6,14 @@ import { useNavigation } from '@react-navigation/native';
 import type { StackNavigationProp } from '@react-navigation/stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { shareActivityPost } from '../api/activitiesApi';
-import { addTrailReview, saveBookmark, type ReactNativeFile } from '../api/trailsApi';
+import {
+  addTrailCondition,
+  addTrailReview,
+  saveBookmark,
+  type ConditionSeverity,
+  type ConditionType,
+  type ReactNativeFile,
+} from '../api/trailsApi';
 import { useTrailTracking } from '../contexts/TrailTrackingContext';
 import { saveJournalEntry } from '../data/localSocial';
 import type { TrailCompletionDraft } from '../features/trailCompletion/types';
@@ -16,6 +23,25 @@ type TrailReviewNavigationProp = StackNavigationProp<RootStackParamList>;
 type PhotoTarget = 'review' | 'post';
 type FinishStep = 'post' | 'review';
 type PostVisibility = 'public' | 'friends' | 'private';
+
+const CONDITION_OPTIONS: Array<{ type: ConditionType; icon: keyof typeof Ionicons.glyphMap; label: string }> = [
+  { type: 'good', icon: 'checkmark-circle-outline', label: 'Good' },
+  { type: 'fair', icon: 'partly-sunny-outline', label: 'Fair' },
+  { type: 'mud', icon: 'water-outline', label: 'Mud' },
+  { type: 'flood', icon: 'rainy-outline', label: 'Flood' },
+  { type: 'fallen_trees', icon: 'leaf-outline', label: 'Fallen trees' },
+  { type: 'closure', icon: 'close-circle-outline', label: 'Closure' },
+  { type: 'snow', icon: 'snow-outline', label: 'Snow' },
+  { type: 'ice', icon: 'diamond-outline', label: 'Ice' },
+  { type: 'wildfire', icon: 'flame-outline', label: 'Wildfire' },
+];
+
+const SEVERITY_OPTIONS: Array<{ value: ConditionSeverity; label: string }> = [
+  { value: 'low', label: 'Low' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'high', label: 'High' },
+  { value: 'extreme', label: 'Extreme' },
+];
 
 function toReactNativeFile(uri: string): ReactNativeFile {
   const filename = uri.split('/').pop()?.split('?')[0] || `hike-photo-${Date.now()}.jpg`;
@@ -43,6 +69,10 @@ export function TrailReviewScreen() {
   const [reviewPhotoUris, setReviewPhotoUris] = useState<string[]>([]);
   const [postPhotoUris, setPostPhotoUris] = useState<string[]>([]);
   const [visibility, setVisibility] = useState<PostVisibility>('public');
+  const [shouldReportCondition, setShouldReportCondition] = useState(false);
+  const [conditionType, setConditionType] = useState<ConditionType>('good');
+  const [conditionSeverity, setConditionSeverity] = useState<ConditionSeverity>('low');
+  const [conditionDescription, setConditionDescription] = useState('');
   const [step, setStep] = useState<FinishStep>('post');
   const [isSaving, setIsSaving] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
@@ -132,6 +162,14 @@ export function TrailReviewScreen() {
           rating,
           content: review.trim() || 'Completed this trail and shared a quick review from the hike.',
           photos: reviewPhotoUris.map(toReactNativeFile),
+        });
+      }
+
+      if (shouldReportCondition) {
+        await addTrailCondition(finishedSession.trailId, {
+          condition_type: conditionType,
+          severity: conditionSeverity,
+          description: conditionDescription.trim() || undefined,
         });
       }
 
@@ -235,7 +273,6 @@ export function TrailReviewScreen() {
           </Pressable>
           <View style={styles.headerCopy}>
             <Text style={styles.title}>{step === 'post' ? 'Share your hike' : 'Review the trail'}</Text>
-            <Text style={styles.subtitle}>{trailName}</Text>
           </View>
         </View>
 
@@ -351,6 +388,17 @@ export function TrailReviewScreen() {
               onRemove={handleRemovePhoto}
             />
 
+            <ConditionReporter
+              enabled={shouldReportCondition}
+              onToggle={() => setShouldReportCondition((value) => !value)}
+              conditionType={conditionType}
+              onConditionTypeChange={setConditionType}
+              severity={conditionSeverity}
+              onSeverityChange={setConditionSeverity}
+              description={conditionDescription}
+              onDescriptionChange={setConditionDescription}
+            />
+
             <Pressable style={[styles.submitButton, isSaving && styles.submitButtonDisabled]} onPress={handleSubmit} disabled={isSaving}>
               {isSaving ? <ActivityIndicator color="#fff" /> : <Text style={styles.submitButtonText}>Save hike</Text>}
             </Pressable>
@@ -434,6 +482,85 @@ function PhotoPicker({
           <Text style={styles.emptyPhotosText}>Add pictures from this hike or your library.</Text>
         </Pressable>
       )}
+    </View>
+  );
+}
+
+function ConditionReporter({
+  enabled,
+  onToggle,
+  conditionType,
+  onConditionTypeChange,
+  severity,
+  onSeverityChange,
+  description,
+  onDescriptionChange,
+}: {
+  enabled: boolean;
+  onToggle: () => void;
+  conditionType: ConditionType;
+  onConditionTypeChange: (value: ConditionType) => void;
+  severity: ConditionSeverity;
+  onSeverityChange: (value: ConditionSeverity) => void;
+  description: string;
+  onDescriptionChange: (value: string) => void;
+}) {
+  return (
+    <View style={styles.conditionBlock}>
+      <Pressable style={styles.conditionToggleRow} onPress={onToggle}>
+        <View style={[styles.conditionToggleIcon, enabled && styles.conditionToggleIconActive]}>
+          <Ionicons name={enabled ? 'checkmark' : 'trail-sign-outline'} size={17} color={enabled ? '#fff' : '#630E13'} />
+        </View>
+        <View style={styles.conditionToggleCopy}>
+          <Text style={styles.conditionTitle}>Trail condition report</Text>
+          <Text style={styles.conditionHint}>Share what the route was actually like when you finished.</Text>
+        </View>
+        <Ionicons name={enabled ? 'chevron-up' : 'chevron-down'} size={18} color="#8A7A6A" />
+      </Pressable>
+
+      {enabled ? (
+        <>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.conditionChipRow}>
+            {CONDITION_OPTIONS.map((option) => {
+              const active = conditionType === option.type;
+              return (
+                <Pressable
+                  key={option.type}
+                  style={[styles.conditionChip, active && styles.conditionChipActive]}
+                  onPress={() => onConditionTypeChange(option.type)}
+                >
+                  <Ionicons name={option.icon} size={15} color={active ? '#fff' : '#630E13'} />
+                  <Text style={[styles.conditionChipText, active && styles.conditionChipTextActive]}>{option.label}</Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+
+          <View style={styles.severityRow}>
+            {SEVERITY_OPTIONS.map((option) => {
+              const active = severity === option.value;
+              return (
+                <Pressable
+                  key={option.value}
+                  style={[styles.severityChip, active && styles.severityChipActive]}
+                  onPress={() => onSeverityChange(option.value)}
+                >
+                  <Text style={[styles.severityChipText, active && styles.severityChipTextActive]}>{option.label}</Text>
+                </Pressable>
+              );
+            })}
+          </View>
+
+          <TextInput
+            value={description}
+            onChangeText={onDescriptionChange}
+            multiline
+            placeholder="Optional: mud near the ridge, blocked gate, clear route..."
+            placeholderTextColor="#9B8B78"
+            style={styles.conditionInput}
+          />
+        </>
+      ) : null}
     </View>
   );
 }
@@ -652,6 +779,107 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     padding: 14,
     gap: 6,
+  },
+  conditionBlock: {
+    marginTop: 16,
+    borderRadius: 22,
+    padding: 14,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E7D8C3',
+  },
+  conditionToggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  conditionToggleIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F7EBE8',
+  },
+  conditionToggleIconActive: {
+    backgroundColor: '#630E13',
+  },
+  conditionToggleCopy: {
+    flex: 1,
+  },
+  conditionTitle: {
+    color: '#2C2418',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  conditionHint: {
+    marginTop: 3,
+    color: '#7B6D5A',
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  conditionChipRow: {
+    gap: 8,
+    paddingRight: 2,
+    marginTop: 14,
+  },
+  conditionChip: {
+    minHeight: 38,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#F7EBE8',
+  },
+  conditionChipActive: {
+    backgroundColor: '#630E13',
+  },
+  conditionChipText: {
+    color: '#630E13',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  conditionChipTextActive: {
+    color: '#fff',
+  },
+  severityRow: {
+    marginTop: 10,
+    flexDirection: 'row',
+    gap: 8,
+  },
+  severityChip: {
+    flex: 1,
+    minHeight: 36,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFF8F1',
+    borderWidth: 1,
+    borderColor: '#F0E2D2',
+  },
+  severityChipActive: {
+    backgroundColor: '#2C2418',
+    borderColor: '#2C2418',
+  },
+  severityChipText: {
+    color: '#6B5D4E',
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  severityChipTextActive: {
+    color: '#fff',
+  },
+  conditionInput: {
+    minHeight: 92,
+    marginTop: 10,
+    borderRadius: 18,
+    padding: 14,
+    backgroundColor: '#FFF8F1',
+    textAlignVertical: 'top',
+    color: '#2C2418',
+    fontSize: 14,
+    lineHeight: 20,
   },
   visibilityRow: {
     gap: 12,

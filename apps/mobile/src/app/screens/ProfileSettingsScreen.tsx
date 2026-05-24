@@ -42,6 +42,7 @@ export function ProfileSettingsScreen() {
     if (route.params.settingId === 's2') {
       return [
         { id: 'favorites', labelEn: 'Favorite trails', labelAr: 'المسارات المفضلة', active: true, onPress: () => navigation.navigate('AppTabs', { screen: 'Saved' }) },
+        { id: 'ongoing', labelEn: 'Ongoing activities', labelAr: 'الأنشطة الجارية', active: false, onPress: () => navigation.navigate('OngoingActivities') },
         { id: 'history', labelEn: 'Completed trails', labelAr: 'المسارات المكتملة', active: false, onPress: () => navigation.navigate('History') },
       ];
     }
@@ -66,7 +67,6 @@ export function ProfileSettingsScreen() {
             </Pressable>
             <View style={styles.headerCopy}>
               <Text style={[styles.title, isArabic ? rtlText : ltrText]}>{isArabic ? meta.titleAr : meta.titleEn}</Text>
-              <Text style={[styles.subtitle, isArabic ? rtlText : ltrText]}>{isArabic ? meta.subtitleAr : meta.subtitleEn}</Text>
             </View>
             <View style={styles.badge}>
               <Ionicons name={meta.icon} size={20} color="#630E13" />

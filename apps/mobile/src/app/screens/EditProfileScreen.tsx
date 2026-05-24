@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Alert, Image, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -8,6 +8,7 @@ import * as ImagePicker from 'expo-image-picker';
 
 import { ApiError } from '../api/client';
 import { uploadMedia, type ReactNativeFile } from '../api/mediaApi';
+import { getProfile } from '../api/profilesApi';
 import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
@@ -43,6 +44,45 @@ export function EditProfileScreen() {
     setAvatarUrl(user?.avatar_url ?? '');
     setSelectedAvatar(null);
   }, [user]);
+
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+
+      if (!user?.id) {
+        return () => {
+          cancelled = true;
+        };
+      }
+
+      const loadProfile = async () => {
+        try {
+          const profile = await getProfile(user.id);
+
+          if (!cancelled) {
+            setName(profile.full_name || user.full_name || '');
+            setLocation(profile.location ?? user.location ?? '');
+            setBio(profile.bio ?? user.bio ?? '');
+            setAvatarUrl(profile.avatar_url ?? user.avatar_url ?? '');
+            setSelectedAvatar(null);
+          }
+        } catch {
+          if (!cancelled) {
+            setName(user.full_name ?? '');
+            setLocation(user.location ?? '');
+            setBio(user.bio ?? '');
+            setAvatarUrl(user.avatar_url ?? '');
+          }
+        }
+      };
+
+      void loadProfile();
+
+      return () => {
+        cancelled = true;
+      };
+    }, [user?.id, user?.full_name, user?.location, user?.bio, user?.avatar_url]),
+  );
 
   const handlePickPhoto = async () => {
     try {
@@ -101,9 +141,9 @@ export function EditProfileScreen() {
           user: {
             ...session.user,
             full_name: nextProfile.full_name,
-            avatar_url: nextProfile.avatar_url,
-            bio: nextProfile.bio,
-            location: nextProfile.location,
+            avatar_url: nextProfile.avatar_url ?? null,
+            bio: nextProfile.bio ?? null,
+            location: nextProfile.location ?? null,
           },
         });
       }

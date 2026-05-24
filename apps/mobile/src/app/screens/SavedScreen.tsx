@@ -262,7 +262,6 @@ export function SavedScreen() {
           <View style={[styles.hero, isArabic ? rtlRow : ltrRow]}>
             <View>
               <Text style={[styles.title, isArabic ? rtlText : ltrText]}>{t('savedTitle')}</Text>
-              <Text style={[styles.subtitle, isArabic ? rtlText : ltrText]}>{t('savedSubtitle')}</Text>
             </View>
             <View style={styles.countPill}>
               <Ionicons name="bookmark" size={14} color="#fff" />

@@ -10,6 +10,7 @@ import {
   exportGPX,
   getActivityById,
   getActivityMedia,
+  getMyActivityJournal,
   getMyActivities,
   getUserActivities,
   shareActivity,
@@ -78,6 +79,7 @@ function optionalAuthenticate(req: Request, _res: Response, next: NextFunction):
 }
 
 router.get("/me", authenticate, asyncHandler(getMyActivities));
+router.get("/journal", authenticate, asyncHandler(getMyActivityJournal));
 router.get("/user/:userId", authenticate, asyncHandler(getUserActivities));
 router.get("/:id/media", optionalAuthenticate, asyncHandler(getActivityMedia));
 router.get("/:id", optionalAuthenticate, asyncHandler(getActivityById));

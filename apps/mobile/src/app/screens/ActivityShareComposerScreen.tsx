@@ -19,6 +19,7 @@ import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
+import * as Location from 'expo-location';
 import type { Feature, FeatureCollection, Point } from 'geojson';
 
 import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
@@ -28,6 +29,7 @@ import { addLocalFeedItem } from '../data/localSocial';
 import { createMeetup } from '../api/meetupsApi';
 import { uploadMedia, type ReactNativeFile } from '../api/mediaApi';
 import { getFollowers, getFollowing, type SocialProfile } from '../api/socialApi';
+import { getTrails, type Trail } from '../api/trailsApi';
 import { getWeatherForecast, type WeatherForecast } from '../api/weatherApi';
 import { RootStackParamList } from '../navigation/types';
 import { ltrRow, ltrText, rtlRow, rtlText } from '../utils/direction';
@@ -82,7 +84,6 @@ const TRIP_DESCRIPTION_OPTIONS = [
   { en: 'Challenging climbs', ar: 'صعود صعب' },
   { en: 'Photo stops', ar: 'توقفات للتصوير' },
   { en: 'Coffee stop', ar: 'استراحة قهوة' },
-  { en: 'Family friendly', ar: 'مناسب للعائلة' },
   { en: 'Sunset walk', ar: 'مشي وقت الغروب' },
   { en: 'Quiet nature route', ar: 'مسار طبيعي هادئ' },
 ];
@@ -842,11 +843,19 @@ export function ActivityShareComposerScreen() {
   const { language } = useLanguage();
   const isArabic = language === 'ar';
   const isPlan = route.params.type === 'plan';
+  const isLocationMedia = route.params.type === 'locationMedia';
 
   // Fields
   const [trail, setTrail] = useState(route.params?.trailName ?? '');
+  const [selectedTrailId, setSelectedTrailId] = useState(route.params?.trailId ?? '');
+  const [trailOptions, setTrailOptions] = useState<Trail[]>([]);
+  const [isLoadingTrails, setIsLoadingTrails] = useState(false);
+  const [trailSearch, setTrailSearch] = useState('');
   const [note, setNote] = useState('');
   const [photos, setPhotos] = useState<string[]>([]);
+  const [locationLabel, setLocationLabel] = useState('');
+  const [mediaCoords, setMediaCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [isLocating, setIsLocating] = useState(false);
 
   // Plan-only fields
   const [selectedDateIso, setSelectedDateIso] = useState('');
@@ -882,6 +891,7 @@ export function ActivityShareComposerScreen() {
   const [showFriends, setShowFriends] = useState(false);
   const [showBringPicker, setShowBringPicker] = useState(false);
   const [showDescriptionPicker, setShowDescriptionPicker] = useState(false);
+  const [showTrailPicker, setShowTrailPicker] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -905,10 +915,50 @@ export function ActivityShareComposerScreen() {
     return () => { cancelled = true; };
   }, [user?.id]);
 
+  useEffect(() => {
+    let cancelled = false;
+    setIsLoadingTrails(true);
+    getTrails(1, 50)
+      .then((items) => {
+        if (cancelled) return;
+        setTrailOptions(items);
+        if (route.params?.trailId || isLocationMedia) return;
+        const firstTrail = items[0];
+        if (firstTrail && !selectedTrailId) {
+          setSelectedTrailId(firstTrail.id);
+          setTrail(isArabic ? firstTrail.nameAr || firstTrail.name : firstTrail.name);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setTrailOptions([]);
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoadingTrails(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isArabic, isLocationMedia, route.params?.trailId]);
+
   const friendOptions = useMemo(() => {
     const q = friendSearch.trim().toLowerCase();
     return q ? contacts.filter(f => f.full_name.toLowerCase().includes(q)) : contacts;
   }, [contacts, friendSearch]);
+
+  const selectedTrail = useMemo(
+    () => trailOptions.find((item) => item.id === selectedTrailId) ?? null,
+    [selectedTrailId, trailOptions],
+  );
+
+  const filteredTrailOptions = useMemo(() => {
+    const q = trailSearch.trim().toLowerCase();
+    if (!q) return trailOptions;
+    return trailOptions.filter((item) =>
+      [item.name, item.nameAr, item.region, item.regionAr]
+        .filter(Boolean)
+        .some((value) => value.toLowerCase().includes(q)),
+    );
+  }, [trailOptions, trailSearch]);
 
   const bringOptions = useMemo(
     () => BRING_OPTIONS.map(option => (isArabic ? option.ar : option.en)),
@@ -1002,9 +1052,101 @@ export function ActivityShareComposerScreen() {
     }
   };
 
+  const handleUseCurrentLocation = async () => {
+    setIsLocating(true);
+    try {
+      const permission = await Location.requestForegroundPermissionsAsync();
+      if (permission.status !== 'granted') {
+        Alert.alert(
+          isArabic ? 'الموقع مطلوب' : 'Location needed',
+          isArabic ? 'اسمح بالوصول للموقع لربط الصور بمكانك الحالي.' : 'Allow location access to link media to your current place.',
+        );
+        return;
+      }
+
+      const current = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      const coords = { lat: current.coords.latitude, lng: current.coords.longitude };
+      setMediaCoords(coords);
+      setLocationLabel(`${coords.lat.toFixed(5)}, ${coords.lng.toFixed(5)}`);
+    } catch (error) {
+      Alert.alert(
+        isArabic ? 'تعذر تحديد الموقع' : 'Unable to get location',
+        error instanceof Error ? error.message : isArabic ? 'حاول مرة أخرى.' : 'Please try again.',
+      );
+    } finally {
+      setIsLocating(false);
+    }
+  };
+
   const handlePost = async () => {
     const trimmedTrail = trail.trim() || (isArabic ? 'مسارك' : 'Your trail');
     const trimmedNote = note.trim() || (isArabic ? 'مشاركة لحظة جديدة' : 'Sharing a new trail moment');
+
+    if (isLocationMedia) {
+      if (!photos.length) {
+        Alert.alert(isArabic ? 'أضف صوراً' : 'Add media', isArabic ? 'اختر صورة واحدة على الأقل.' : 'Choose at least one photo.');
+        return;
+      }
+      if (!mediaCoords) {
+        Alert.alert(isArabic ? 'اختر الموقع' : 'Add location', isArabic ? 'استخدم موقعك الحالي أولاً.' : 'Use your current location first.');
+        return;
+      }
+
+      setIsPosting(true);
+      try {
+        const uploaded = await Promise.all(
+          photos.map((photo) =>
+            uploadMedia({
+              file: imageUriToFile(photo),
+              caption: trimmedNote,
+              latitude: mediaCoords.lat,
+              longitude: mediaCoords.lng,
+              locationName: locationLabel.trim() || null,
+            }),
+          ),
+        );
+
+        addLocalFeedItem({
+          id: `local-location-media-${Date.now()}`,
+          kind: 'recap',
+          trailId: '0',
+          user: user?.full_name || 'You',
+          handle: '@you',
+          avatar: user?.avatar_url || 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?crop=faces&fit=crop&w=240&h=240',
+          image: uploaded[0]?.url ?? photos[0],
+          trailNameEn: locationLabel.trim() || 'Current location',
+          trailNameAr: locationLabel.trim() || 'الموقع الحالي',
+          regionEn: 'Pinned to current location',
+          regionAr: 'مرتبط بالموقع الحالي',
+          captionEn: trimmedNote,
+          captionAr: trimmedNote,
+          timeEn: 'Just now',
+          timeAr: 'الآن',
+          likes: 1,
+          comments: 0,
+          distance: `${uploaded.length} media`,
+        });
+
+        Alert.alert(
+          isArabic ? 'تم رفع الوسائط' : 'Media added',
+          isArabic ? 'تم ربط الصور بموقعك الحالي.' : 'Your photos are linked to your current location.',
+          [{ text: isArabic ? 'حسناً' : 'OK', onPress: () => navigation.navigate('AppTabs', { screen: 'Activity' }) }],
+        );
+      } catch (error) {
+        Alert.alert(
+          isArabic ? 'تعذر رفع الوسائط' : 'Unable to add media',
+          error instanceof Error ? error.message : isArabic ? 'حاول مرة أخرى.' : 'Please try again.',
+        );
+      } finally {
+        setIsPosting(false);
+      }
+      return;
+    }
+
+    if (!isPlan && !selectedTrailId) {
+      Alert.alert(isArabic ? 'اختر مساراً' : 'Choose a trail', isArabic ? 'اختر مساراً من قائمة Explore قبل النشر.' : 'Choose a trail from Explore before posting.');
+      return;
+    }
 
     const headcount = parseInt(maxHeadcount, 10) || 6;
     const joined = Math.max(1, 1 + selectedFriends.length);
@@ -1089,22 +1231,22 @@ export function ActivityShareComposerScreen() {
       : {
           id: `local-recap-${Date.now()}`,
           kind: 'recap' as const,
-          trailId: '0',
-          user: 'You',
+          trailId: selectedTrailId,
+          user: user?.full_name || 'You',
           handle: '@you',
-          avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?crop=faces&fit=crop&w=240&h=240',
+          avatar: user?.avatar_url || 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?crop=faces&fit=crop&w=240&h=240',
           image: photos[0] ?? 'https://images.unsplash.com/photo-1500534314209-a25ddb2bd429?auto=format&fit=crop&w=1200&q=80',
-          trailNameEn: trimmedTrail,
-          trailNameAr: trimmedTrail,
-          regionEn: 'Your route',
-          regionAr: 'رحلتي',
+          trailNameEn: selectedTrail?.name || trimmedTrail,
+          trailNameAr: selectedTrail?.nameAr || selectedTrail?.name || trimmedTrail,
+          regionEn: selectedTrail?.region || 'Trail recap',
+          regionAr: selectedTrail?.regionAr || selectedTrail?.region || 'ملخص المسار',
           captionEn: trimmedNote,
           captionAr: trimmedNote,
           timeEn: 'Just now',
           timeAr: 'الآن',
           likes: 1,
           comments: 0,
-          distance: '0.0 km',
+          distance: selectedTrail ? `${selectedTrail.distance.toFixed(1)} km` : '0.0 km',
         };
 
     addLocalFeedItem(item);
@@ -1135,12 +1277,11 @@ export function ActivityShareComposerScreen() {
             </Pressable>
             <View style={styles.headerCopy}>
               <Text style={[styles.title, isArabic ? rtlText : ltrText]}>
-                {isPlan ? (isArabic ? 'خطة جديدة' : 'New meetup plan') : isArabic ? 'منشور رحلة' : 'Trail recap'}
-              </Text>
-              <Text style={[styles.subtitle, isArabic ? rtlText : ltrText]}>
                 {isPlan
-                  ? isArabic ? 'ادع الأصدقاء إلى المسار القادم.' : 'Invite friends to your next trail.'
-                  : isArabic ? 'شارك لحظة من رحلتك.' : 'Share a moment from your hike.'}
+                  ? (isArabic ? 'خطة جديدة' : 'New meetup plan')
+                  : isLocationMedia
+                    ? (isArabic ? 'وسائط الموقع' : 'Location media')
+                    : isArabic ? 'منشور رحلة' : 'Trail recap'}
               </Text>
             </View>
           </View>
@@ -1167,16 +1308,30 @@ export function ActivityShareComposerScreen() {
             )}
           </FieldRow>
 
-          {/* ── Trail name ── */}
-          <FieldRow icon="trail-sign-outline" label={isArabic ? 'المسار' : 'Trail'} isArabic={isArabic}>
-            <TextInput
-              value={trail}
-              onChangeText={setTrail}
-              placeholder={isArabic ? 'اختر أو اكتب اسم المسار' : 'Choose or type a trail name'}
-              placeholderTextColor="#A18F7A"
-              style={[styles.input, isArabic ? rtlText : ltrText]}
-            />
-          </FieldRow>
+          {!isLocationMedia ? (
+            <FieldRow icon="trail-sign-outline" label={isArabic ? 'المسار' : 'Trail'} isArabic={isArabic}>
+              <SelectPill
+                value={trail}
+                placeholder={isLoadingTrails ? (isArabic ? 'جار تحميل المسارات...' : 'Loading trails...') : (isArabic ? 'اختر مساراً من Explore' : 'Choose a trail from Explore')}
+                isArabic={isArabic}
+                onPress={() => setShowTrailPicker(true)}
+                iconRight="list-outline"
+              />
+            </FieldRow>
+          ) : (
+            <FieldRow icon="location-outline" label={isArabic ? 'الموقع الحالي' : 'Current location'} isArabic={isArabic}>
+              <Pressable
+                style={[styles.locationButton, isLocating && styles.submitButtonDisabled]}
+                onPress={handleUseCurrentLocation}
+                disabled={isLocating}
+              >
+                {isLocating ? <ActivityIndicator color="#630E13" /> : <Ionicons name="locate-outline" size={18} color="#630E13" />}
+                <Text style={styles.locationButtonText}>
+                  {locationLabel || (isArabic ? 'استخدم موقعي الحالي' : 'Use current location')}
+                </Text>
+              </Pressable>
+            </FieldRow>
+          )}
 
           {isPlan && (
             <>
@@ -1367,7 +1522,7 @@ export function ActivityShareComposerScreen() {
                 value={note}
                 onChangeText={setNote}
                 multiline
-                placeholder={isArabic ? 'اكتب لحظة من الرحلة...' : 'Write a moment from the trail...'}
+                placeholder={isLocationMedia ? (isArabic ? 'اكتب ملاحظة عن هذا المكان...' : 'Write a note about this place...') : (isArabic ? 'اكتب لحظة من الرحلة...' : 'Write a moment from the trail...')}
                 placeholderTextColor="#A18F7A"
                 style={[styles.textArea, isArabic ? rtlText : ltrText]}
               />
@@ -1378,7 +1533,7 @@ export function ActivityShareComposerScreen() {
             {isPosting ? (
               <ActivityIndicator size="small" color="#fff" />
             ) : (
-              <Ionicons name={isPlan ? 'calendar-outline' : 'paper-plane-outline'} size={18} color="#fff" />
+              <Ionicons name={isPlan ? 'calendar-outline' : isLocationMedia ? 'cloud-upload-outline' : 'paper-plane-outline'} size={18} color="#fff" />
             )}
             <Text style={styles.submitText}>{isArabic ? 'نشر' : 'Post'}</Text>
           </Pressable>
@@ -1398,6 +1553,46 @@ export function ActivityShareComposerScreen() {
           setDeparturePeriod(period);
         }}
       />
+
+      <PickerModal
+        visible={showTrailPicker}
+        title={isArabic ? 'اختر مساراً' : 'Choose trail'}
+        onClose={() => { setShowTrailPicker(false); setTrailSearch(''); }}
+        large
+      >
+        <View style={styles.searchRow}>
+          <Ionicons name="search-outline" size={17} color="#8A7A6A" />
+          <TextInput
+            value={trailSearch}
+            onChangeText={setTrailSearch}
+            placeholder={isArabic ? 'ابحث في مسارات Explore' : 'Search Explore trails'}
+            placeholderTextColor="#A18F7A"
+            style={[styles.searchInput, isArabic ? rtlText : ltrText]}
+          />
+        </View>
+        <ScrollView style={{ maxHeight: 300 }} showsVerticalScrollIndicator={false}>
+          {isLoadingTrails ? (
+            <ActivityIndicator color="#630E13" />
+          ) : filteredTrailOptions.length ? (
+            filteredTrailOptions.map((item) => (
+              <OptionRow
+                key={item.id}
+                label={`${isArabic ? item.nameAr || item.name : item.name} · ${isArabic ? item.regionAr || item.region : item.region}`}
+                selected={selectedTrailId === item.id}
+                onPress={() => {
+                  setSelectedTrailId(item.id);
+                  setTrail(isArabic ? item.nameAr || item.name : item.name);
+                  setShowTrailPicker(false);
+                  setTrailSearch('');
+                }}
+                checkmark
+              />
+            ))
+          ) : (
+            <Text style={styles.emptyText}>{isArabic ? 'لا توجد مسارات.' : 'No trails found.'}</Text>
+          )}
+        </ScrollView>
+      </PickerModal>
 
       {/* ── Map picker modal ── */}
       <MapPickerModal
@@ -1461,9 +1656,9 @@ export function ActivityShareComposerScreen() {
         large
       >
         <ScrollView style={{ maxHeight: 280 }} showsVerticalScrollIndicator={false}>
-          {bringOptions.map(option => (
+          {bringOptions.map((option, index) => (
             <OptionRow
-              key={option}
+              key={`${option}-${index}`}
               label={option}
               selected={selectedBringItems.includes(option)}
               onPress={() => toggleSelectedValue(option, setSelectedBringItems)}
@@ -1493,9 +1688,9 @@ export function ActivityShareComposerScreen() {
         large
       >
         <ScrollView style={{ maxHeight: 280 }} showsVerticalScrollIndicator={false}>
-          {descriptionOptions.map(option => (
+          {descriptionOptions.map((option, index) => (
             <OptionRow
-              key={option}
+              key={`${option}-${index}`}
               label={option}
               selected={selectedDescriptionItems.includes(option)}
               onPress={() => toggleSelectedValue(option, setSelectedDescriptionItems)}
@@ -1546,6 +1741,22 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center', gap: 8,
   },
   photoEmptyText: { fontSize: 13, fontWeight: '800', color: '#630E13' },
+
+  locationButton: {
+    minHeight: 50,
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    backgroundColor: '#FFF8F1',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  locationButtonText: {
+    flex: 1,
+    color: '#630E13',
+    fontSize: 14,
+    fontWeight: '900',
+  },
 
   input: {
     minHeight: 50, borderRadius: 16, paddingHorizontal: 14,

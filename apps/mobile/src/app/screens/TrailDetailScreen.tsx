@@ -10,11 +10,15 @@ import { useLanguage } from '../contexts/LanguageContext';
 import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
 import {
   getBookmarkStatus,
+  getTrailConditions,
   getTrailById,
   getTrailReviews,
   removeBookmark,
   saveBookmark,
   type Trail,
+  type ConditionSeverity,
+  type ConditionType,
+  type TrailCondition,
   type TrailReview,
 } from '../api/trailsApi';
 import { useAuth } from '../contexts/AuthContext';
@@ -28,6 +32,7 @@ import { WeatherSection } from '../components/WeatherSection';
 import { ReviewsSection } from '../components/ReviewsSection';
 import { CommunityPostsSection } from '../components/CommunityPostsSection';
 import { useTrailTracking } from '../contexts/TrailTrackingContext';
+import { getMyActivities, type Activity } from '../api/activitiesApi';
 import { getSocialFeed } from '../api/socialApi';
 import { getTrailPhotos } from '../api/mediaApi';
 import { getProfile, type Profile } from '../api/profilesApi';
@@ -37,6 +42,41 @@ import { mapSocialFeedItemToFeedItem } from '../utils/socialFeedMap';
 
 type TrailDetailScreenRouteProp = RouteProp<RootStackParamList, 'TrailDetail'>;
 type TrailDetailNavigationProp = StackNavigationProp<RootStackParamList>;
+
+const CONDITION_OPTIONS: Array<{ type: ConditionType; icon: keyof typeof Ionicons.glyphMap; label: string }> = [
+  { type: 'good', icon: 'checkmark-circle-outline', label: 'Good' },
+  { type: 'fair', icon: 'partly-sunny-outline', label: 'Fair' },
+  { type: 'mud', icon: 'water-outline', label: 'Mud' },
+  { type: 'flood', icon: 'rainy-outline', label: 'Flood' },
+  { type: 'fallen_trees', icon: 'leaf-outline', label: 'Fallen trees' },
+  { type: 'closure', icon: 'close-circle-outline', label: 'Closure' },
+  { type: 'snow', icon: 'snow-outline', label: 'Snow' },
+  { type: 'ice', icon: 'diamond-outline', label: 'Ice' },
+  { type: 'wildfire', icon: 'flame-outline', label: 'Wildfire' },
+];
+
+function conditionLabel(type: ConditionType) {
+  return CONDITION_OPTIONS.find((option) => option.type === type)?.label ?? type.replace(/_/g, ' ');
+}
+
+function conditionIcon(type: ConditionType): keyof typeof Ionicons.glyphMap {
+  return CONDITION_OPTIONS.find((option) => option.type === type)?.icon ?? 'alert-circle-outline';
+}
+
+function conditionTone(type: ConditionType, severity?: ConditionSeverity | null) {
+  if (type === 'good') return '#2E7D32';
+  if (type === 'fair') return '#8A6D1D';
+  if (severity === 'extreme' || type === 'closure' || type === 'wildfire' || type === 'flood') return '#9B1C1C';
+  if (severity === 'high') return '#B34A2E';
+  return '#630E13';
+}
+
+function formatConditionDate(value?: string) {
+  if (!value) return 'Recently';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Recently';
+  return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(date);
+}
 
 async function hydrateReviewProfiles(reviews: TrailReview[]): Promise<TrailReview[]> {
   const userIds = Array.from(new Set(reviews.map((review) => review.user_id).filter(Boolean)));
@@ -82,7 +122,7 @@ export function TrailDetailScreen() {
   const insets = useSafeAreaInsets();
   const { width: windowWidth } = useWindowDimensions();
   const { t, language } = useLanguage();
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, user } = useAuth();
   const { activeSessionTrailId, startTrailSession } = useTrailTracking();
   const isArabic = language === 'ar';
   const [trail, setTrail] = useState<Trail | null>(null);
@@ -100,6 +140,8 @@ export function TrailDetailScreen() {
   const [communityPosts, setCommunityPosts] = useState<FeedItem[]>([]);
   const [trailMediaImages, setTrailMediaImages] = useState<string[]>([]);
   const [trailSafety, setTrailSafety] = useState<TrailSafety | null>(null);
+  const [trailConditions, setTrailConditions] = useState<TrailCondition[]>([]);
+  const [ongoingTrailActivity, setOngoingTrailActivity] = useState<Activity | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -109,10 +151,11 @@ export function TrailDetailScreen() {
       setLoadError(null);
 
       try {
-        const [nextTrail, rawReviews, nextPhotos] = await Promise.all([
+        const [nextTrail, rawReviews, nextPhotos, nextConditions] = await Promise.all([
           getTrailById(trailId),
           getTrailReviews(trailId).catch(() => []),
           getTrailPhotos(trailId).catch(() => []),
+          getTrailConditions(trailId).catch(() => []),
         ]);
         const nextSafety = await getTrailSafety(trailId).catch(() => null);
         const nextReviews = await hydrateReviewProfiles(rawReviews);
@@ -121,6 +164,7 @@ export function TrailDetailScreen() {
           setTrail(nextTrail);
           setTrailSafety(nextSafety);
           setReviews(nextReviews);
+          setTrailConditions(nextConditions);
           setTrailMediaImages(
             nextPhotos
               .map((photo) => photo.url)
@@ -153,6 +197,7 @@ export function TrailDetailScreen() {
           setLoadError(error instanceof Error ? error.message : 'Unable to load trail details.');
           setReviews([]);
           setTrailMediaImages([]);
+          setTrailConditions([]);
           setTrailSafety(null);
         }
       } finally {
@@ -163,6 +208,40 @@ export function TrailDetailScreen() {
     };
 
     void loadTrail();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isAuthenticated, trailId]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadOngoingTrailActivity = async () => {
+      if (!isAuthenticated) {
+        setOngoingTrailActivity(null);
+        return;
+      }
+
+      try {
+        const [recordingActivities, pausedActivities] = await Promise.all([
+          getMyActivities({ status: 'recording', limit: 50 }),
+          getMyActivities({ status: 'paused', limit: 50 }),
+        ]);
+        if (cancelled) return;
+
+        const matchingActivity = [...recordingActivities, ...pausedActivities].find(
+          (activity) => activity.trail_id === trailId,
+        );
+        setOngoingTrailActivity(matchingActivity ?? null);
+      } catch {
+        if (!cancelled) {
+          setOngoingTrailActivity(null);
+        }
+      }
+    };
+
+    void loadOngoingTrailActivity();
 
     return () => {
       cancelled = true;
@@ -263,6 +342,16 @@ export function TrailDetailScreen() {
   };
 
   const openTrailRecording = async () => {
+    if (activeSessionTrailId === trail!.id) {
+      navigation.navigate('Recording', { trailId: trail!.id });
+      return;
+    }
+
+    if (ongoingTrailActivity?.trail_id === trail!.id) {
+      navigation.navigate('Recording', { trailId: trail!.id, activityId: ongoingTrailActivity.id });
+      return;
+    }
+
     if (trailSafety && trailSafety.safety_score < 60) {
       const band = getSafetyBand(trailSafety.safety_score);
       Alert.alert(
@@ -356,7 +445,7 @@ export function TrailDetailScreen() {
   }
 
   const posts = communityPosts;
-  const isThisTrailActive = activeSessionTrailId === trail.id;
+  const isThisTrailActive = activeSessionTrailId === trail.id || ongoingTrailActivity?.trail_id === trail.id;
   const safetyBand = trailSafety ? getSafetyBand(trailSafety.safety_score) : null;
   const planTripButton = (
     <Pressable
@@ -536,6 +625,62 @@ export function TrailDetailScreen() {
           </AnimatedBlock>
 
           <AnimatedBlock delay={250}>
+            <View style={styles.conditionsCard}>
+              <View style={styles.conditionsHeader}>
+                <View>
+                  <Text style={[styles.conditionsTitle, isArabic ? { textAlign: 'right' } : null]}>
+                    {isArabic ? 'حالة المسار' : 'Trail conditions'}
+                  </Text>
+                  <Text style={[styles.conditionsSub, isArabic ? { textAlign: 'right' } : null]}>
+                    {isArabic ? 'تقارير حديثة من المجتمع' : 'Recent community reports'}
+                  </Text>
+                </View>
+                <View style={styles.conditionsCountPill}>
+                  <Text style={styles.conditionsCountText}>{trailConditions.length}</Text>
+                </View>
+              </View>
+
+              {trailConditions.length ? (
+                <View style={styles.conditionList}>
+                  {trailConditions.slice(0, 4).map((condition) => {
+                    const tone = conditionTone(condition.condition_type, condition.severity);
+                    return (
+                      <View key={condition.id} style={styles.conditionRow}>
+                        <View style={[styles.conditionIcon, { backgroundColor: `${tone}18` }]}>
+                          <Ionicons name={conditionIcon(condition.condition_type)} size={18} color={tone} />
+                        </View>
+                        <View style={styles.conditionCopy}>
+                          <Text style={[styles.conditionName, isArabic ? { textAlign: 'right' } : null]}>
+                            {conditionLabel(condition.condition_type)}
+                            {condition.severity ? ` · ${condition.severity}` : ''}
+                          </Text>
+                          {condition.description ? (
+                            <Text style={[styles.conditionDescription, isArabic ? { textAlign: 'right' } : null]} numberOfLines={2}>
+                              {condition.description}
+                            </Text>
+                          ) : null}
+                        </View>
+                        <Text style={styles.conditionDate}>{formatConditionDate(condition.reported_at)}</Text>
+                      </View>
+                    );
+                  })}
+                </View>
+              ) : (
+                <View style={styles.noConditions}>
+                  <Ionicons name="trail-sign-outline" size={24} color="#8A7A6A" />
+                  <Text style={[styles.noConditionsText, isArabic ? { textAlign: 'right' } : null]}>
+                    {isArabic ? 'لا توجد تقارير حالة بعد.' : 'No condition reports yet.'}
+                  </Text>
+                </View>
+              )}
+
+              <Text style={[styles.conditionsReportHint, isArabic ? { textAlign: 'right' } : null]}>
+                {isArabic ? 'يمكنك إضافة تقرير حالة بعد إكمال المسار.' : 'You can report trail conditions after completing this trail.'}
+              </Text>
+            </View>
+          </AnimatedBlock>
+
+          <AnimatedBlock delay={290}>
             <WeatherSection
               weeklyForecast={weeklyForecast}
               selectedForecastDate={selectedForecastDate}
@@ -546,19 +691,21 @@ export function TrailDetailScreen() {
             />
           </AnimatedBlock>
 
-          <AnimatedBlock delay={290}>
+          <AnimatedBlock delay={330}>
             <ReviewsSection
               reviews={reviews}
               trailId={trail.id}
               isArabic={isArabic}
               isAuthenticated={isAuthenticated}
+              currentUserId={user?.id}
               onRequireAuth={() => navigation.navigate('Auth', { mode: 'signin' })}
               onViewAllReviews={openAllReviews}
               onReviewAdded={(review) => setReviews((current) => [review, ...current])}
+              onReviewDeleted={(reviewId) => setReviews((current) => current.filter((review) => review.id !== reviewId))}
             />
           </AnimatedBlock>
 
-          <AnimatedBlock delay={330}>
+          <AnimatedBlock delay={370}>
             <CommunityPostsSection
               posts={posts}
               onOpenActivity={() => navigation.navigate('AppTabs', { screen: 'Activity' })}
@@ -725,6 +872,65 @@ const styles = StyleSheet.create({
     color: '#630E13',
     fontSize: 12,
     fontWeight: '900',
+  },
+  conditionsCard: {
+    borderRadius: 24,
+    padding: 16,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#EEE5DA',
+  },
+  conditionsHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 12,
+    marginBottom: 14,
+  },
+  conditionsTitle: { color: '#2C2418', fontSize: 18, fontWeight: '900' },
+  conditionsSub: { marginTop: 4, color: '#7B6D5A', fontSize: 12, fontWeight: '700' },
+  conditionsCountPill: {
+    minWidth: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: '#F7EBE8',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  conditionsCountText: { color: '#630E13', fontSize: 14, fontWeight: '900' },
+  conditionList: { gap: 10 },
+  conditionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderRadius: 18,
+    padding: 12,
+    backgroundColor: '#FFF8F1',
+  },
+  conditionIcon: { width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center' },
+  conditionCopy: { flex: 1 },
+  conditionName: { color: '#2C2418', fontSize: 14, fontWeight: '900', textTransform: 'capitalize' },
+  conditionDescription: { marginTop: 3, color: '#6B5D4E', fontSize: 12, lineHeight: 17, fontWeight: '700' },
+  conditionDate: { color: '#8A7A6A', fontSize: 11, fontWeight: '800' },
+  noConditions: {
+    minHeight: 84,
+    borderRadius: 18,
+    backgroundColor: '#FFF8F1',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    padding: 14,
+  },
+  noConditionsText: { color: '#6B5D4E', fontSize: 13, fontWeight: '800' },
+  conditionsReportHint: {
+    marginTop: 14,
+    borderTopWidth: 1,
+    borderTopColor: '#F0E5D8',
+    paddingTop: 12,
+    color: '#7B6D5A',
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: '700',
   },
   completedButton: {
   flex: 1,

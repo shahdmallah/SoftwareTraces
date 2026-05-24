@@ -94,7 +94,7 @@ function sendSocialError(functionName: string, res: Response, error: unknown): v
 
 async function ensureProfileExists(userId: string): Promise<void> {
   console.log("[ensureProfileExists] Checking userId:", userId);
-  const result = await pool.query("SELECT user_id FROM profiles WHERE user_id = $1::uuid OR id = $1::uuid", [userId]);
+  const result = await pool.query("SELECT user_id FROM profiles WHERE user_id::text = $1 OR id::text = $1", [userId]);
   console.log("[ensureProfileExists] Rows found:", result.rows.length);
 
   if (result.rows.length === 0) {

@@ -1,11 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { followUser, unfollowUser } from '../api/socialApi';
+import { followUser, getFriendCount, removeFriend, unfollowUser } from '../api/socialApi';
 import { getProfile, getProfilePhotos, getProfileReviews, type Profile, type ProfilePhoto, type ProfileReview } from '../api/profilesApi';
 import { AnimatedScreen } from '../components/AnimatedUI';
 import { useLanguage } from '../contexts/LanguageContext';
@@ -38,7 +38,10 @@ export function PublicProfileScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState('');
   const [isFollowing, setIsFollowing] = useState(false);
+  const [isFriend, setIsFriend] = useState(false);
+  const [friendCountValue, setFriendCountValue] = useState<number | null>(null);
   const [isFollowPending, setIsFollowPending] = useState(false);
+  const [isFriendPending, setIsFriendPending] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -50,9 +53,10 @@ export function PublicProfileScreen() {
       try {
         const nextProfile = await getProfile(profileId);
         const backendProfileId = nextProfile.user_id || nextProfile.id || profileId;
-        const [nextReviews, nextPhotos] = await Promise.all([
+        const [nextReviews, nextPhotos, nextFriendCount] = await Promise.all([
           getProfileReviews(backendProfileId).catch(() => [] as ProfileReview[]),
           getProfilePhotos(backendProfileId).catch(() => [] as ProfilePhoto[]),
+          getFriendCount(backendProfileId).catch(() => nextProfile.stats?.total_friends ?? nextProfile.stats?.friends_count ?? 0),
         ]);
 
         if (!cancelled) {
@@ -60,12 +64,16 @@ export function PublicProfileScreen() {
           setReviews(nextReviews);
           setPhotos(nextPhotos);
           setIsFollowing(Boolean(nextProfile.relationship?.is_following));
+          setIsFriend(Boolean(nextProfile.relationship?.is_friend));
+          setFriendCountValue(nextFriendCount);
         }
       } catch (error) {
         if (!cancelled) {
           setProfile(null);
           setReviews([]);
           setPhotos([]);
+          setIsFriend(false);
+          setFriendCountValue(null);
           setErrorMessage(error instanceof Error ? error.message : 'Unable to load this profile.');
         }
       } finally {
@@ -88,8 +96,11 @@ export function PublicProfileScreen() {
     setIsFollowing(!wasFollowing);
 
     try {
-      const backendProfileId = profile?.user_id || profile?.id || profileId;
+      const backendProfileId = profile?.id || profile?.user_id || profileId;
       await (wasFollowing ? unfollowUser(backendProfileId) : followUser(backendProfileId));
+      if (wasFollowing) {
+        setIsFriend(false);
+      }
     } catch (error) {
       setIsFollowing(wasFollowing);
       setErrorMessage(error instanceof Error ? error.message : 'Unable to update follow status.');
@@ -98,7 +109,38 @@ export function PublicProfileScreen() {
     }
   };
 
+  const handleRemoveFriend = () => {
+    if (!profile || isFriendPending) {
+      return;
+    }
+
+    Alert.alert('Remove friend?', `Remove ${displayName} from your friends?`, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Remove',
+        style: 'destructive',
+        onPress: async () => {
+          setIsFriendPending(true);
+          try {
+            await removeFriend(profile.id || profile.user_id || profileId);
+            setIsFriend(false);
+            setIsFollowing(false);
+            setFriendCountValue((current) => Math.max(0, (current ?? profile.stats?.total_friends ?? profile.stats?.friends_count ?? 0) - 1));
+          } catch (error) {
+            setErrorMessage(error instanceof Error ? error.message : 'Unable to remove this friend.');
+          } finally {
+            setIsFriendPending(false);
+          }
+        },
+      },
+    ]);
+  };
+
   const displayName = profile?.full_name ?? 'Trail friend';
+  const followerCount = profile?.stats?.total_followers ?? 0;
+  const friendCount = friendCountValue ?? profile?.stats?.total_friends ?? profile?.stats?.friends_count ?? 0;
+  const reviewCount = Math.max(profile?.stats?.total_reviews ?? 0, reviews.length);
+  const photoCount = Math.max(profile?.stats?.total_photos ?? 0, photos.length);
 
   return (
     <AnimatedScreen style={styles.container}>
@@ -148,15 +190,19 @@ export function PublicProfileScreen() {
 
               <View style={[styles.statsRow, isArabic ? rtlRow : ltrRow]}>
                 <View style={styles.statPill}>
-                  <Text style={styles.statValue}>{profile.stats?.total_followers ?? 0}</Text>
+                  <Text style={styles.statValue}>{followerCount}</Text>
                   <Text style={styles.statLabel}>{isArabic ? 'متابعون' : 'followers'}</Text>
                 </View>
                 <View style={styles.statPill}>
-                  <Text style={styles.statValue}>{profile.stats?.total_reviews ?? reviews.length}</Text>
+                  <Text style={styles.statValue}>{friendCount}</Text>
+                  <Text style={styles.statLabel}>{isArabic ? 'friends' : 'friends'}</Text>
+                </View>
+                <View style={styles.statPill}>
+                  <Text style={styles.statValue}>{reviewCount}</Text>
                   <Text style={styles.statLabel}>{isArabic ? 'مراجعات' : 'reviews'}</Text>
                 </View>
                 <View style={styles.statPill}>
-                  <Text style={styles.statValue}>{profile.stats?.total_photos ?? photos.length}</Text>
+                  <Text style={styles.statValue}>{photoCount}</Text>
                   <Text style={styles.statLabel}>{isArabic ? 'صور' : 'photos'}</Text>
                 </View>
               </View>
@@ -173,6 +219,18 @@ export function PublicProfileScreen() {
                   </>
                 )}
               </Pressable>
+              {isFriend ? (
+                <Pressable style={styles.removeFriendButton} onPress={handleRemoveFriend} disabled={isFriendPending}>
+                  {isFriendPending ? (
+                    <ActivityIndicator size="small" color="#8B1E1E" />
+                  ) : (
+                    <>
+                      <Ionicons name="person-remove-outline" size={16} color="#8B1E1E" />
+                      <Text style={styles.removeFriendText}>{isArabic ? 'Remove friend' : 'Remove friend'}</Text>
+                    </>
+                  )}
+                </Pressable>
+              ) : null}
               {errorMessage ? <Text style={styles.inlineError}>{errorMessage}</Text> : null}
             </View>
 
@@ -232,11 +290,13 @@ const styles = StyleSheet.create({
   statsRow: { flexDirection: 'row', gap: 8, marginTop: 14 },
   statPill: { flex: 1, borderRadius: 16, padding: 10, alignItems: 'center', backgroundColor: '#F6F0E0' },
   statValue: { color: '#630E13', fontSize: 17, fontWeight: '900' },
-  statLabel: { marginTop: 2, color: '#7B6D5A', fontSize: 11, fontWeight: '800' },
+  statLabel: { marginTop: 2, color: '#7B6D5A', fontSize: 11, fontWeight: '800', textAlign: 'center' },
   followButton: { minHeight: 48, marginTop: 14, borderRadius: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#F7EBE8' },
   followButtonActive: { backgroundColor: '#630E13' },
   followText: { color: '#630E13', fontSize: 14, fontWeight: '900' },
   followTextActive: { color: '#fff' },
+  removeFriendButton: { minHeight: 44, marginTop: 10, borderRadius: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#FFF4F1', borderWidth: 1, borderColor: '#F1D3CC' },
+  removeFriendText: { color: '#8B1E1E', fontSize: 13, fontWeight: '900' },
   inlineError: { marginTop: 10, color: '#8B1E1E', fontSize: 12, fontWeight: '800' },
   section: { marginTop: 18 },
   sectionTitle: { color: '#2C2418', fontSize: 17, fontWeight: '900', marginBottom: 10 },

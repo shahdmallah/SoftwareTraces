@@ -118,12 +118,6 @@ export function SearchResultsScreen() {
           keyExtractor={(item) => item.id}
           renderItem={renderExistingTrail}
           contentContainerStyle={styles.listContent}
-          ListHeaderComponent={
-            <View style={styles.resultsHeader}>
-              <Text style={styles.subtitle}>Matches for "{query}"</Text>
-              <Text style={styles.helperText}>Pick a trail to open its details and map.</Text>
-            </View>
-          }
         />
       ) : generatedTrail && hasGeneratedRoute ? (
         <View style={styles.generatedCard}>
@@ -165,9 +159,6 @@ const styles = StyleSheet.create({
   backButton: { width: 42, height: 42, borderRadius: 21, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center' },
   title: { color: '#2C2418', fontSize: 24, fontWeight: '900' },
   listContent: { paddingBottom: 32 },
-  resultsHeader: { marginBottom: 12 },
-  subtitle: { color: '#2C2418', fontSize: 18, fontWeight: '900' },
-  helperText: { marginTop: 4, color: '#6B5D4E', fontSize: 13, lineHeight: 19 },
   resultCard: {
     flexDirection: 'row',
     alignItems: 'center',

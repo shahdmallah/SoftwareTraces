@@ -99,6 +99,10 @@ export type SocialProfile = {
   avatar_url: string | null;
 };
 
+export type FriendSuggestion = SocialProfile & {
+  mutual_following_count: number;
+};
+
 export type ReviewComment = {
   id: string;
   content: string;
@@ -141,12 +145,37 @@ export async function getFollowing(userId: string, params: { page?: number; limi
   return apiRequest<PaginatedList<SocialProfile>>(`/api/social/users/${userId}/following`, {}, params);
 }
 
+export async function getFriends(userId: string, params: { page?: number; limit?: number } = {}) {
+  return apiRequest<PaginatedList<SocialProfile>>(`/api/social/users/${userId}/friends`, {}, params);
+}
+
+export async function getMyFriends(params: { page?: number; limit?: number } = {}) {
+  return apiRequest<PaginatedList<SocialProfile>>('/api/social/users/me/friends', {}, params);
+}
+
+export async function getFriendSuggestions(params: { page?: number; limit?: number } = {}) {
+  return apiRequest<{
+    count: number;
+    data: FriendSuggestion[];
+    pagination: { page: number; limit: number; total?: number; pages?: number };
+  }>('/api/social/users/me/friend-suggestions', {}, params);
+}
+
+export async function getFriendCount(userId: string) {
+  const response = await apiRequest<{ count: number }>(`/api/social/users/${userId}/friends/count`);
+  return response.count;
+}
+
 export async function followUser(userId: string) {
   return apiRequest<{ message: string }>(`/api/social/users/${userId}/follow`, { method: 'POST' });
 }
 
 export async function unfollowUser(userId: string) {
   return apiRequest<{ message: string }>(`/api/social/users/${userId}/follow`, { method: 'DELETE' });
+}
+
+export async function removeFriend(userId: string) {
+  return apiRequest<{ message: string; deleted: number }>(`/api/social/users/${userId}/friend`, { method: 'DELETE' });
 }
 
 export async function likeReview(reviewId: string) {

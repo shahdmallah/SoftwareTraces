@@ -39,11 +39,20 @@ const fallbackShareOptions = [
   {
     id: 'photo' as const,
     icon: 'images-outline' as const,
-    titleEn: 'Share a trail moment',
+    titleEn: 'Trail recap',
     titleAr: 'لحظة من المسار',
-    descriptionEn: 'Photo recap with caption — ties to your completed trails and reviews.',
+    descriptionEn: 'Choose a trail from Explore, then add photos and a caption.',
     descriptionAr: 'ملخص بالصور — مرتبط بمساراتك ومراجعاتك.',
     accent: ['#7A9A3A', '#D4A843'] as const,
+  },
+  {
+    id: 'locationMedia' as const,
+    icon: 'location-outline' as const,
+    titleEn: 'Add media here',
+    titleAr: 'أضف وسائط هنا',
+    descriptionEn: 'Upload photos linked to your current location without choosing a trail.',
+    descriptionAr: 'ارفع صوراً مرتبطة بموقعك الحالي بدون اختيار مسار.',
+    accent: ['#2F6F73', '#78A083'] as const,
   },
   {
     id: 'plan' as const,

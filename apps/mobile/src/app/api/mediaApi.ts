@@ -11,6 +11,8 @@ export type TrailPhoto = {
   is_primary?: boolean;
   created_at?: string;
   uploaded_by?: string | null;
+  user_id?: string | null;
+  uploader_id?: string | null;
   source?: 'direct' | 'review';
 };
 

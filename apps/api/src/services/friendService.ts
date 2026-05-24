@@ -8,7 +8,7 @@ export interface FriendProfile {
 
 async function resolveProfileId(userId: string): Promise<string> {
   const result = await pool.query<{ id: string }>(
-    "SELECT id FROM profiles WHERE id = $1::uuid OR user_id = $1::uuid LIMIT 1",
+    "SELECT id FROM profiles WHERE id::text = $1 OR user_id::text = $1 LIMIT 1",
     [userId]
   );
 

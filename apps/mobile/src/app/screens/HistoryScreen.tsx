@@ -9,6 +9,7 @@ import {
   Image,
   ActivityIndicator,
   Alert,
+  Share,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
@@ -18,8 +19,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLanguage } from '../contexts/LanguageContext';
 import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
 import { useAuth } from '../contexts/AuthContext';
-import { deleteActivity, getActivityById, getMyActivities, type Activity, type ActivityDetail } from '../api/activitiesApi';
+import { deleteActivity, getActivityById, getActivityGpx, getMyActivities, type Activity, type ActivityDetail } from '../api/activitiesApi';
 import { getSavedTrails, getTrailById, type Trail } from '../api/trailsApi';
+import { getProfilePhotos, getProfileReviews, type ProfilePhoto, type ProfileReview } from '../api/profilesApi';
 
 const dayNamesAr = ['أح', 'إث', 'ثل', 'أر', 'خم', 'جم', 'سب'];
 const dayNamesEn = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
@@ -35,11 +37,14 @@ export function HistoryScreen() {
   const isArabic = language === 'ar';
   const [activities, setActivities] = useState<Activity[]>([]);
   const [completedTrails, setCompletedTrails] = useState<Trail[]>([]);
+  const [profileReviews, setProfileReviews] = useState<ProfileReview[]>([]);
+  const [profilePhotos, setProfilePhotos] = useState<ProfilePhoto[]>([]);
   const [trailMap, setTrailMap] = useState<Record<string, Trail>>({});
   const [activityDetails, setActivityDetails] = useState<Record<string, ActivityDetail>>({});
   const [expandedActivityId, setExpandedActivityId] = useState<string | null>(null);
   const [loadingActivityId, setLoadingActivityId] = useState<string | null>(null);
   const [activityError, setActivityError] = useState('');
+  const [exportingActivityId, setExportingActivityId] = useState<string | null>(null);
   const [isHistoryLoading, setIsHistoryLoading] = useState(true);
   const [historyError, setHistoryError] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
@@ -50,6 +55,8 @@ export function HistoryScreen() {
     if (!user?.id) {
       setActivities([]);
       setCompletedTrails([]);
+      setProfileReviews([]);
+      setProfilePhotos([]);
       setTrailMap({});
       setIsHistoryLoading(false);
       return () => {
@@ -61,13 +68,17 @@ export function HistoryScreen() {
       setIsHistoryLoading(true);
       setHistoryError('');
       try {
-        const [userActivities, completedTrailResponse] = await Promise.all([
+        const [userActivities, completedTrailResponse, userReviews, userPhotos] = await Promise.all([
           getMyActivities({ status: 'completed', limit: 100 }),
           getSavedTrails({ type: 'completed', page: 1, limit: 100 }).catch(() => ({ items: [] })),
+          getProfileReviews(user.id, { page: 1, limit: 12 }).catch(() => [] as ProfileReview[]),
+          getProfilePhotos(user.id, { page: 1, limit: 12 }).catch(() => [] as ProfilePhoto[]),
         ]);
         if (cancelled) return;
         setActivities(userActivities);
         setCompletedTrails(completedTrailResponse.items.map((item) => item.trail));
+        setProfileReviews(userReviews);
+        setProfilePhotos(userPhotos);
 
         const trailIds = Array.from(
           new Set(
@@ -97,6 +108,8 @@ export function HistoryScreen() {
         if (!cancelled) {
           setActivities([]);
           setCompletedTrails([]);
+          setProfileReviews([]);
+          setProfilePhotos([]);
           setTrailMap({});
           setHistoryError(error instanceof Error ? error.message : 'Unable to load your activity history.');
         }
@@ -148,6 +161,36 @@ export function HistoryScreen() {
     return sum + (ended - started) / 3600000;
   }, 0);
 
+  const sharedHistoryItems = useMemo(() => {
+    const reviewItems = profileReviews.map((review) => ({
+      id: `review-${review.id}`,
+      type: 'review' as const,
+      trailId: review.trail.id,
+      trailName: review.trail.name,
+      title: isArabic ? 'مراجعة' : 'Review',
+      body: review.content,
+      image: review.photo_url || review.photos?.[0]?.url || review.trail.image || '',
+      createdAt: review.created_at,
+      meta: `${Number(review.rating || 0).toFixed(1)} ★`,
+    }));
+
+    const photoItems = profilePhotos.map((photo) => ({
+      id: `photo-${photo.id}`,
+      type: 'post' as const,
+      trailId: photo.trail_id,
+      trailName: photo.trail_name || (isArabic ? 'مسار' : 'Trail'),
+      title: isArabic ? 'منشور وسائط' : 'Media post',
+      body: photo.caption?.trim() || (isArabic ? 'صورة شاركتها من رحلتك.' : 'Photo you shared from your hike.'),
+      image: photo.url,
+      createdAt: photo.created_at || '',
+      meta: photo.source === 'review' ? (isArabic ? 'من مراجعة' : 'From review') : (isArabic ? 'صورة مسار' : 'Trail photo'),
+    }));
+
+    return [...reviewItems, ...photoItems]
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      .slice(0, 8);
+  }, [isArabic, profilePhotos, profileReviews]);
+
   const handleToggleActivityDetail = async (activity: Activity) => {
     if (expandedActivityId === activity.id) {
       setExpandedActivityId(null);
@@ -196,6 +239,22 @@ export function HistoryScreen() {
     ]);
   };
 
+  const handleShareGpx = async (activity: Activity) => {
+    setExportingActivityId(activity.id);
+    try {
+      const gpx = await getActivityGpx(activity.id);
+      const trailName = trailMap[activity.trail_id ?? '']?.name ?? activity.trail_name ?? 'Trail activity';
+      await Share.share({
+        title: `${trailName} GPX`,
+        message: gpx,
+      });
+    } catch (error) {
+      Alert.alert('Unable to export GPX', error instanceof Error ? error.message : 'Please try again.');
+    } finally {
+      setExportingActivityId(null);
+    }
+  };
+
   const now = new Date();
   const monthLabel = new Intl.DateTimeFormat(isArabic ? 'ar' : 'en-US', { month: 'long', year: 'numeric' }).format(now);
 
@@ -206,7 +265,6 @@ export function HistoryScreen() {
         <View style={styles.headerTopRow}>
           <View style={styles.headerCopy}>
             <Text style={styles.title}>{t('historyTitle')}</Text>
-            <Text style={styles.subtitle}>{t('historySubtitle')}</Text>
           </View>
           <Pressable style={styles.refreshButton} onPress={() => setRefreshKey((value) => value + 1)}>
             <Ionicons name="refresh" size={18} color="#FFF8EA" />
@@ -280,14 +338,66 @@ export function HistoryScreen() {
                 <Text style={styles.retryButtonText}>Retry</Text>
               </Pressable>
             </View>
-          ) : completedActivities.length === 0 ? (
+          ) : completedActivities.length === 0 && sharedHistoryItems.length === 0 ? (
             <View style={styles.emptyState}>
               <Ionicons name="trail-sign-outline" size={48} color="#C9B89A" />
               <Text style={styles.emptyStateText}>No completed hikes yet</Text>
             </View>
           ) : (
-            completedActivities.map((hike, index) => (
-              <AnimatedBlock key={hike.id} delay={160 + index * 40}>
+            <>
+              {sharedHistoryItems.length ? (
+                <AnimatedBlock delay={140}>
+                  <View style={styles.sharedSection}>
+                    <View style={styles.sharedHeader}>
+                      <View>
+                        <Text style={styles.sharedTitle}>{isArabic ? 'منشوراتك ومراجعاتك' : 'Posts & reviews'}</Text>
+                        <Text style={styles.sharedSubtitle}>{isArabic ? 'أحدث ما شاركته من الرحلات' : 'Recent things you shared from hikes'}</Text>
+                      </View>
+                      <Ionicons name="albums-outline" size={19} color="#630E13" />
+                    </View>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.sharedRail}>
+                      {sharedHistoryItems.map((item) => (
+                        <Pressable
+                          key={item.id}
+                          style={styles.sharedCard}
+                          onPress={() => {
+                            if (item.trailId) {
+                              navigation.navigate('TrailDetail', { trailId: item.trailId });
+                            }
+                          }}
+                        >
+                          {item.image ? (
+                            <Image source={{ uri: item.image }} style={styles.sharedImage} />
+                          ) : (
+                            <View style={[styles.sharedImage, styles.sharedImageFallback]}>
+                              <Ionicons name={item.type === 'review' ? 'star-outline' : 'image-outline'} size={22} color="#8A7A6A" />
+                            </View>
+                          )}
+                          <View style={styles.sharedBody}>
+                            <View style={styles.sharedTypeRow}>
+                              <Ionicons name={item.type === 'review' ? 'chatbox-ellipses-outline' : 'images-outline'} size={13} color="#630E13" />
+                              <Text style={styles.sharedType}>{item.title}</Text>
+                            </View>
+                            <Text style={styles.sharedTrail} numberOfLines={1}>{item.trailName}</Text>
+                            <Text style={styles.sharedText} numberOfLines={2}>{item.body}</Text>
+                            <Text style={styles.sharedMeta} numberOfLines={1}>{item.meta}</Text>
+                          </View>
+                        </Pressable>
+                      ))}
+                    </ScrollView>
+                  </View>
+                </AnimatedBlock>
+              ) : null}
+
+              {completedActivities.length === 0 ? (
+                <View style={styles.emptyInlineState}>
+                  <Ionicons name="trail-sign-outline" size={28} color="#C9B89A" />
+                  <Text style={styles.emptyStateText}>No completed hikes yet</Text>
+                </View>
+              ) : null}
+
+              {completedActivities.map((hike, index) => (
+                <AnimatedBlock key={hike.id} delay={160 + index * 40}>
                 {/* Outer card is now a column so the detail panel sits below the row */}
                 <Pressable
                   style={styles.hikeCard}
@@ -371,6 +481,18 @@ export function HistoryScreen() {
                               </Pressable>
                             ) : null}
                             <Pressable
+                              style={styles.activityActionButton}
+                              onPress={() => void handleShareGpx(hike)}
+                              disabled={exportingActivityId === hike.id}
+                            >
+                              {exportingActivityId === hike.id ? (
+                                <ActivityIndicator size="small" color="#630E13" />
+                              ) : (
+                                <Ionicons name="download-outline" size={14} color="#630E13" />
+                              )}
+                              <Text style={styles.activityActionText}>GPX</Text>
+                            </Pressable>
+                            <Pressable
                               style={[styles.activityActionButton, styles.activityDeleteButton]}
                               onPress={() => handleDeleteActivity(hike)}
                             >
@@ -385,8 +507,9 @@ export function HistoryScreen() {
                     </View>
                   )}
                 </Pressable>
-              </AnimatedBlock>
-            ))
+                </AnimatedBlock>
+              ))}
+            </>
           )
         ) : (
           /* ── Calendar tab ── */
@@ -598,6 +721,94 @@ const styles = StyleSheet.create({
   },
 
   // ── List: hike card ──────────────────────────────────────
+  emptyInlineState: {
+    alignItems: 'center',
+    paddingVertical: 24,
+    gap: 8,
+  },
+  sharedSection: {
+    marginBottom: 18,
+    borderRadius: 22,
+    padding: 14,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#EEE5DA',
+    shadowColor: '#000',
+    shadowOpacity: 0.05,
+    shadowOffset: { width: 0, height: 4 },
+    shadowRadius: 10,
+    elevation: 2,
+  },
+  sharedHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  sharedTitle: {
+    color: '#2C2418',
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  sharedSubtitle: {
+    marginTop: 3,
+    color: '#8A7A6A',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  sharedRail: {
+    gap: 10,
+    paddingTop: 12,
+    paddingRight: 4,
+  },
+  sharedCard: {
+    width: 210,
+    overflow: 'hidden',
+    borderRadius: 18,
+    backgroundColor: '#F6F0E0',
+    borderWidth: 1,
+    borderColor: '#E7D8C3',
+  },
+  sharedImage: {
+    width: '100%',
+    height: 112,
+    backgroundColor: '#E7D8C3',
+  },
+  sharedImageFallback: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sharedBody: {
+    padding: 12,
+  },
+  sharedTypeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  sharedType: {
+    color: '#630E13',
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  sharedTrail: {
+    marginTop: 7,
+    color: '#2C2418',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  sharedText: {
+    marginTop: 5,
+    color: '#4A4131',
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  sharedMeta: {
+    marginTop: 8,
+    color: '#8A7A6A',
+    fontSize: 11,
+    fontWeight: '800',
+  },
   hikeCard: {
     flexDirection: 'column', // column so detail panel sits below the row
     marginBottom: 16,
@@ -718,6 +929,7 @@ const styles = StyleSheet.create({
   },
   activityActionRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 8,
     marginTop: 10,
   },

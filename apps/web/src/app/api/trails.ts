@@ -150,7 +150,19 @@ export async function getTrailStats(coordinates: [number, number][]) {
   return response.data;
 }
 
-export async function createTrail(payload: { name: string; description?: string; coordinates: [number, number][]; stats: unknown }) {
+export async function createTrail(payload: {
+  name: string;
+  nameAr?: string;
+  description?: string;
+  descriptionAr?: string;
+  region?: string;
+  regionAr?: string;
+  features?: string[];
+  featuresAr?: string[];
+  tags?: string[];
+  coordinates: [number, number][];
+  stats: unknown;
+}) {
   const response = await apiRequest<Envelope<Trail>>('/api/trails', {
     method: 'POST',
     body: JSON.stringify(payload),

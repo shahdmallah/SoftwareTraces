@@ -1,12 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
-import { getFollowers, getFollowing, type SocialProfile } from '../api/socialApi';
+import { followUser, getFriendSuggestions, getMyFriends, type FriendSuggestion, type SocialProfile } from '../api/socialApi';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { RootStackParamList } from '../navigation/types';
@@ -22,6 +22,9 @@ export function ActivityMessagesScreen() {
   const isArabic = language === 'ar';
   const [searchQuery, setSearchQuery] = useState('');
   const [contacts, setContacts] = useState<SocialProfile[]>([]);
+  const [suggestions, setSuggestions] = useState<FriendSuggestion[]>([]);
+  const [isLoadingContacts, setIsLoadingContacts] = useState(true);
+  const [pendingSuggestionId, setPendingSuggestionId] = useState<string | null>(null);
 
   const normalizedQuery = searchQuery.trim().toLowerCase();
 
@@ -30,25 +33,32 @@ export function ActivityMessagesScreen() {
 
     if (!user?.id) {
       setContacts([]);
+      setSuggestions([]);
+      setIsLoadingContacts(false);
       return () => {
         cancelled = true;
       };
     }
 
     const loadContacts = async () => {
+      setIsLoadingContacts(true);
       try {
-        const [followingResponse, followersResponse] = await Promise.all([
-          getFollowing(user.id, { page: 1, limit: 40 }).catch(() => ({ data: [] as SocialProfile[] })),
-          getFollowers(user.id, { page: 1, limit: 40 }).catch(() => ({ data: [] as SocialProfile[] })),
+        const [friendsResponse, suggestionsResponse] = await Promise.all([
+          getMyFriends({ page: 1, limit: 40 }).catch(() => ({ data: [] as SocialProfile[] })),
+          getFriendSuggestions({ page: 1, limit: 12 }).catch(() => ({ data: [] as FriendSuggestion[] })),
         ]);
         if (!cancelled) {
-          const merged = [...followingResponse.data, ...followersResponse.data];
-          const unique = Array.from(new Map(merged.map((profile) => [profile.id, profile])).values());
-          setContacts(unique);
+          setContacts(friendsResponse.data);
+          setSuggestions(suggestionsResponse.data);
         }
       } catch {
         if (!cancelled) {
           setContacts([]);
+          setSuggestions([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoadingContacts(false);
         }
       }
     };
@@ -63,11 +73,32 @@ export function ActivityMessagesScreen() {
   const filteredFriends = useMemo(() => {
     if (!normalizedQuery) return contacts;
     return contacts.filter((friend) => [friend.full_name].some((value) => value.toLowerCase().includes(normalizedQuery)));
-  }, [normalizedQuery]);
+  }, [contacts, normalizedQuery]);
+
+  const filteredSuggestions = useMemo(() => {
+    if (!normalizedQuery) return suggestions;
+    return suggestions.filter((friend) => friend.full_name.toLowerCase().includes(normalizedQuery));
+  }, [normalizedQuery, suggestions]);
 
   const filteredThreads = useMemo(() => {
     return filteredFriends;
   }, [filteredFriends]);
+
+  const handleFollowSuggestion = async (friend: FriendSuggestion) => {
+    if (pendingSuggestionId) {
+      return;
+    }
+
+    setPendingSuggestionId(friend.id);
+    try {
+      await followUser(friend.id);
+      setSuggestions((current) => current.filter((item) => item.id !== friend.id));
+    } catch {
+      // Keep the suggestion in place so the user can try again.
+    } finally {
+      setPendingSuggestionId(null);
+    }
+  };
 
   return (
     <AnimatedScreen style={styles.container}>
@@ -87,9 +118,6 @@ export function ActivityMessagesScreen() {
               </Pressable>
               <View>
                 <Text style={[styles.title, isArabic ? rtlText : ltrText]}>{isArabic ? 'الرسائل' : 'Messages'}</Text>
-                <Text style={[styles.subtitle, isArabic ? rtlText : ltrText]}>
-                  {isArabic ? 'راسل أصدقاءك ورتب للرحلات القادمة' : 'Message friends and plan your next hikes'}
-                </Text>
               </View>
             </View>
           </View>
@@ -124,7 +152,14 @@ export function ActivityMessagesScreen() {
             showsHorizontalScrollIndicator={false}
             contentContainerStyle={[styles.friendsRow, isArabic && styles.friendsRowRtl]}
           >
-            {filteredFriends.map((friend) => (
+            {isLoadingContacts ? (
+              <View style={styles.inlineStateCard}>
+                <ActivityIndicator color="#630E13" />
+                <Text style={[styles.inlineStateText, isArabic ? rtlText : ltrText]}>
+                  {isArabic ? 'Loading...' : 'Loading friends...'}
+                </Text>
+              </View>
+            ) : filteredFriends.length ? filteredFriends.map((friend) => (
               <View key={friend.id} style={styles.friendCard}>
                 <Image source={{ uri: friend.avatar_url ?? '' }} style={styles.friendAvatar} />
                 <Text numberOfLines={1} style={[styles.friendName, isArabic ? rtlText : ltrText]}>{friend.full_name}</Text>
@@ -137,16 +172,62 @@ export function ActivityMessagesScreen() {
                   <Text style={styles.messageButtonText}>{isArabic ? 'مراسلة' : 'Message'}</Text>
                 </Pressable>
               </View>
-            ))}
+            )) : (
+              <View style={styles.inlineStateCard}>
+                <Ionicons name="people-outline" size={24} color="#8A7A6A" />
+                <Text style={[styles.inlineStateText, isArabic ? rtlText : ltrText]}>
+                  {isArabic ? 'No mutual friends yet.' : 'No mutual friends yet.'}
+                </Text>
+              </View>
+            )}
           </ScrollView>
         </AnimatedBlock>
+
+        {filteredSuggestions.length ? (
+          <AnimatedBlock delay={125}>
+            <View style={[styles.sectionRow, isArabic ? rtlRow : ltrRow]}>
+              <Text style={[styles.sectionTitle, isArabic ? rtlText : ltrText]}>{isArabic ? 'Suggestions' : 'Suggested hikers'}</Text>
+            </View>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={[styles.friendsRow, isArabic && styles.friendsRowRtl]}
+            >
+              {filteredSuggestions.map((friend) => (
+                <View key={friend.id} style={styles.suggestionCard}>
+                  <Image source={{ uri: friend.avatar_url ?? '' }} style={styles.friendAvatar} />
+                  <Text numberOfLines={1} style={[styles.friendName, isArabic ? rtlText : ltrText]}>{friend.full_name}</Text>
+                  <Text numberOfLines={2} style={[styles.friendStatus, isArabic ? rtlText : ltrText]}>
+                    {friend.mutual_following_count > 0
+                      ? `${friend.mutual_following_count} mutual follows`
+                      : 'Recommended for your trail network'}
+                  </Text>
+                  <Pressable
+                    style={styles.followSuggestionButton}
+                    onPress={() => void handleFollowSuggestion(friend)}
+                    disabled={pendingSuggestionId === friend.id}
+                  >
+                    {pendingSuggestionId === friend.id ? (
+                      <ActivityIndicator size="small" color="#630E13" />
+                    ) : (
+                      <>
+                        <Ionicons name="person-add-outline" size={14} color="#630E13" />
+                        <Text style={styles.followSuggestionText}>{isArabic ? 'Follow' : 'Follow'}</Text>
+                      </>
+                    )}
+                  </Pressable>
+                </View>
+              ))}
+            </ScrollView>
+          </AnimatedBlock>
+        ) : null}
 
         <AnimatedBlock delay={140}>
           <View style={styles.messagesCard}>
             <View style={[styles.sectionRow, isArabic ? rtlRow : ltrRow]}>
               <Text style={[styles.sectionTitle, isArabic ? rtlText : ltrText]}>{isArabic ? 'آخر المحادثات' : 'Recent chats'}</Text>
             </View>
-            {filteredThreads.map((thread, index) => (
+            {filteredThreads.length ? filteredThreads.map((thread, index) => (
               <Pressable
                 key={thread.id}
                 style={[styles.threadRow, isArabic ? rtlRow : ltrRow, index === 0 && styles.threadRowFirst]}
@@ -163,7 +244,14 @@ export function ActivityMessagesScreen() {
                   </Text>
                 </View>
               </Pressable>
-            ))}
+            )) : (
+              <View style={styles.emptyThreadState}>
+                <Ionicons name="chatbubble-ellipses-outline" size={24} color="#8A7A6A" />
+                <Text style={[styles.inlineStateText, isArabic ? rtlText : ltrText]}>
+                  {isArabic ? 'Mutual friends you message will appear here.' : 'Mutual friends you message will appear here.'}
+                </Text>
+              </View>
+            )}
           </View>
         </AnimatedBlock>
       </ScrollView>
@@ -253,6 +341,14 @@ const styles = StyleSheet.create({
     borderRadius: 24,
     padding: 14,
   },
+  suggestionCard: {
+    width: 176,
+    backgroundColor: '#FFF8F1',
+    borderRadius: 24,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#E7D8C3',
+  },
   friendAvatar: {
     width: 54,
     height: 54,
@@ -291,10 +387,49 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '800',
   },
+  followSuggestionButton: {
+    marginTop: 12,
+    minHeight: 38,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    borderRadius: 14,
+    backgroundColor: '#F7EBE8',
+  },
+  followSuggestionText: {
+    color: '#630E13',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  inlineStateCard: {
+    width: 220,
+    minHeight: 150,
+    borderRadius: 22,
+    padding: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    backgroundColor: '#FFFFFF',
+  },
+  inlineStateText: {
+    color: '#6B5D4E',
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
   messagesCard: {
     backgroundColor: '#FFFFFF',
     borderRadius: 24,
     padding: 16,
+  },
+  emptyThreadState: {
+    minHeight: 120,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    paddingHorizontal: 16,
   },
   threadRow: {
     flexDirection: 'row',

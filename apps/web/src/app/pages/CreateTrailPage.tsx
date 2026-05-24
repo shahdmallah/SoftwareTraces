@@ -3,6 +3,7 @@ import { ArrowLeft, Save, Send, MapPin, Image as ImageIcon, RotateCcw } from 'lu
 import { Link, useNavigate } from 'react-router';
 import { MapboxTrailMap } from '../components/MapboxTrailMap';
 import { createTrail, getTrailStats } from '../api/trails';
+import { translateTrailContentToArabic } from '../utils/translateTrailContent';
 
 export function CreateTrailPage() {
   const navigate = useNavigate();
@@ -29,9 +30,15 @@ export function CreateTrailPage() {
     setErrorMessage('');
     try {
       const stats = await getTrailStats(routePoints);
+      const translatedTrail = await translateTrailContentToArabic({
+        name: trailName.trim(),
+        description: description.trim() || undefined,
+      });
       const trail = await createTrail({
         name: trailName.trim(),
+        nameAr: translatedTrail.nameAr,
         description: description.trim(),
+        descriptionAr: translatedTrail.descriptionAr,
         coordinates: routePoints,
         stats,
       });

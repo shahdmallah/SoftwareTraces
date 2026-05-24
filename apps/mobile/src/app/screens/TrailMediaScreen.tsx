@@ -23,7 +23,6 @@ import { RootStackParamList } from '../navigation/types';
 import { getTrailById, getTrailElevationProfile, type ElevationProfile, type Trail } from '../api/trailsApi';
 import { deleteReviewPhoto, deleteTrailPhoto, getTrailPhotos, setPrimaryTrailPhoto, type TrailPhoto } from '../api/mediaApi';
 import { useAuth } from '../contexts/AuthContext';
-import { buildGalleryImages } from '../utils/trailUtils';
 import { theme } from '../theme';
 
 type TrailMediaScreenRouteProp = RouteProp<RootStackParamList, 'TrailMedia'>;
@@ -268,8 +267,7 @@ function buildGalleryItems(tab: MediaTab, trail: Trail | null, photos: TrailPhot
     return seasonItems;
   }
 
-  const sourceImages = images.length ? images : trail?.image ? [trail.image] : [];
-  return sourceImages.map((imageUri, index) => ({
+  return images.map((imageUri, index) => ({
     id: `${tab}-${index}`,
     imageUri,
     label: formatPhotoDate(photosWithUrls[index]?.created_at),
@@ -281,7 +279,7 @@ export function TrailMediaScreen() {
   const navigation = useNavigation<TrailMediaNavigationProp>();
   const route = useRoute<TrailMediaScreenRouteProp>();
   const insets = useSafeAreaInsets();
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, user } = useAuth();
   const { trailId } = route.params;
   const [trail, setTrail] = useState<Trail | null>(null);
   const [trailPhotos, setTrailPhotos] = useState<TrailPhoto[]>([]);
@@ -404,6 +402,19 @@ export function TrailMediaScreen() {
     ]);
   }, [isAuthenticated, navigation, refreshTrailPhotos]);
 
+  const canManagePhoto = useCallback((photo: TrailPhoto) => {
+    if (!user?.id) {
+      return false;
+    }
+
+    const ownerId = photo.user_id ?? photo.uploader_id;
+    if (ownerId) {
+      return ownerId === user.id;
+    }
+
+    return Boolean(user.full_name && photo.uploaded_by && photo.uploaded_by.trim() === user.full_name.trim());
+  }, [user?.full_name, user?.id]);
+
   useEffect(() => {
     setTourProgress(0);
     setTourPlaying(false);
@@ -463,24 +474,12 @@ export function TrailMediaScreen() {
 
   const galleryImages = useMemo(() => {
     const endpointImages = trailPhotos.map((photo) => photo.url).filter(Boolean);
-
-    if (endpointImages.length) {
-      return endpointImages;
-    }
-
-    if (!trail) {
-      return [];
-    }
-
-    return buildGalleryImages(trail.images, trail.image);
-  }, [trail, trailPhotos]);
+    return endpointImages.filter((imageUri, index, collection): imageUri is string => Boolean(imageUri) && collection.indexOf(imageUri) === index);
+  }, [trailPhotos]);
 
   const tourGallery = useMemo(() => {
-    if (galleryImages.length) {
-      return galleryImages;
-    }
-    return trail?.image ? [trail.image] : [];
-  }, [galleryImages, trail?.image]);
+    return galleryImages;
+  }, [galleryImages]);
 
   const tourPhotoIndex = useMemo(() => {
     if (tourGallery.length <= 1) {
@@ -529,7 +528,8 @@ export function TrailMediaScreen() {
   );
   const isTour = activeTab === 'tour';
   const activeColor = theme.colors.buttonPrimary;
-  const tourHeroUri = tourGallery[tourPhotoIndex] ?? trail?.image ?? '';
+  const tourHeroUri = tourGallery[tourPhotoIndex] ?? '';
+  const hasPhotos = galleryImages.length > 0;
 
   if (isLoading) {
     return (
@@ -568,17 +568,27 @@ export function TrailMediaScreen() {
 
       {isTour ? (
         <View style={styles.tourScreen}>
-          <Animated.View style={[styles.tourHeroImage, { opacity: imageFade }]}>
-            <Image source={{ uri: tourHeroUri }} style={styles.tourHeroBackdrop} resizeMode="cover" />
-            <Image source={{ uri: tourHeroUri }} style={styles.tourHeroPhoto} resizeMode="contain" />
-          </Animated.View>
+          {hasPhotos && tourHeroUri ? (
+            <Animated.View style={[styles.tourHeroImage, { opacity: imageFade }]}>
+              <Image source={{ uri: tourHeroUri }} style={styles.tourHeroBackdrop} resizeMode="cover" />
+              <Image source={{ uri: tourHeroUri }} style={styles.tourHeroPhoto} resizeMode="contain" />
+            </Animated.View>
+          ) : (
+            <View style={styles.noPhotosTourState}>
+              <Ionicons name="images-outline" size={44} color="#8A7A6A" />
+              <Text style={styles.noPhotosTitle}>No photos yet</Text>
+              <Text style={styles.noPhotosText}>This trail does not have uploaded media.</Text>
+            </View>
+          )}
           <View style={styles.tourOverlay} />
 
-          <View style={[styles.tourPhotoBadge, { top: Math.max(insets.top + 72, 96) }]}>
-            <Text style={styles.tourPhotoBadgeText}>
-              {`${tourPhotoIndex + 1} / ${Math.max(1, tourGallery.length)}`}
-            </Text>
-          </View>
+          {hasPhotos ? (
+            <View style={[styles.tourPhotoBadge, { top: Math.max(insets.top + 72, 96) }]}>
+              <Text style={styles.tourPhotoBadgeText}>
+                {`${tourPhotoIndex + 1} / ${tourGallery.length}`}
+              </Text>
+            </View>
+          ) : null}
 
           <View style={[styles.tourPanelWrap, { bottom: Math.max(insets.bottom + 96, 108) }]}>
             <BlurView intensity={85} tint="light" style={styles.tourPanel}>
@@ -701,44 +711,52 @@ export function TrailMediaScreen() {
               { paddingTop: 18, paddingBottom: Math.max(insets.bottom + 120, 160) },
             ]}
           >
-            <View style={styles.galleryGrid}>
-              {galleryItems.map((item) => (
-                <View key={item.id} style={[styles.galleryCard, { height: item.height }]}>
-                  <Image source={{ uri: item.imageUri }} style={styles.galleryImage} resizeMode="cover" />
-                  <View style={styles.galleryGradient} />
-                  <Text style={styles.galleryLabel}>{item.label}</Text>
-                  {item.photo ? (
-                    <View style={styles.photoActions}>
-                      {item.photo.source === 'direct' ? (
+            {galleryItems.length ? (
+              <View style={styles.galleryGrid}>
+                {galleryItems.map((item) => (
+                  <View key={item.id} style={[styles.galleryCard, { height: item.height }]}>
+                    <Image source={{ uri: item.imageUri }} style={styles.galleryImage} resizeMode="cover" />
+                    <View style={styles.galleryGradient} />
+                    <Text style={styles.galleryLabel}>{item.label}</Text>
+                    {item.photo && canManagePhoto(item.photo) ? (
+                      <View style={styles.photoActions}>
+                        {item.photo.source === 'direct' ? (
+                          <Pressable
+                            style={[styles.photoActionButton, item.photo.is_primary && styles.photoActionButtonActive]}
+                            disabled={item.photo.is_primary || pendingPhotoAction === `primary-${item.photo.id}`}
+                            onPress={() => void handleSetPrimaryPhoto(item.photo!)}
+                          >
+                            {pendingPhotoAction === `primary-${item.photo.id}` ? (
+                              <ActivityIndicator size="small" color="#fff" />
+                            ) : (
+                              <Ionicons name={item.photo.is_primary ? 'star' : 'star-outline'} size={17} color="#fff" />
+                            )}
+                          </Pressable>
+                        ) : null}
+
                         <Pressable
-                          style={[styles.photoActionButton, item.photo.is_primary && styles.photoActionButtonActive]}
-                          disabled={item.photo.is_primary || pendingPhotoAction === `primary-${item.photo.id}`}
-                          onPress={() => void handleSetPrimaryPhoto(item.photo!)}
+                          style={styles.photoActionButton}
+                          disabled={pendingPhotoAction === `delete-${item.photo.id}`}
+                          onPress={() => handleDeletePhoto(item.photo!)}
                         >
-                          {pendingPhotoAction === `primary-${item.photo.id}` ? (
+                          {pendingPhotoAction === `delete-${item.photo.id}` ? (
                             <ActivityIndicator size="small" color="#fff" />
                           ) : (
-                            <Ionicons name={item.photo.is_primary ? 'star' : 'star-outline'} size={17} color="#fff" />
+                            <Ionicons name="trash-outline" size={17} color="#fff" />
                           )}
                         </Pressable>
-                      ) : null}
-
-                      <Pressable
-                        style={styles.photoActionButton}
-                        disabled={pendingPhotoAction === `delete-${item.photo.id}`}
-                        onPress={() => handleDeletePhoto(item.photo!)}
-                      >
-                        {pendingPhotoAction === `delete-${item.photo.id}` ? (
-                          <ActivityIndicator size="small" color="#fff" />
-                        ) : (
-                          <Ionicons name="trash-outline" size={17} color="#fff" />
-                        )}
-                      </Pressable>
-                    </View>
-                  ) : null}
-                </View>
-              ))}
-            </View>
+                      </View>
+                    ) : null}
+                  </View>
+                ))}
+              </View>
+            ) : (
+              <View style={styles.noPhotosState}>
+                <Ionicons name="images-outline" size={42} color="#8A7A6A" />
+                <Text style={styles.noPhotosTitle}>No photos yet</Text>
+                <Text style={styles.noPhotosText}>This trail does not have uploaded media.</Text>
+              </View>
+            )}
           </ScrollView>
 
           <View style={[styles.floatingTabsWrap, { bottom: Math.max(insets.bottom, 12) }]}>
@@ -824,6 +842,32 @@ const styles = StyleSheet.create({
     lineHeight: 28,
     fontWeight: '700',
     letterSpacing: -0.6,
+  },
+  noPhotosState: {
+    minHeight: 420,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 28,
+    gap: 10,
+  },
+  noPhotosTourState: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 28,
+    backgroundColor: '#F7F7F4',
+    gap: 10,
+  },
+  noPhotosTitle: {
+    color: theme.colors.textPrimary,
+    fontSize: 20,
+    fontWeight: '800',
+  },
+  noPhotosText: {
+    color: '#6B5D4E',
+    fontSize: 14,
+    lineHeight: 20,
+    textAlign: 'center',
   },
   photoActions: {
     position: 'absolute',

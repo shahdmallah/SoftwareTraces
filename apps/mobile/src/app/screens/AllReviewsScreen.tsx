@@ -1,13 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 
-import { getTrailReviews, type TrailReview } from '../api/trailsApi';
+import { deleteTrailReview, getTrailReviews, type TrailReview } from '../api/trailsApi';
 import { getProfile, type Profile } from '../api/profilesApi';
 import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
 import { ReviewPhotoStrip } from '../components/ReviewPhotoStrip';
+import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { RootStackParamList } from '../navigation/types';
 import { ltrRow, ltrText, rtlRow, rtlText } from '../utils/direction';
@@ -76,10 +77,12 @@ export function AllReviewsScreen() {
   const route = useRoute<AllReviewsRouteProp>();
   const navigation = useNavigation<AllReviewsNavigationProp>();
   const { language } = useLanguage();
+  const { isAuthenticated, user } = useAuth();
   const isArabic = language === 'ar';
   const { trailId, trailName } = route.params;
   const [reviews, setReviews] = useState<TrailReview[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState('');
 
   useEffect(() => {
@@ -119,6 +122,32 @@ export function AllReviewsScreen() {
     return (total / reviews.length).toFixed(1);
   }, [reviews]);
 
+  const handleDeleteReview = (review: TrailReview) => {
+    if (!isAuthenticated) {
+      navigation.navigate('Auth', { mode: 'signin' });
+      return;
+    }
+
+    Alert.alert(isArabic ? 'حذف المراجعة؟' : 'Delete review?', isArabic ? 'سيتم حذف مراجعتك وصورها.' : 'This removes your review and its photos.', [
+      { text: isArabic ? 'إلغاء' : 'Cancel', style: 'cancel' },
+      {
+        text: isArabic ? 'حذف' : 'Delete',
+        style: 'destructive',
+        onPress: async () => {
+          setPendingDeleteId(review.id);
+          try {
+            await deleteTrailReview(review.id);
+            setReviews((current) => current.filter((item) => item.id !== review.id));
+          } catch (error) {
+            Alert.alert(isArabic ? 'تعذر حذف المراجعة' : 'Unable to delete review', error instanceof Error ? error.message : 'Please try again.');
+          } finally {
+            setPendingDeleteId(null);
+          }
+        },
+      },
+    ]);
+  };
+
   return (
     <AnimatedScreen style={styles.container}>
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
@@ -129,9 +158,6 @@ export function AllReviewsScreen() {
             </Pressable>
             <View style={styles.headerCopy}>
               <Text style={[styles.title, isArabic ? rtlText : ltrText]}>{isArabic ? 'كل المراجعات' : 'All Reviews'}</Text>
-              <Text style={[styles.subtitle, isArabic ? rtlText : ltrText]} numberOfLines={1}>
-                {trailName}
-              </Text>
             </View>
           </View>
         </AnimatedBlock>
@@ -162,6 +188,7 @@ export function AllReviewsScreen() {
           reviews.map((review, index) => {
             const reviewerName = getReviewerName(review, isArabic);
             const reviewerAvatar = getReviewerAvatar(review);
+            const canDeleteReview = Boolean(user?.id && review.user_id === user.id) || review.user_id === 'me';
 
             return (
             <AnimatedBlock key={review.id} delay={120 + index * 35}>
@@ -182,9 +209,24 @@ export function AllReviewsScreen() {
                       </Text>
                     </View>
                   </View>
-                  <Text style={styles.reviewRating}>
-                    {formatRating(review.rating)} <Ionicons name="star" size={12} color="#D4A843" />
-                  </Text>
+                  <View style={[styles.reviewHeaderActions, isArabic ? rtlRow : ltrRow]}>
+                    <Text style={styles.reviewRating}>
+                      {formatRating(review.rating)} <Ionicons name="star" size={12} color="#D4A843" />
+                    </Text>
+                    {canDeleteReview ? (
+                      <Pressable
+                        style={styles.deleteReviewButton}
+                        disabled={pendingDeleteId === review.id}
+                        onPress={() => handleDeleteReview(review)}
+                      >
+                        {pendingDeleteId === review.id ? (
+                          <ActivityIndicator size="small" color="#8B1E1E" />
+                        ) : (
+                          <Ionicons name="trash-outline" size={15} color="#8B1E1E" />
+                        )}
+                      </Pressable>
+                    ) : null}
+                  </View>
                 </View>
                 <Text style={[styles.reviewContent, isArabic ? rtlText : ltrText]}>{review.content}</Text>
                 <View style={styles.reviewPhotos}>
@@ -322,6 +364,19 @@ const styles = StyleSheet.create({
     color: '#8A7A6A',
     fontSize: 11,
     fontWeight: '900',
+  },
+  reviewHeaderActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  deleteReviewButton: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F7EBE8',
   },
   reviewContent: {
     color: '#4A4131',

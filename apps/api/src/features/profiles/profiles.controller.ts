@@ -93,7 +93,7 @@ async function getProfileByUserId(userId: string): Promise<ProfileRow> {
        bio,
        location
      FROM profiles
-     WHERE user_id = $1 OR id::text = $1
+     WHERE user_id::text = $1 OR id::text = $1
      LIMIT 1`,
     [userId]
   );
@@ -136,7 +136,7 @@ export async function getProfile(req: Request, res: Response): Promise<void> {
               AND f2.following_id = f1.follower_id
              WHERE f1.follower_id = $1
            ) AS total_friends`,
-        [profile.id]
+        [profile.user_id]
       ),
       pool.query<ProfileReviewRow>(
         `SELECT

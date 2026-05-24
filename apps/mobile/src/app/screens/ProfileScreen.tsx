@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -10,7 +10,7 @@ import {
   Image,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { RootStackParamList } from '../navigation/types';
 import { useLanguage, TranslationKey } from '../contexts/LanguageContext';
@@ -31,14 +31,14 @@ type SettingItem = {
 };
 
 type ProfileLinkItem = {
-  id: 'myTrails' | 'trailDrafts' | 'offlineDownloads' | 'history' | 'journal';
+  id: 'myTrails' | 'trailDrafts' | 'offlineDownloads' | 'ongoingActivities' | 'history' | 'journal';
   icon: string;
   labelKey?: TranslationKey;
   labelEn?: string;
   labelAr?: string;
   subtitleEn: string;
   subtitleAr: string;
-  route: 'MyTrails' | 'TrailDrafts' | 'OfflineDownloads' | 'History' | 'Journal';
+  route: 'MyTrails' | 'TrailDrafts' | 'OfflineDownloads' | 'OngoingActivities' | 'History' | 'Journal';
 };
 
 const settings: SettingItem[] = [
@@ -72,6 +72,15 @@ const profileLinks: ProfileLinkItem[] = [
     subtitleEn: 'Maps and sync tools for low-signal hikes',
     subtitleAr: 'خرائط ومزامنة للرحلات دون اتصال قوي',
     route: 'OfflineDownloads',
+  },
+  {
+    id: 'ongoingActivities',
+    icon: 'radio-outline',
+    labelEn: 'Ongoing activities',
+    labelAr: 'الأنشطة الجارية',
+    subtitleEn: 'Resume or close active trail recordings',
+    subtitleAr: 'تابع أو أغلق تسجيلات المسارات المفتوحة',
+    route: 'OngoingActivities',
   },
   {
     id: 'history',
@@ -126,86 +135,115 @@ export function ProfileScreen() {
   const [activities, setActivities] = useState<Activity[]>([]);
   const [completedTrails, setCompletedTrails] = useState<Trail[]>([]);
 
-  useEffect(() => {
-    let cancelled = false;
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
 
-    if (!user?.id) {
-      setAchievements([]);
-      setActivities([]);
-      setCompletedTrails([]);
+      if (!user?.id) {
+        setProfile(null);
+        setProfileReviews([]);
+        setProfilePhotos([]);
+        setAchievements([]);
+        setActivities([]);
+        setCompletedTrails([]);
+        setProfileError('');
+        setIsProfileLoading(false);
+        return () => {
+          cancelled = true;
+        };
+      }
+
+      const loadProfileData = async () => {
+        setIsProfileLoading(true);
+        setProfileError('');
+
+        const fallbackStats = {
+          total_reviews: 0,
+          total_photos: 0,
+          total_likes_received: 0,
+          total_followers: 0,
+          total_following: 0,
+        };
+        const fallbackProfile: Profile = {
+          id: user.id,
+          user_id: user.id,
+          full_name: user.full_name || user.email,
+          avatar_url: user.avatar_url ?? null,
+          bio: user.bio ?? null,
+          location: user.location ?? null,
+          stats: fallbackStats,
+        };
+
+        try {
+          const [userAchievements, userActivities, completedTrailResponse, loadedProfile] = await Promise.all([
+            getUserAchievements(user.id).catch(() => [] as UserAchievement[]),
+            getMyActivities({ page: 1, limit: 50 }).catch(() => [] as Activity[]),
+            getSavedTrails({ type: 'completed', page: 1, limit: 100 }).catch(() => ({ items: [] })),
+            getProfile(user.id),
+          ]);
+
+          const nextProfile: Profile = {
+            ...fallbackProfile,
+            ...(loadedProfile ?? {}),
+            full_name: loadedProfile?.full_name || fallbackProfile.full_name,
+            avatar_url: loadedProfile?.avatar_url ?? fallbackProfile.avatar_url,
+            bio: loadedProfile?.bio ?? fallbackProfile.bio,
+            location: loadedProfile?.location ?? fallbackProfile.location,
+            stats: {
+              ...fallbackStats,
+              ...(loadedProfile?.stats ?? {}),
+            },
+          };
+          const profileLookupId = nextProfile.user_id || nextProfile.id || user.id;
+          const [loadedReviews, loadedPhotos] = await Promise.all([
+            getProfileReviews(profileLookupId, { page: 1, limit: 20 }).catch(() => nextProfile.recent_reviews ?? []),
+            getProfilePhotos(profileLookupId, { page: 1, limit: 20 }).catch(() => nextProfile.recent_photos ?? []),
+          ]);
+          const nextReviews = loadedReviews.length ? loadedReviews : nextProfile.recent_reviews ?? [];
+          const nextPhotos = loadedPhotos.length ? loadedPhotos : nextProfile.recent_photos ?? [];
+
+          if (!cancelled) {
+            setProfile(nextProfile);
+            setProfileReviews(nextReviews);
+            setProfilePhotos(nextPhotos);
+            setAchievements(
+              userAchievements.map((achievement, index) => ({
+                id: achievement.id,
+                name: achievement.title || achievement.name || 'Achievement',
+                earned: Boolean(achievement.earned_at),
+                progress: typeof achievement.progress === 'number' ? achievement.progress : undefined,
+                points: achievement.points ?? 0,
+                emoji: achievementEmojis[index % achievementEmojis.length],
+              })),
+            );
+            setActivities(userActivities);
+            setCompletedTrails(completedTrailResponse.items.map((item) => item.trail));
+            setProfileError('');
+          }
+        } catch (error) {
+          if (!cancelled) {
+            setProfile(fallbackProfile);
+            setProfileReviews([]);
+            setProfilePhotos([]);
+            setAchievements([]);
+            setActivities([]);
+            setCompletedTrails([]);
+            setProfileError(error instanceof Error ? error.message : 'Unable to load profile data.');
+          }
+        } finally {
+          if (!cancelled) {
+            setIsProfileLoading(false);
+          }
+        }
+      };
+
+      void loadProfileData();
+
       return () => {
         cancelled = true;
       };
-    }
-
-    const loadProfileData = async () => {
-      setIsProfileLoading(true);
-      setProfileError('');
-      try {
-        const [userAchievements, userActivities, completedTrailResponse, nextProfile, nextReviews, nextPhotos] = await Promise.all([
-          getUserAchievements(user.id).catch(() => [] as UserAchievement[]),
-          getMyActivities({ page: 1, limit: 50 }).catch(() => [] as Activity[]),
-          getSavedTrails({ type: 'completed', page: 1, limit: 100 }).catch(() => ({ items: [] })),
-          getProfile(user.id).catch(() => ({
-            id: user.id,
-            user_id: user.id,
-            full_name: user.full_name || user.email,
-            avatar_url: user.avatar_url ?? null,
-            bio: user.bio ?? null,
-            location: user.location ?? null,
-            stats: {
-              total_reviews: 0,
-              total_photos: 0,
-              total_likes_received: 0,
-              total_followers: 0,
-              total_following: 0,
-            },
-          } as Profile)),
-          getProfileReviews(user.id).catch(() => [] as ProfileReview[]),
-          getProfilePhotos(user.id).catch(() => [] as ProfilePhoto[]),
-        ]);
-
-        if (!cancelled) {
-          setProfile(nextProfile);
-          setProfileReviews(nextReviews);
-          setProfilePhotos(nextPhotos);
-          setAchievements(
-            userAchievements.map((achievement, index) => ({
-              id: achievement.id,
-              name: achievement.title || achievement.name || 'Achievement',
-              earned: Boolean(achievement.earned_at),
-              progress: typeof achievement.progress === 'number' ? achievement.progress : undefined,
-              points: achievement.points ?? 0,
-              emoji: achievementEmojis[index % achievementEmojis.length],
-            })),
-          );
-          setActivities(userActivities);
-          setCompletedTrails(completedTrailResponse.items.map((item) => item.trail));
-          setProfileError('');
-        }
-      } catch (error) {
-        if (!cancelled) {
-          setProfile(null);
-          setProfileReviews([]);
-          setProfilePhotos([]);
-          setAchievements([]);
-          setActivities([]);
-          setCompletedTrails([]);
-          setProfileError(error instanceof Error ? error.message : 'Unable to load profile data.');
-        }
-      } finally {
-        if (!cancelled) {
-          setIsProfileLoading(false);
-        }
-      }
-    };
-
-    void loadProfileData();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [user?.id, user?.full_name, user?.avatar_url, user?.bio, user?.location]);
+    }, [user?.id, user?.full_name, user?.email, user?.avatar_url, user?.bio, user?.location]),
+  );
 
   const earnedCount = achievements.filter((a) => a.earned).length;
   const progress = achievements.length ? (earnedCount / achievements.length) * 100 : 0;
@@ -213,7 +251,15 @@ export function ProfileScreen() {
   const totalDistance = completedTrails.reduce((sum, trail) => sum + trail.distance, 0);
   const completedTrips = activities.filter((activity) => activity.status === 'completed').length;
   const followerCount = profile?.stats?.total_followers ?? 0;
-  const reviewCount = profile?.stats?.total_reviews ?? profileReviews.length;
+  const reviewCount = Math.max(profile?.stats?.total_reviews ?? 0, profileReviews.length);
+  const photoCount = Math.max(profile?.stats?.total_photos ?? 0, profilePhotos.length);
+  const likesCount = Math.max(
+    profile?.stats?.total_likes_received ?? 0,
+    profileReviews.reduce((sum, review) => sum + (review.likes_count ?? 0), 0),
+  );
+  const avatarUrl = profile?.avatar_url?.trim() || user?.avatar_url?.trim() || '';
+  const bioText = profile?.bio?.trim() || user?.bio?.trim() || '';
+  const locationText = profile?.location?.trim() || user?.location?.trim() || t('profileLocation');
   const totalDurationHours = useMemo(() => {
     return activities.reduce((sum, activity) => {
       if (!activity.started_at || !activity.ended_at) return sum;
@@ -231,7 +277,6 @@ export function ProfileScreen() {
   const handleAchievementPress = (achievement: ProfileAchievement) => {
     if (achievement.earned) {
       triggerFeedback(10);
-      // Show achievement details modal
     } else {
       triggerFeedback(20);
     }
@@ -275,348 +320,366 @@ export function ProfileScreen() {
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
       >
-        {/* Profile Header with Gradient */}
-        <AnimatedBlock delay={40} style={[styles.profileHeader, { paddingTop: Math.max(insets.top + 8, 20) }]}>
-          <View style={styles.headerGradient} />
-          <View style={[styles.profileTop, isArabic && styles.rowReverse]}>
-            <View style={styles.avatarWrapper}>
-              <View style={styles.avatarGradient}>
-                {profile?.avatar_url ? (
-                  <Image source={{ uri: profile.avatar_url }} style={styles.avatarImage} />
-                ) : (
-                  <View style={styles.avatarCircle}>
-                    <Text style={styles.avatarText}>{avatarText}</Text>
-                  </View>
-                )}
-              </View>
-              <View style={styles.statusDot} />
-              <Pressable style={styles.changePhotoButton} onPress={() => navigation.navigate('EditProfile')}>
-                <Ionicons name="camera" size={12} color="white" />
-              </Pressable>
-            </View>
-            <View style={[styles.profileInfo, isArabic && styles.profileInfoRtl]}>
-              <Text style={[styles.profileEyebrow, isArabic && styles.textRight]}>{t('tabProfile')}</Text>
-              <Text style={[styles.profileName, isArabic && styles.textRight, isArabic && styles.textRtl]}>
-                {displayName}
-              </Text>
-              <Text style={[styles.profileSub, isArabic && styles.textRight, isArabic && styles.textRtl]}>
-                {user.email}
-              </Text>
-              <View style={[styles.locationRow, isArabic && styles.rowReverse]}>
-                <Ionicons name="location-outline" size={13} color="rgba(255,244,226,0.7)" />
-                <Text style={[styles.profileLocation, isArabic && styles.textRight, isArabic && styles.textRtl]}>
-                  {profile?.location || t('profileLocation')}
-                </Text>
-              </View>
-            </View>
-            <Pressable style={[styles.editButton, isArabic && styles.editButtonRtl]} onPress={() => navigation.navigate('EditProfile')}>
-              <Text style={styles.editButtonText}>{t('edit')}</Text>
-            </Pressable>
-          </View>
-          
-          {/* Enhanced Stats Cards */}
-          <View style={[styles.profileStatsRow, isArabic && styles.rowReverse]}>
-              {[
-              { value: totalDistance.toFixed(1), unit: 'km', labelKey: 'profileTotalDistance', icon: 'map-outline' },
-              { value: String(completedTrips), unit: '', labelKey: 'profileCompletedTrips', icon: 'checkmark-circle-outline' },
-              { value: String(followerCount), unit: '', labelKey: 'profileBadges', icon: 'people-outline' },
-            ].map((item, index) => (
-              <Pressable
-                key={item.labelKey}
-                onPress={item.labelKey === 'profileCompletedTrips' ? () => navigation.navigate('History') : undefined}
-                style={[
-                  styles.statCard,
-                  index < 2 && (isArabic ? styles.statCardBorderRtl : styles.statCardBorder),
-                ]}
-              >
-                <View style={styles.statIconContainer}>
-                  <Ionicons name={item.icon as any} size={20} color="#D4A843" />
-                </View>
-                <Text style={styles.statValue}>
-                  {item.value}
-                  {item.unit && <Text style={styles.statUnit}> {item.unit}</Text>}
-                </Text>
-                <Text style={[styles.statLabel, isArabic && styles.textRtl]}>
-                  {t(item.labelKey as TranslationKey)}
-                </Text>
-              </Pressable>
-            ))}
-          </View>
-        </AnimatedBlock>
+        {/* ── Hero Header ── */}
+        <AnimatedBlock delay={40}>
+          <View style={[styles.heroHeader, { paddingTop: Math.max(insets.top + 12, 24) }]}>
 
-        {/* Enhanced Achievements Section */}
-        <AnimatedBlock delay={120} style={styles.section}>
-          <View style={[styles.sectionHeader, isArabic && styles.rowReverse]}>
-            <View style={[styles.sectionTitleRow, isArabic && styles.rowReverse]}>
-              <Ionicons name="trophy" size={20} color="#D4A843" />
-              <Text style={[styles.sectionTitle, isArabic && styles.textRight, isArabic && styles.textRtl]}>
-                {t('achievementsTitle')}
-              </Text>
-            </View>
-            <View style={styles.progressContainer}>
-              <View style={styles.progressBarBackground}>
-                <View style={[styles.progressBarFill, { width: `${progress}%` }]} />
-              </View>
-              <Text style={styles.progressCount}>{earnedCount}/{achievements.length}</Text>
-            </View>
-          </View>
-
-          <ScrollView 
-            horizontal 
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.achievementsScrollContent}
-          >
-            {achievements.map((achievement, index) => (
-              <Pressable
-                key={achievement.id}
-                onPress={() => handleAchievementPress(achievement)}
-                style={({ pressed }) => ({
-                  opacity: pressed ? 0.8 : 1,
-                })}
-              >
-                <View style={[styles.achievementCard, !achievement.earned && styles.achievementCardLocked]}>
-                  <View
-                    style={[
-                      styles.achievementGradient,
-                      achievement.earned ? styles.achievementGradientEarned : styles.achievementGradientLocked,
-                    ]}
-                  >
-                    <Text style={styles.achievementEmoji}>{achievement.emoji}</Text>
-                    {achievement.earned && (
-                      <View style={styles.checkmarkBadge}>
-                        <Ionicons name="checkmark" size={10} color="#FFF" />
-                      </View>
-                    )}
-                    {!achievement.earned && (
-                      <View style={styles.lockedBadge}>
-                        <Ionicons name="lock-closed" size={12} color="#8A7A6A" />
-                      </View>
-                    )}
-                  </View>
-                  <Text style={[styles.achievementName, isArabic && styles.textRtl]}>
-                    {achievement.name}
-                  </Text>
-                  {!achievement.earned && achievement.progress && (
-                    <View style={styles.achievementProgress}>
-                      <View style={styles.achievementProgressBar}>
-                        <View 
-                          style={[
-                            styles.achievementProgressFill, 
-                            { width: `${Math.max(0, Math.min(100, achievement.progress))}%` }
-                          ]} 
-                        />
-                      </View>
-                      <Text style={styles.achievementProgressText}>{Math.max(0, Math.min(100, Math.round(achievement.progress)))}%</Text>
+            {/* Avatar + identity */}
+            <View style={[styles.heroTop, isArabic && styles.rowReverse]}>
+              <View style={styles.avatarWrapper}>
+                <View style={styles.avatarRing}>
+                  {avatarUrl ? (
+                    <Image source={{ uri: avatarUrl }} style={styles.avatarImage} />
+                  ) : (
+                    <View style={styles.avatarCircle}>
+                      <Text style={styles.avatarText}>{avatarText}</Text>
                     </View>
                   )}
                 </View>
+                <View style={styles.statusDot} />
+                <Pressable style={styles.changePhotoButton} onPress={() => navigation.navigate('EditProfile')}>
+                  <Ionicons name="camera" size={12} color="white" />
+                </Pressable>
+              </View>
+
+              <View style={[styles.heroIdentity, isArabic && styles.heroIdentityRtl]}>
+                <Text style={[styles.heroEyebrow, isArabic && styles.textRight]}>{t('tabProfile')}</Text>
+                <Text style={[styles.heroName, isArabic && styles.textRight, isArabic && styles.textRtl]}>
+                  {displayName}
+                </Text>
+                <Text style={[styles.heroEmail, isArabic && styles.textRight, isArabic && styles.textRtl]}>
+                  {user.email}
+                </Text>
+                <View style={[styles.heroLocationRow, isArabic && styles.rowReverse]}>
+                  <Ionicons name="location-outline" size={12} color="rgba(255,244,226,0.6)" />
+                  <Text style={[styles.heroLocation, isArabic && styles.textRight]}>
+                    {locationText}
+                  </Text>
+                </View>
+              </View>
+
+              <Pressable
+                style={[styles.editBtn, isArabic && styles.editBtnRtl]}
+                onPress={() => navigation.navigate('EditProfile')}
+              >
+                <Ionicons name="pencil" size={13} color="#FFF8EA" />
+                <Text style={styles.editBtnText}>{t('edit')}</Text>
               </Pressable>
-            ))}
-          </ScrollView>
+            </View>
+
+            {/* Stats — flush inside header, no gap */}
+            <View style={[styles.statsStrip, isArabic && styles.rowReverse]}>
+              {[
+                { value: totalDistance.toFixed(1), unit: 'km', labelKey: 'profileTotalDistance', icon: 'map-outline', onPress: undefined },
+                { value: String(completedTrips), unit: '', labelKey: 'profileCompletedTrips', icon: 'checkmark-circle-outline', onPress: () => navigation.navigate('History') },
+                { value: String(followerCount), unit: '', labelKey: 'profileBadges', icon: 'people-outline', onPress: undefined },
+              ].map((item, index, arr) => (
+                <Pressable
+                  key={item.labelKey}
+                  onPress={item.onPress}
+                  style={[
+                    styles.statCell,
+                    index < arr.length - 1 && (isArabic ? styles.statCellBorderRtl : styles.statCellBorder),
+                  ]}
+                >
+                  <View style={styles.statIconWrap}>
+                    <Ionicons name={item.icon as any} size={17} color="#D4A843" />
+                  </View>
+                  <Text style={styles.statValue}>
+                    {item.value}
+                    {item.unit ? <Text style={styles.statUnit}> {item.unit}</Text> : null}
+                  </Text>
+                  <Text style={[styles.statLabel, isArabic && styles.textRtl]}>
+                    {t(item.labelKey as TranslationKey)}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+          </View>
         </AnimatedBlock>
 
-        {/* Featured Next Achievement */}
-        {nextAchievement && (
-          <AnimatedBlock delay={160} style={styles.section}>
-            <View style={styles.featuredCard}>
-              <Text style={[styles.featuredTitle, isArabic && styles.textRtl]}>
-                {t('nextMilestone')}
-              </Text>
-              <View style={[styles.featuredContent, isArabic && styles.rowReverse]}>
-                <Text style={styles.featuredEmoji}>{nextAchievement.emoji}</Text>
-                <View style={styles.featuredInfo}>
-                  <Text style={[styles.featuredName, isArabic && styles.textRtl]}>
-                    {nextAchievement.name}
+        {/* ── Main Body Card — all sections flow inside one surface ── */}
+        <View style={styles.bodyCard}>
+
+          {/* Achievements */}
+          <AnimatedBlock delay={120}>
+            <View style={styles.bodySection}>
+              <View style={[styles.bodyRowHeader, isArabic && styles.rowReverse]}>
+                <View style={[styles.bodyRowHeaderLeft, isArabic && styles.rowReverse]}>
+                  <View style={styles.sectionIconDot}>
+                    <Ionicons name="trophy" size={14} color="#D4A843" />
+                  </View>
+                  <Text style={[styles.bodyTitle, isArabic && styles.textRtl]}>
+                    {t('achievementsTitle')}
                   </Text>
-                  <View style={styles.featuredProgressContainer}>
-                    <View style={styles.featuredProgressBar}>
-                      <View
-                        style={[
-                          styles.featuredProgressFill,
-                          { width: `${Math.max(0, Math.min(100, nextAchievement.progress || 0))}%` }
-                        ]}
-                      />
+                </View>
+                <View style={styles.achievementCountPill}>
+                  <View style={[styles.achievementCountBar, { width: `${progress}%` }]} />
+                  <Text style={styles.achievementCountText}>{earnedCount}/{achievements.length}</Text>
+                </View>
+              </View>
+
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.achievementsRow}
+              >
+                {achievements.map((achievement) => (
+                  <Pressable
+                    key={achievement.id}
+                    onPress={() => handleAchievementPress(achievement)}
+                    style={({ pressed }) => [styles.achCard, !achievement.earned && styles.achCardLocked, pressed && { opacity: 0.8 }]}
+                  >
+                    <View style={[styles.achIconWrap, achievement.earned ? styles.achIconEarned : styles.achIconLocked]}>
+                      <Text style={styles.achEmoji}>{achievement.emoji}</Text>
+                      {achievement.earned ? (
+                        <View style={styles.achCheck}>
+                          <Ionicons name="checkmark" size={9} color="#FFF" />
+                        </View>
+                      ) : (
+                        <View style={styles.achLock}>
+                          <Ionicons name="lock-closed" size={10} color="#8A7A6A" />
+                        </View>
+                      )}
                     </View>
-                    <Text style={styles.featuredProgressText}>
-                      {Math.max(0, Math.min(100, Math.round(nextAchievement.progress || 0)))}%
+                    <Text style={[styles.achName, isArabic && styles.textRtl]} numberOfLines={2}>
+                      {achievement.name}
                     </Text>
+                    {!achievement.earned && achievement.progress !== undefined && (
+                      <View style={styles.achProgressWrap}>
+                        <View style={styles.achProgressBg}>
+                          <View style={[styles.achProgressFill, { width: `${Math.max(0, Math.min(100, achievement.progress))}%` }]} />
+                        </View>
+                        <Text style={styles.achProgressText}>{Math.round(Math.max(0, Math.min(100, achievement.progress)))}%</Text>
+                      </View>
+                    )}
+                  </Pressable>
+                ))}
+              </ScrollView>
+            </View>
+          </AnimatedBlock>
+
+          <View style={styles.bodySectionDivider} />
+
+          {/* Next milestone — inline, not a separate card */}
+          {nextAchievement && (
+            <AnimatedBlock delay={155}>
+              <View style={styles.bodySection}>
+                <View style={[styles.milestoneRow, isArabic && styles.rowReverse]}>
+                  <Text style={styles.milestoneEmoji}>{nextAchievement.emoji}</Text>
+                  <View style={styles.milestoneInfo}>
+                    <Text style={[styles.milestoneEyebrow, isArabic && styles.textRtl]}>{t('nextMilestone')}</Text>
+                    <Text style={[styles.milestoneName, isArabic && styles.textRtl]}>{nextAchievement.name}</Text>
+                    <View style={styles.milestoneBarWrap}>
+                      <View style={styles.milestoneBarBg}>
+                        <View style={[styles.milestoneBarFill, { width: `${Math.max(0, Math.min(100, nextAchievement.progress || 0))}%` }]} />
+                      </View>
+                      <Text style={styles.milestoneBarText}>
+                        {Math.round(Math.max(0, Math.min(100, nextAchievement.progress || 0)))}%
+                      </Text>
+                    </View>
                   </View>
                 </View>
               </View>
+            </AnimatedBlock>
+          )}
+
+          <View style={styles.bodySectionDivider} />
+
+          {/* Public profile */}
+          <AnimatedBlock delay={170}>
+            <View style={styles.bodySection}>
+              <View style={[styles.bodyRowHeader, isArabic && styles.rowReverse]}>
+                <View style={[styles.bodyRowHeaderLeft, isArabic && styles.rowReverse]}>
+                  <View style={styles.sectionIconDot}>
+                    <Ionicons name="person-circle-outline" size={14} color="#630E13" />
+                  </View>
+                  <Text style={[styles.bodyTitle, isArabic && styles.textRtl]}>
+                    {isArabic ? 'الملف العام' : 'Public profile'}
+                  </Text>
+                </View>
+                {isProfileLoading ? <ActivityIndicator color="#630E13" size="small" /> : null}
+              </View>
+
+              {profileError ? (
+                <Text style={[styles.profileErrorText, isArabic && styles.textRtl]}>{profileError}</Text>
+              ) : (
+                <>
+                  <Text style={[styles.bioText, isArabic && styles.textRtl]}>
+                    {bioText || (isArabic ? 'أضف نبذة قصيرة ليعرفك المتنزهون.' : 'Add a short bio so hikers know your trail style.')}
+                  </Text>
+                  <View style={[styles.miniStatsRow, isArabic && styles.rowReverse]}>
+                    <Text style={styles.miniStat}>{reviewCount} {isArabic ? 'مراجعات' : 'reviews'}</Text>
+                    <Text style={styles.miniStat}>{photoCount} {isArabic ? 'صور' : 'photos'}</Text>
+                    <Text style={styles.miniStat}>{likesCount} {isArabic ? 'إعجابات' : 'likes'}</Text>
+                  </View>
+                  {profilePhotos.length > 0 && (
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.photoRow}>
+                      {profilePhotos.slice(0, 8).map((photo) => (
+                        <Pressable
+                          key={photo.id}
+                          style={styles.photoCard}
+                          onPress={() => photo.trail_id && navigation.navigate('TrailDetail', { trailId: photo.trail_id })}
+                        >
+                          <Image source={{ uri: photo.url }} style={styles.photo} />
+                          <Text numberOfLines={1} style={styles.photoCaption}>{photo.trail_name ?? photo.caption ?? 'Trail photo'}</Text>
+                        </Pressable>
+                      ))}
+                    </ScrollView>
+                  )}
+                  {profileReviews.slice(0, 2).map((review) => (
+                    <Pressable
+                      key={review.id}
+                      style={styles.reviewCard}
+                      onPress={() => navigation.navigate('TrailDetail', { trailId: review.trail.id })}
+                    >
+                      <Text style={styles.reviewTrail}>{review.trail.name}</Text>
+                      <Text numberOfLines={2} style={[styles.reviewText, isArabic && styles.textRtl]}>{review.content}</Text>
+                      <Text style={styles.reviewMeta}>{review.rating}/5 · {review.likes_count ?? 0} likes · {review.comments_count ?? 0} comments</Text>
+                    </Pressable>
+                  ))}
+                </>
+              )}
             </View>
           </AnimatedBlock>
-        )}
 
-        {/* Language Toggle */}
-        <AnimatedBlock delay={180} style={styles.section}>
-          <Text style={[styles.sectionTitle, isArabic && styles.textRight, isArabic && styles.textRtl]}>
-            {t('languageTitle')}
-          </Text>
-          <View style={[styles.languageToggleRow, isArabic && styles.rowReverse]}>
-            <Pressable
-              style={[styles.languageButton, language === 'ar' && styles.languageButtonActive]}
-              onPress={() => setLanguage('ar')}
-            >
-              <Text style={[styles.languageButtonText, language === 'ar' && styles.languageButtonTextActive]}>
-                {t('languageArabic')}
-              </Text>
-            </Pressable>
-            <Pressable
-              style={[styles.languageButton, language === 'en' && styles.languageButtonActive]}
-              onPress={() => setLanguage('en')}
-            >
-              <Text style={[styles.languageButtonText, language === 'en' && styles.languageButtonTextActive]}>
-                {t('languageEnglish')}
-              </Text>
-            </Pressable>
-          </View>
-        </AnimatedBlock>
+          <View style={styles.bodySectionDivider} />
 
-        {/* Trail workspace */}
-        <AnimatedBlock delay={200} style={styles.section}>
-          <View style={[styles.sectionHeader, isArabic && styles.rowReverse]}>
-            <View style={[styles.sectionTitleRow, isArabic && styles.rowReverse]}>
-              <Ionicons name="trail-sign-outline" size={20} color="#630E13" />
-              <Text style={[styles.sectionTitle, isArabic && styles.textRight, isArabic && styles.textRtl]}>
-                {isArabic ? 'مساحة المسارات' : 'Trail workspace'}
-              </Text>
+          {/* Language */}
+          <AnimatedBlock delay={180}>
+            <View style={styles.bodySection}>
+              <View style={[styles.bodyRowHeader, isArabic && styles.rowReverse]}>
+                <View style={[styles.bodyRowHeaderLeft, isArabic && styles.rowReverse]}>
+                  <View style={styles.sectionIconDot}>
+                    <Ionicons name="language-outline" size={14} color="#630E13" />
+                  </View>
+                  <Text style={[styles.bodyTitle, isArabic && styles.textRtl]}>{t('languageTitle')}</Text>
+                </View>
+              </View>
+              <View style={[styles.langToggle, isArabic && styles.rowReverse]}>
+                <Pressable
+                  style={[styles.langBtn, language === 'ar' && styles.langBtnActive]}
+                  onPress={() => setLanguage('ar')}
+                >
+                  <Text style={[styles.langBtnText, language === 'ar' && styles.langBtnTextActive]}>
+                    {t('languageArabic')}
+                  </Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.langBtn, language === 'en' && styles.langBtnActive]}
+                  onPress={() => setLanguage('en')}
+                >
+                  <Text style={[styles.langBtnText, language === 'en' && styles.langBtnTextActive]}>
+                    {t('languageEnglish')}
+                  </Text>
+                </Pressable>
+              </View>
             </View>
-          </View>
-          <View style={styles.profileLinksPanel}>
-            {profileLinks.map((item, index) => (
-              <Pressable
-                key={item.id}
-                onPress={() => handleProfileLinkPress(item)}
-                style={({ pressed }) => [
-                  styles.profileLinkRow,
-                  isArabic && styles.rowReverse,
-                  index < profileLinks.length - 1 && styles.profileLinkDivider,
-                  pressed && styles.settingRowPressed,
-                ]}
-              >
-                <View style={styles.settingIconWrapper}>
-                  <View style={styles.settingIconGradient}>
-                  <Ionicons name={item.icon as any} size={18} color="#630E13" />
-                </View>
-              </View>
-              <View style={[styles.settingTextWrapper, isArabic && styles.settingTextWrapperRtl]}>
-                <Text style={[styles.settingTitle, isArabic && styles.textRight, isArabic && styles.textRtl]}>
-                    {item.labelKey ? t(item.labelKey) : isArabic ? item.labelAr : item.labelEn}
-                  </Text>
-                  <Text style={[styles.settingSubtitle, isArabic && styles.textRight, isArabic && styles.textRtl]}>
-                    {isArabic ? item.subtitleAr : item.subtitleEn}
-                  </Text>
-                </View>
-                <Ionicons name={isArabic ? 'chevron-back' : 'chevron-forward'} size={16} color="#C4BBA0" />
-              </Pressable>
-            ))}
-          </View>
-        </AnimatedBlock>
+          </AnimatedBlock>
 
-        <AnimatedBlock delay={90} style={styles.section}>
-          <View style={styles.profileDataPanel}>
-            <View style={[styles.sectionHeader, isArabic && styles.rowReverse]}>
-              <View style={[styles.sectionTitleRow, isArabic && styles.rowReverse]}>
-                <Ionicons name="person-circle-outline" size={20} color="#630E13" />
-                <Text style={[styles.sectionTitle, isArabic && styles.textRight, isArabic && styles.textRtl]}>
-                  {isArabic ? 'الملف العام' : 'Public profile'}
-                </Text>
+          <View style={styles.bodySectionDivider} />
+
+          {/* Trail workspace */}
+          <AnimatedBlock delay={200}>
+            <View style={styles.bodySection}>
+              <View style={[styles.bodyRowHeader, isArabic && styles.rowReverse]}>
+                <View style={[styles.bodyRowHeaderLeft, isArabic && styles.rowReverse]}>
+                  <View style={styles.sectionIconDot}>
+                    <Ionicons name="trail-sign-outline" size={14} color="#630E13" />
+                  </View>
+                  <Text style={[styles.bodyTitle, isArabic && styles.textRtl]}>
+                    {isArabic ? 'مساحة المسارات' : 'Trail workspace'}
+                  </Text>
+                </View>
               </View>
-              {isProfileLoading ? <ActivityIndicator color="#630E13" /> : null}
+
+              {profileLinks.map((item, index) => (
+                <Pressable
+                  key={item.id}
+                  onPress={() => handleProfileLinkPress(item)}
+                  style={({ pressed }) => [
+                    styles.linkRow,
+                    isArabic && styles.rowReverse,
+                    index < profileLinks.length - 1 && styles.linkRowDivider,
+                    pressed && styles.rowPressed,
+                  ]}
+                >
+                  <View style={styles.linkIconWrap}>
+                    <Ionicons name={item.icon as any} size={17} color="#630E13" />
+                  </View>
+                  <View style={[styles.linkTextWrap, isArabic && styles.linkTextWrapRtl]}>
+                    <Text style={[styles.linkTitle, isArabic && styles.textRight, isArabic && styles.textRtl]}>
+                      {item.labelKey ? t(item.labelKey) : isArabic ? item.labelAr : item.labelEn}
+                    </Text>
+                    <Text style={[styles.linkSubtitle, isArabic && styles.textRight, isArabic && styles.textRtl]}>
+                      {isArabic ? item.subtitleAr : item.subtitleEn}
+                    </Text>
+                  </View>
+                  <Ionicons name={isArabic ? 'chevron-back' : 'chevron-forward'} size={15} color="#C4BBA0" />
+                </Pressable>
+              ))}
             </View>
-            {profileError ? (
-              <Text style={[styles.profileErrorText, isArabic && styles.textRtl]}>{profileError}</Text>
-            ) : (
-              <>
-                <Text style={[styles.profileBioText, isArabic && styles.textRtl]}>
-                  {profile?.bio || (isArabic ? 'أضف نبذة قصيرة ليعرفك المتنزهون.' : 'Add a short bio so hikers know your trail style.')}
-                </Text>
-                <View style={[styles.profileMiniStats, isArabic && styles.rowReverse]}>
-                  <Text style={styles.profileMiniStat}>{reviewCount} {isArabic ? 'مراجعات' : 'reviews'}</Text>
-                  <Text style={styles.profileMiniStat}>{profilePhotos.length} {isArabic ? 'صور' : 'photos'}</Text>
-                  <Text style={styles.profileMiniStat}>{profile?.stats?.total_likes_received ?? 0} {isArabic ? 'إعجابات' : 'likes'}</Text>
-                </View>
-                {profilePhotos.length ? (
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.profilePhotoRow}>
-                    {profilePhotos.slice(0, 8).map((photo) => (
-                      <Pressable key={photo.id} style={styles.profilePhotoCard} onPress={() => photo.trail_id && navigation.navigate('TrailDetail', { trailId: photo.trail_id })}>
-                        <Image source={{ uri: photo.url }} style={styles.profilePhoto} />
-                        <Text numberOfLines={1} style={styles.profilePhotoCaption}>{photo.trail_name ?? photo.caption ?? 'Trail photo'}</Text>
-                      </Pressable>
-                    ))}
-                  </ScrollView>
-                ) : null}
-                {profileReviews.slice(0, 2).map((review) => (
-                  <Pressable key={review.id} style={styles.profileReviewCard} onPress={() => navigation.navigate('TrailDetail', { trailId: review.trail.id })}>
-                    <Text style={styles.profileReviewTrail}>{review.trail.name}</Text>
-                    <Text numberOfLines={2} style={[styles.profileReviewText, isArabic && styles.textRtl]}>{review.content}</Text>
-                    <Text style={styles.profileReviewMeta}>{review.rating}/5 · {review.likes_count ?? 0} likes · {review.comments_count ?? 0} comments</Text>
-                  </Pressable>
-                ))}
-              </>
-            )}
-          </View>
-        </AnimatedBlock>
+          </AnimatedBlock>
 
-        {/* Settings */}
-        <AnimatedBlock delay={240} style={styles.section}>
-          {settings.map((item, index) => (
-            <Pressable 
-              key={item.id} 
-              onPress={() => handleSettingPress(item)}
-              style={({ pressed }) => [
-                styles.settingRow,
-                isArabic && styles.rowReverse,
-                pressed && styles.settingRowPressed,
-              ]}
-            >
-              <View style={styles.settingIconWrapper}>
-                <View style={styles.settingIconGradient}>
-                  <Ionicons name={item.icon as any} size={18} color="#630E13" />
-                </View>
-              </View>
-              <View style={[styles.settingTextWrapper, isArabic && styles.settingTextWrapperRtl]}>
-                <Text style={[styles.settingTitle, isArabic && styles.textRight, isArabic && styles.textRtl]}>
-                  {t(item.labelKey)}
-                </Text>
-                {item.subtitleKey ? (
-                  <Text style={[styles.settingSubtitle, isArabic && styles.textRight, isArabic && styles.textRtl]}>
-                    {item.subtitleKey === 'languageCurrent'
-                      ? language === 'ar'
-                        ? t('languageArabic')
-                        : t('languageEnglish')
-                      : item.subtitleKey === 'favoritesCount'
-                      ? `${item.badge} ${t('items')}`
-                      : t(item.subtitleKey)}
-                  </Text>
-                ) : null}
-              </View>
-              {item.badge && (
-                <View style={styles.badgeContainer}>
-                  <Text style={styles.badgeText}>{item.badge}</Text>
-                </View>
-              )}
-              <Ionicons name={isArabic ? 'chevron-back' : 'chevron-forward'} size={16} color="#C4BBA0" />
-            </Pressable>
-          ))}
-        </AnimatedBlock>
+          <View style={styles.bodySectionDivider} />
 
-        {/* Logout Button */}
-        <AnimatedBlock delay={280}>
+          {/* Settings */}
+          <AnimatedBlock delay={230}>
+            <View style={styles.bodySection}>
+              {settings.map((item) => (
+                <Pressable
+                  key={item.id}
+                  onPress={() => handleSettingPress(item)}
+                  style={({ pressed }) => [
+                    styles.linkRow,
+                    isArabic && styles.rowReverse,
+                    pressed && styles.rowPressed,
+                  ]}
+                >
+                  <View style={styles.linkIconWrap}>
+                    <Ionicons name={item.icon as any} size={17} color="#630E13" />
+                  </View>
+                  <View style={[styles.linkTextWrap, isArabic && styles.linkTextWrapRtl]}>
+                    <Text style={[styles.linkTitle, isArabic && styles.textRight, isArabic && styles.textRtl]}>
+                      {t(item.labelKey)}
+                    </Text>
+                    {item.subtitleKey ? (
+                      <Text style={[styles.linkSubtitle, isArabic && styles.textRight, isArabic && styles.textRtl]}>
+                        {item.subtitleKey === 'languageCurrent'
+                          ? language === 'ar' ? t('languageArabic') : t('languageEnglish')
+                          : item.subtitleKey === 'favoritesCount'
+                          ? `${item.badge} ${t('items')}`
+                          : t(item.subtitleKey)}
+                      </Text>
+                    ) : null}
+                  </View>
+                  {item.badge && (
+                    <View style={styles.badge}>
+                      <Text style={styles.badgeText}>{item.badge}</Text>
+                    </View>
+                  )}
+                  <Ionicons name={isArabic ? 'chevron-back' : 'chevron-forward'} size={15} color="#C4BBA0" />
+                </Pressable>
+              ))}
+            </View>
+          </AnimatedBlock>
+        </View>
+
+        {/* ── Logout ── */}
+        <AnimatedBlock delay={270}>
           <Pressable
-            style={[styles.logoutButton, isArabic && styles.rowReverse]}
+            style={[styles.logoutBtn, isArabic && styles.rowReverse]}
             onPress={() => {
               triggerFeedback([0, 20]);
               signOut();
               navigation.navigate('Auth');
             }}
           >
-            <Ionicons name="log-out-outline" size={18} color="#BB2823" />
+            <Ionicons name="log-out-outline" size={17} color="#BB2823" />
             <Text style={[styles.logoutText, isArabic && styles.textRtl]}>{t('logout')}</Text>
           </Pressable>
         </AnimatedBlock>
 
-        {/* Version Info */}
         <Text style={styles.versionText}>Hike time: {totalDurationHours.toFixed(1)}h</Text>
       </ScrollView>
     </AnimatedScreen>
@@ -626,69 +689,50 @@ export function ProfileScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F7F7F7',
+    backgroundColor: '#F0EBE1',
   },
   content: {
-    paddingBottom: 32,
+    paddingBottom: 40,
   },
-  profileHeader: {
-    marginBottom: 14,
-    paddingHorizontal: 0,
-    paddingBottom: 20,
+
+  // ── Hero ──
+  heroHeader: {
+    backgroundColor: '#630E13',
+    borderBottomLeftRadius: 32,
+    borderBottomRightRadius: 32,
+    paddingBottom: 0,
     overflow: 'hidden',
-    backgroundColor: '#630E13',
-    borderBottomLeftRadius: 30,
-    borderBottomRightRadius: 30,
   },
-  headerGradient: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: '#630E13',
-  },
-  profileTop: {
-    paddingHorizontal: 20,
-    paddingTop: 16,
-    paddingBottom: 18,
+  heroTop: {
     flexDirection: 'row',
     alignItems: 'center',
-  },
-  rowReverse: {
-    flexDirection: 'row-reverse',
-  },
-  textRight: {
-    textAlign: 'right',
-  },
-  textRtl: {
-    writingDirection: 'rtl',
+    paddingHorizontal: 20,
+    paddingBottom: 20,
   },
   avatarWrapper: {
     position: 'relative',
   },
-  avatarGradient: {
-    borderRadius: 45,
-    padding: 2,
+  avatarRing: {
+    borderRadius: 46,
+    padding: 2.5,
     backgroundColor: '#D4A843',
   },
   avatarCircle: {
-    width: 82,
-    height: 82,
-    borderRadius: 41,
+    width: 80,
+    height: 80,
+    borderRadius: 40,
     backgroundColor: '#C89D32',
     alignItems: 'center',
     justifyContent: 'center',
   },
   avatarImage: {
-    width: 82,
-    height: 82,
-    borderRadius: 41,
-    backgroundColor: '#C89D32',
+    width: 80,
+    height: 80,
+    borderRadius: 40,
   },
   avatarText: {
     color: '#FFF8EA',
-    fontSize: 26,
+    fontSize: 25,
     fontWeight: '800',
     letterSpacing: 1,
   },
@@ -696,484 +740,484 @@ const styles = StyleSheet.create({
     position: 'absolute',
     bottom: 2,
     right: 2,
-    width: 24,
-    height: 24,
+    width: 23,
+    height: 23,
     borderRadius: 12,
     backgroundColor: '#D4A843',
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 2,
-    borderColor: '#FFF',
+    borderColor: '#630E13',
   },
   statusDot: {
     position: 'absolute',
-    bottom: 6,
-    left: 2,
-    width: 16,
-    height: 16,
-    borderRadius: 8,
+    top: 3,
+    left: 3,
+    width: 14,
+    height: 14,
+    borderRadius: 7,
     backgroundColor: '#7A9A3A',
     borderWidth: 2,
-    borderColor: '#FFF',
+    borderColor: '#630E13',
   },
-  profileInfo: {
+  heroIdentity: {
     flex: 1,
-    paddingLeft: 16,
-    paddingBottom: 2,
+    paddingLeft: 14,
   },
-  profileInfoRtl: {
+  heroIdentityRtl: {
     paddingLeft: 0,
-    paddingRight: 16,
+    paddingRight: 14,
   },
-  profileEyebrow: {
-    fontSize: 11,
+  heroEyebrow: {
+    fontSize: 10,
     fontWeight: '700',
     textTransform: 'uppercase',
-    letterSpacing: 1.1,
-    color: 'rgba(255,245,229,0.64)',
-    marginBottom: 6,
-  },
-  profileName: {
-    fontSize: 24,
-    color: '#FFF8EA',
-    fontWeight: '900',
+    letterSpacing: 1.2,
+    color: 'rgba(255,245,229,0.55)',
     marginBottom: 4,
   },
-  profileSub: {
-    fontSize: 13,
-    lineHeight: 18,
-    color: 'rgba(255,244,226,0.82)',
-    marginBottom: 6,
+  heroName: {
+    fontSize: 22,
+    color: '#FFF8EA',
+    fontWeight: '900',
+    lineHeight: 27,
+    marginBottom: 2,
   },
-  locationRow: {
+  heroEmail: {
+    fontSize: 12,
+    color: 'rgba(255,244,226,0.72)',
+    marginBottom: 5,
+  },
+  heroLocationRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 4,
   },
-  profileLocation: {
-    fontSize: 12,
-    color: 'rgba(255,244,226,0.7)',
+  heroLocation: {
+    fontSize: 11,
+    color: 'rgba(255,244,226,0.6)',
   },
-  editButton: {
-    minWidth: 68,
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderRadius: 14,
-    backgroundColor: 'rgba(255,248,234,0.1)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,248,234,0.22)',
+  editBtn: {
+    flexDirection: 'row',
     alignItems: 'center',
+    gap: 5,
+    alignSelf: 'flex-start',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255,248,234,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,248,234,0.2)',
   },
-  editButtonRtl: {
-    marginRight: 12,
+  editBtnRtl: {
+    marginRight: 0,
     marginLeft: 0,
   },
-  editButtonText: {
+  editBtnText: {
     color: '#FFF8EA',
     fontSize: 12,
     fontWeight: '700',
   },
-  profileStatsRow: {
-    marginTop: 2,
+
+  // Stats strip — lives at the bottom of the header, seamlessly
+  statsStrip: {
     flexDirection: 'row',
-    marginHorizontal: 20,
-    marginBottom: 0,
-    borderRadius: 22,
-    overflow: 'hidden',
-    backgroundColor: 'rgba(255,248,234,0.08)',
+    backgroundColor: 'rgba(0,0,0,0.18)',
+    marginHorizontal: 0,
+    borderBottomLeftRadius: 32,
+    borderBottomRightRadius: 32,
   },
-  statCard: {
+  statCell: {
     flex: 1,
-    paddingVertical: 16,
+    paddingVertical: 14,
     alignItems: 'center',
-    backgroundColor: 'rgba(255,248,234,0.06)',
   },
-  statCardBorder: {
-    borderRightWidth: 1,
-    borderRightColor: 'rgba(255,248,234,0.1)',
+  statCellBorder: {
+    borderRightWidth: StyleSheet.hairlineWidth,
+    borderRightColor: 'rgba(255,248,234,0.15)',
   },
-  statCardBorderRtl: {
-    borderLeftWidth: 1,
-    borderLeftColor: 'rgba(255,248,234,0.1)',
+  statCellBorderRtl: {
+    borderLeftWidth: StyleSheet.hairlineWidth,
+    borderLeftColor: 'rgba(255,248,234,0.15)',
   },
-  statIconContainer: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: 'rgba(212,168,67,0.2)',
+  statIconWrap: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: 'rgba(212,168,67,0.18)',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 8,
+    marginBottom: 5,
   },
   statValue: {
     color: '#FFF8EA',
-    fontSize: 18,
+    fontSize: 17,
     fontWeight: '800',
+    lineHeight: 21,
   },
   statUnit: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '400',
   },
   statLabel: {
-    marginTop: 4,
+    marginTop: 2,
     fontSize: 10,
-    color: 'rgba(255,244,226,0.68)',
+    color: 'rgba(255,244,226,0.6)',
+    textAlign: 'center',
   },
-  section: {
-    marginTop: 24,
-    paddingHorizontal: 16,
+
+  // ── Unified body card ──
+  bodyCard: {
+    marginHorizontal: 14,
+    marginTop: 16,
+    borderRadius: 28,
+    backgroundColor: '#FFFDF8',
+    overflow: 'hidden',
+    shadowColor: '#2C2418',
+    shadowOpacity: 0.07,
+    shadowOffset: { width: 0, height: 4 },
+    shadowRadius: 16,
+    elevation: 4,
   },
-  sectionHeader: {
+  bodySection: {
+    paddingHorizontal: 18,
+    paddingVertical: 18,
+  },
+  bodySectionDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: '#EDE5D6',
+    marginHorizontal: 18,
+  },
+  bodyRowHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 16,
+    marginBottom: 14,
   },
-  sectionTitleRow: {
+  bodyRowHeaderLeft: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
   },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: '#630E13',
-  },
-  progressContainer: {
-    alignItems: 'flex-end',
-  },
-  progressBarBackground: {
-    width: 80,
-    height: 4,
-    backgroundColor: '#E8E0D0',
-    borderRadius: 2,
-    overflow: 'hidden',
-    marginBottom: 4,
-  },
-  progressBarFill: {
-    height: '100%',
-    backgroundColor: '#D4A843',
-    borderRadius: 2,
-  },
-  progressCount: {
-    fontSize: 10,
-    color: '#6B5D4E',
-  },
-  achievementsScrollContent: {
-    paddingRight: 16,
-    gap: 12,
-  },
-  achievementCard: {
-    width: 90,
-    alignItems: 'center',
-    marginRight: 12,
-  },
-  achievementCardLocked: {
-    opacity: 0.6,
-  },
-  achievementGradient: {
-    width: 70,
-    height: 70,
-    borderRadius: 20,
+  sectionIconDot: {
+    width: 28,
+    height: 28,
+    borderRadius: 9,
+    backgroundColor: 'rgba(99,14,19,0.08)',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 8,
-    shadowColor: '#D4A843',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 5,
   },
-  achievementGradientEarned: {
+  bodyTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#2C2418',
+    letterSpacing: 0.1,
+  },
+
+  // Achievements
+  achievementCountPill: {
+    position: 'relative',
+    width: 72,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: '#EDE5D6',
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  achievementCountBar: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    backgroundColor: '#D4A843',
+    borderRadius: 10,
+  },
+  achievementCountText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#2C2418',
+    zIndex: 1,
+  },
+  achievementsRow: {
+    paddingRight: 4,
+    gap: 10,
+  },
+  achCard: {
+    width: 82,
+    alignItems: 'center',
+    marginRight: 10,
+  },
+  achCardLocked: {
+    opacity: 0.55,
+  },
+  achIconWrap: {
+    width: 66,
+    height: 66,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 7,
+    shadowColor: '#D4A843',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    elevation: 4,
+  },
+  achIconEarned: {
     backgroundColor: '#D4A843',
   },
-  achievementGradientLocked: {
-    backgroundColor: '#D4CBAF',
+  achIconLocked: {
+    backgroundColor: '#D8D0BC',
   },
-  achievementEmoji: {
-    fontSize: 28,
+  achEmoji: {
+    fontSize: 26,
   },
-  checkmarkBadge: {
+  achCheck: {
+    position: 'absolute',
+    bottom: -4,
+    right: -4,
+    width: 17,
+    height: 17,
+    borderRadius: 9,
+    backgroundColor: '#4CAF50',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#FFFDF8',
+  },
+  achLock: {
     position: 'absolute',
     bottom: -4,
     right: -4,
     width: 18,
     height: 18,
     borderRadius: 9,
-    backgroundColor: '#4CAF50',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 2,
-    borderColor: '#FFF',
-  },
-  lockedBadge: {
-    position: 'absolute',
-    bottom: -4,
-    right: -4,
-    width: 20,
-    height: 20,
-    borderRadius: 10,
     backgroundColor: '#8A7A6A',
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 2,
-    borderColor: '#FFF',
+    borderColor: '#FFFDF8',
   },
-  achievementName: {
+  achName: {
     textAlign: 'center',
-    fontSize: 11,
+    fontSize: 10,
     color: '#4A4131',
-    lineHeight: 14,
+    lineHeight: 13,
     fontWeight: '600',
   },
-  achievementProgress: {
+  achProgressWrap: {
     width: '100%',
-    marginTop: 6,
+    marginTop: 5,
   },
-  achievementProgressBar: {
-    height: 2,
-    backgroundColor: '#E8E0D0',
-    borderRadius: 1,
+  achProgressBg: {
+    height: 3,
+    backgroundColor: '#EDE5D6',
+    borderRadius: 2,
     overflow: 'hidden',
   },
-  achievementProgressFill: {
+  achProgressFill: {
     height: '100%',
     backgroundColor: '#D4A843',
   },
-  achievementProgressText: {
+  achProgressText: {
     fontSize: 8,
     color: '#8A7A6A',
     textAlign: 'center',
     marginTop: 2,
   },
-  featuredCard: {
-    borderRadius: 20,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(99,14,19,0.16)',
-    backgroundColor: '#F6F0E0',
-  },
-  profileDataPanel: {
-    borderRadius: 20,
-    padding: 16,
-    backgroundColor: '#FFFDF8',
-    shadowColor: '#000',
-    shadowOpacity: 0.04,
-    shadowOffset: { width: 0, height: 2 },
-    shadowRadius: 6,
-    elevation: 2,
-  },
-  profileErrorText: {
-    color: '#8B1E1E',
-    fontSize: 13,
-    fontWeight: '800',
-  },
-  profileBioText: {
-    color: '#5A4F41',
-    fontSize: 13,
-    lineHeight: 20,
-  },
-  profileMiniStats: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginTop: 12,
-  },
-  profileMiniStat: {
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    backgroundColor: '#F6F0E0',
-    color: '#630E13',
-    fontSize: 12,
-    fontWeight: '900',
-  },
-  profilePhotoRow: {
-    gap: 10,
-    paddingTop: 14,
-    paddingBottom: 4,
-  },
-  profilePhotoCard: {
-    width: 104,
-  },
-  profilePhoto: {
-    width: 104,
-    height: 84,
-    borderRadius: 14,
-    backgroundColor: '#E8E0D0',
-  },
-  profilePhotoCaption: {
-    marginTop: 6,
-    color: '#6B5D4E',
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  profileReviewCard: {
-    marginTop: 10,
-    borderRadius: 16,
-    padding: 12,
-    backgroundColor: '#F6F0E0',
-  },
-  profileReviewTrail: {
-    color: '#630E13',
-    fontSize: 13,
-    fontWeight: '900',
-  },
-  profileReviewText: {
-    marginTop: 5,
-    color: '#4A4131',
-    fontSize: 13,
-    lineHeight: 19,
-  },
-  profileReviewMeta: {
-    marginTop: 6,
-    color: '#8A7A6A',
-    fontSize: 11,
-    fontWeight: '800',
-  },
-  featuredTitle: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#630E13',
-    marginBottom: 12,
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-  },
-  featuredContent: {
+
+  // Next milestone — inline strip
+  milestoneRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    gap: 14,
+    backgroundColor: '#FBF5E8',
+    borderRadius: 16,
+    padding: 14,
   },
-  featuredEmoji: {
-    fontSize: 40,
+  milestoneEmoji: {
+    fontSize: 36,
   },
-  featuredInfo: {
+  milestoneInfo: {
     flex: 1,
   },
-  featuredName: {
+  milestoneEyebrow: {
+    fontSize: 10,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+    color: '#630E13',
+    marginBottom: 3,
+  },
+  milestoneName: {
     fontSize: 14,
     fontWeight: '700',
-    color: '#630E13',
+    color: '#2C2418',
     marginBottom: 8,
   },
-  featuredProgressContainer: {
-    gap: 4,
+  milestoneBarWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
   },
-  featuredProgressBar: {
-    height: 6,
+  milestoneBarBg: {
+    flex: 1,
+    height: 5,
     backgroundColor: '#E8E0D0',
     borderRadius: 3,
     overflow: 'hidden',
   },
-  featuredProgressFill: {
+  milestoneBarFill: {
     height: '100%',
     backgroundColor: '#D4A843',
     borderRadius: 3,
   },
-  featuredProgressText: {
+  milestoneBarText: {
     fontSize: 10,
     color: '#8A7A6A',
+    fontWeight: '600',
+    minWidth: 28,
+    textAlign: 'right',
   },
-  languageToggleRow: {
+
+  // Public profile
+  profileErrorText: {
+    color: '#8B1E1E',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  bioText: {
+    color: '#5A4F41',
+    fontSize: 13,
+    lineHeight: 20,
+    marginBottom: 10,
+  },
+  miniStatsRow: {
     flexDirection: 'row',
-    borderRadius: 16,
-    backgroundColor: '#FFFDF8',
-    overflow: 'hidden',
-    marginTop: 10,
-    padding: 4,
-    shadowColor: '#000',
-    shadowOpacity: 0.05,
-    shadowOffset: { width: 0, height: 2 },
-    shadowRadius: 4,
-    elevation: 2,
+    flexWrap: 'wrap',
+    gap: 7,
+    marginBottom: 2,
   },
-  languageButton: {
-    flex: 1,
-    paddingVertical: 12,
-    alignItems: 'center',
+  miniStat: {
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    backgroundColor: '#F0EBE1',
+    color: '#630E13',
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  photoRow: {
+    gap: 10,
+    paddingTop: 12,
+    paddingBottom: 4,
+  },
+  photoCard: {
+    width: 100,
+  },
+  photo: {
+    width: 100,
+    height: 80,
     borderRadius: 12,
+    backgroundColor: '#E8E0D0',
   },
-  languageButtonActive: {
+  photoCaption: {
+    marginTop: 5,
+    color: '#6B5D4E',
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  reviewCard: {
+    marginTop: 10,
+    borderRadius: 14,
+    padding: 12,
+    backgroundColor: '#F6F0E0',
+  },
+  reviewTrail: {
+    color: '#630E13',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  reviewText: {
+    marginTop: 4,
+    color: '#4A4131',
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  reviewMeta: {
+    marginTop: 6,
+    color: '#8A7A6A',
+    fontSize: 10,
+    fontWeight: '700',
+  },
+
+  // Language
+  langToggle: {
+    flexDirection: 'row',
+    borderRadius: 14,
+    backgroundColor: '#F0EBE1',
+    padding: 3,
+  },
+  langBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    alignItems: 'center',
+    borderRadius: 11,
+  },
+  langBtnActive: {
     backgroundColor: '#630E13',
   },
-  languageButtonText: {
+  langBtnText: {
     color: '#6B5D4E',
     fontWeight: '600',
+    fontSize: 13,
   },
-  languageButtonTextActive: {
+  langBtnTextActive: {
     color: 'white',
   },
-  profileLinksPanel: {
-    overflow: 'hidden',
-    borderRadius: 20,
-    backgroundColor: '#FFFDF8',
-    shadowColor: '#000',
-    shadowOpacity: 0.04,
-    shadowOffset: { width: 0, height: 2 },
-    shadowRadius: 6,
-    elevation: 2,
-  },
-  profileLinkRow: {
+
+  // Links / workspace rows
+  linkRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    backgroundColor: '#FFFDF8',
+    paddingVertical: 12,
   },
-  profileLinkDivider: {
-    borderBottomWidth: 1,
-    borderBottomColor: '#EFE7D8',
+  linkRowDivider: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#EDE5D6',
   },
-  settingRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    backgroundColor: '#FFFDF8',
-    marginBottom: 10,
-    borderRadius: 20,
-    shadowColor: '#000',
-    shadowOpacity: 0.04,
-    shadowOffset: { width: 0, height: 2 },
-    shadowRadius: 6,
-    elevation: 2,
+  rowPressed: {
+    opacity: 0.65,
   },
-  settingRowPressed: {
-    backgroundColor: '#F1E7D2',
-    transform: [{ scale: 0.98 }],
-  },
-  settingIconWrapper: {
-    width: 44,
-    height: 44,
-    borderRadius: 14,
-    overflow: 'hidden',
-  },
-  settingIconGradient: {
-    width: '100%',
-    height: '100%',
+  linkIconWrap: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    backgroundColor: 'rgba(99,14,19,0.07)',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(99,14,19,0.08)',
+    marginRight: 12,
   },
-  settingTextWrapper: {
+  linkTextWrap: {
     flex: 1,
-    paddingHorizontal: 12,
   },
-  settingTextWrapperRtl: {
-    paddingHorizontal: 12,
+  linkTextWrapRtl: {
     alignItems: 'flex-end',
+    marginRight: 12,
+    marginLeft: 0,
   },
-  settingTitle: {
-    fontSize: 15,
+  linkTitle: {
+    fontSize: 14,
     color: '#2C2418',
     fontWeight: '600',
   },
-  settingSubtitle: {
+  linkSubtitle: {
     fontSize: 11,
     color: '#8A7A6A',
-    marginTop: 2,
+    marginTop: 1,
   },
-  badgeContainer: {
+  badge: {
     backgroundColor: '#D4A843',
     borderRadius: 10,
     minWidth: 20,
@@ -1188,31 +1232,47 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '700',
   },
-  logoutButton: {
+
+  // Logout
+  logoutBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    marginHorizontal: 16,
-    marginTop: 24,
+    marginHorizontal: 14,
+    marginTop: 16,
     paddingVertical: 14,
     borderRadius: 20,
     borderWidth: 1,
-    borderColor: 'rgba(99,14,19,0.24)',
-    backgroundColor: 'rgba(99,14,19,0.08)',
+    borderColor: 'rgba(99,14,19,0.2)',
+    backgroundColor: 'rgba(99,14,19,0.06)',
     gap: 8,
   },
   logoutText: {
     color: '#630E13',
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '700',
   },
+
   versionText: {
     textAlign: 'center',
     fontSize: 10,
     color: '#8A7A6A',
-    marginTop: 20,
-    marginBottom: 10,
+    marginTop: 18,
+    marginBottom: 8,
   },
+
+  // RTL helpers
+  rowReverse: {
+    flexDirection: 'row-reverse',
+  },
+  textRight: {
+    textAlign: 'right',
+  },
+  textRtl: {
+    writingDirection: 'rtl',
+  },
+
+  // Empty state
   emptyState: {
     flex: 1,
     justifyContent: 'center',

@@ -22,6 +22,7 @@ import { TrailDetailScreen } from '../screens/TrailDetailScreen';
 import { AllReviewsScreen } from '../screens/AllReviewsScreen';
 import { TrailMediaScreen } from '../screens/TrailMediaScreen';
 import { RecordingScreen } from '../screens/RecordingScreen';
+import { OngoingActivitiesScreen } from '../screens/OngoingActivitiesScreen';
 import { CreateTrailScreen } from '../screens/CreateTrailScreen';
 import { ActivityMessagesScreen } from '../screens/ActivityMessagesScreen';
 import { ActivityThreadScreen } from '../screens/ActivityThreadScreen';
@@ -281,6 +282,7 @@ export function AppNavigator() {
           <Stack.Screen name="PublicProfile" component={PublicProfileScreen} />
           <Stack.Screen name="CreateTrail" component={CreateTrailScreen} />
           <Stack.Screen name="Recording" component={RecordingScreen} />
+          <Stack.Screen name="OngoingActivities" component={OngoingActivitiesScreen} />
           <Stack.Screen name="TrailReview" component={TrailReviewScreen} />
           <Stack.Screen name="History" component={HistoryScreen} />
           <Stack.Screen name="Journal" component={JournalScreen} />

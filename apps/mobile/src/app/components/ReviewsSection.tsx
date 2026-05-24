@@ -1,9 +1,9 @@
 import React, { useMemo, useState } from 'react';
-import { ActivityIndicator, Image, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Image, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { ltrRow, ltrText, rtlRow, rtlText } from '../utils/direction';
-import { addTrailReview, type ReactNativeFile, type TrailReview } from '../api/trailsApi';
+import { addTrailReview, deleteTrailReview, type ReactNativeFile, type TrailReview } from '../api/trailsApi';
 import { addReviewComment, getReviewComments, likeReview, unlikeReview } from '../api/socialApi';
 import { ReviewPhotoStrip } from './ReviewPhotoStrip';
 
@@ -26,7 +26,9 @@ interface ReviewsSectionProps {
   onReviewAdded?: (review: TrailReview) => void;
   onViewAllReviews?: () => void;
   onRequireAuth?: () => void;
+  onReviewDeleted?: (reviewId: string) => void;
   isAuthenticated?: boolean;
+  currentUserId?: string;
 }
 
 const sortOptions: Array<{ id: ReviewSort; en: string; ar: string }> = [
@@ -93,7 +95,9 @@ export function ReviewsSection({
   onReviewAdded,
   onViewAllReviews,
   onRequireAuth,
+  onReviewDeleted,
   isAuthenticated = true,
+  currentUserId,
 }: ReviewsSectionProps) {
   const [sortBy, setSortBy] = useState<ReviewSort>('recent');
   const [isSortOpen, setIsSortOpen] = useState(false);
@@ -135,6 +139,10 @@ export function ReviewsSection({
 
   const visibleReviews = sortedReviews.slice(0, 3);
   const selectedSort = sortOptions.find((option) => option.id === sortBy) ?? sortOptions[0];
+
+  const isOwnReview = (review: TrailReview) => {
+    return Boolean(currentUserId && review.user_id === currentUserId) || review.user_id === 'me';
+  };
 
   const handleOpenWriteReview = () => {
     if (!isAuthenticated) {
@@ -350,6 +358,39 @@ export function ReviewsSection({
     }
   };
 
+  const handleDeleteReview = (review: TrailReview) => {
+    if (!isAuthenticated) {
+      onRequireAuth?.();
+      return;
+    }
+
+    Alert.alert(
+      isArabic ? 'حذف المراجعة؟' : 'Delete review?',
+      isArabic ? 'سيتم حذف مراجعتك وصورها.' : 'This removes your review and its photos.',
+      [
+        { text: isArabic ? 'إلغاء' : 'Cancel', style: 'cancel' },
+        {
+          text: isArabic ? 'حذف' : 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            setPendingReviewAction(`delete-${review.id}`);
+            try {
+              await deleteTrailReview(review.id);
+              onReviewDeleted?.(review.id);
+            } catch (error) {
+              Alert.alert(
+                isArabic ? 'تعذر حذف المراجعة' : 'Unable to delete review',
+                error instanceof Error ? error.message : isArabic ? 'حاول مرة أخرى.' : 'Please try again.',
+              );
+            } finally {
+              setPendingReviewAction(null);
+            }
+          },
+        },
+      ],
+    );
+  };
+
   return (
     <View style={styles.sectionCard}>
       <View style={[styles.sectionHeader, isArabic ? rtlRow : ltrRow]}>
@@ -418,6 +459,7 @@ export function ReviewsSection({
           const commentState = getCommentState(review);
           const reviewerName = getReviewerName(review, isArabic);
           const reviewerAvatar = getReviewerAvatar(review);
+          const canDeleteReview = isOwnReview(review);
 
           return (
             <Pressable
@@ -445,9 +487,27 @@ export function ReviewsSection({
                     </Text>
                   </View>
                 </View>
-                <Text style={styles.reviewRating}>
-                  {formatRating(review.rating)} <Ionicons name="star" size={12} color="#D4A843" />
-                </Text>
+                <View style={[styles.reviewHeaderActions, isArabic ? rtlRow : ltrRow]}>
+                  <Text style={styles.reviewRating}>
+                    {formatRating(review.rating)} <Ionicons name="star" size={12} color="#D4A843" />
+                  </Text>
+                  {canDeleteReview ? (
+                    <Pressable
+                      style={styles.reviewDeleteButton}
+                      disabled={pendingReviewAction === `delete-${review.id}`}
+                      onPress={(event) => {
+                        event.stopPropagation();
+                        handleDeleteReview(review);
+                      }}
+                    >
+                      {pendingReviewAction === `delete-${review.id}` ? (
+                        <ActivityIndicator size="small" color="#8B1E1E" />
+                      ) : (
+                        <Ionicons name="trash-outline" size={15} color="#8B1E1E" />
+                      )}
+                    </Pressable>
+                  ) : null}
+                </View>
               </View>
 
               <Text style={[styles.reviewText, isArabic ? rtlText : ltrText]} numberOfLines={isExpanded ? undefined : 3}>
@@ -779,6 +839,19 @@ const styles = StyleSheet.create({
     color: '#8A7A6A',
     fontSize: 11,
     fontWeight: '800',
+  },
+  reviewHeaderActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  reviewDeleteButton: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFF8F1',
   },
   reviewText: {
     color: '#4A4131',

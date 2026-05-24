@@ -225,29 +225,23 @@ export function ActivityPlanJoinScreen() {
         ? isArabic ? 'مدعو' : 'Invited'
         : isArabic ? 'غير منضم' : 'Not joined';
 
-  const handleToggleJoin = async () => {
-    if (!plan.meetupId) {
-      setJoined((current) => !current);
-      if (joined) setGuests(0);
-      return;
-    }
-
-    if (isHost) {
-      Alert.alert(isArabic ? 'أنت المضيف' : 'You are hosting', isArabic ? 'لا يمكن للمضيف مغادرة اللقاء من هنا.' : 'Hosts cannot leave from this screen.');
+  const updateAttendance = async () => {
+    const meetupId = plan.meetupId;
+    if (!meetupId) {
       return;
     }
 
     setIsSubmitting(true);
     try {
       if (joined) {
-        const result = await leaveMeetup(plan.meetupId);
+        const result = await leaveMeetup(meetupId);
         setJoined(false);
         setGuests(0);
         setViewerStatus('none');
         setPeopleJoinedBase(result.people_joined);
         setSpotsLeftBase(result.spots_left);
       } else {
-        const result = await joinMeetup(plan.meetupId, guests);
+        const result = await joinMeetup(meetupId, guests);
         setJoined(true);
         setViewerStatus('joined');
         setPeopleJoinedBase(result.people_joined);
@@ -261,6 +255,42 @@ export function ActivityPlanJoinScreen() {
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  const handleToggleJoin = async () => {
+    if (!plan.meetupId) {
+      setJoined((current) => !current);
+      if (joined) setGuests(0);
+      return;
+    }
+
+    if (isHost) {
+      Alert.alert(
+        isArabic ? 'أنت المضيف' : 'You are hosting',
+        isArabic
+          ? 'لا يوجد حالياً مسار من الخادم لإلغاء أو حذف لقاء قمت باستضافته.'
+          : 'There is no backend endpoint yet to cancel or delete a meetup you host.',
+      );
+      return;
+    }
+
+    if (joined) {
+      Alert.alert(
+        isArabic ? 'مغادرة اللقاء؟' : 'Leave meetup?',
+        isArabic ? 'سيتم إلغاء حضورك لهذا اللقاء.' : 'This will cancel your attendance for this meetup.',
+        [
+          { text: isArabic ? 'تراجع' : 'Keep joined', style: 'cancel' },
+          {
+            text: isArabic ? 'مغادرة' : 'Leave meetup',
+            style: 'destructive',
+            onPress: () => void updateAttendance(),
+          },
+        ],
+      );
+      return;
+    }
+
+    await updateAttendance();
   };
 
   const meetupTraits = useMemo(() => {
@@ -294,9 +324,6 @@ export function ActivityPlanJoinScreen() {
             </Pressable>
             <View style={styles.headerCopy}>
               <Text style={[styles.title, isArabic ? rtlText : ltrText]}>{isArabic ? 'الانضمام للقاء' : 'Join meetup'}</Text>
-              <Text style={[styles.subtitle, isArabic ? rtlText : ltrText]} numberOfLines={1}>
-                {title}
-              </Text>
             </View>
           </View>
         </AnimatedBlock>

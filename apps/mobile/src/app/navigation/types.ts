@@ -16,7 +16,7 @@ export type RootStackParamList = {
   ActivityPlanJoin: { plan: Extract<FeedItem, { kind: 'plan' }> };
   ActivityShare: { draft?: TrailCompletionDraft } | undefined;
   ActivityShareComposer: {
-    type: 'photo' | 'plan';
+    type: 'photo' | 'plan' | 'locationMedia';
     trailId?: string;
     trailName?: string;
     initialMeetingLat?: number;
@@ -25,7 +25,8 @@ export type RootStackParamList = {
   ProfileSettings: { settingId: string };
   PublicProfile: { profileId: string };
   CreateTrail: { generatedTrail?: GeneratedTrailSuggestion } | undefined;
-  Recording: { trailId: string };
+  Recording: { trailId: string; activityId?: string };
+  OngoingActivities: undefined;
   TrailReview: undefined;
   History: undefined;
   Journal: undefined;

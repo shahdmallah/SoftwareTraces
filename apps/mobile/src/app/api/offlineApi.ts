@@ -1,4 +1,5 @@
 import { apiRequest } from './client';
+import { getAccessToken, getApiBaseUrl } from '../lib/auth';
 
 type Envelope<T> = {
   data: T;
@@ -16,7 +17,7 @@ export type OfflineActivityPayload = {
   elevationGainM?: number;
   avgSpeedKph?: number;
   maxSpeedKph?: number;
-  status?: 'active' | 'paused' | 'completed' | 'cancelled';
+  status?: 'active' | 'paused' | 'completed' | 'cancelled' | 'draft' | 'recording' | 'synced';
   matchedTrailConfidence?: number;
   points?: Array<{
     lat: number;
@@ -39,6 +40,26 @@ type OfflineRoutePayload = {
   route?: [number, number][];
   tileRegion: string;
   tileUrlTemplate: string;
+};
+
+export type OfflineMapRecord = {
+  id: string;
+  user_id: string;
+  trail_id: string;
+  trail_name?: string | null;
+  downloaded_at?: string | null;
+  expires_at?: string | null;
+  created_at?: string | null;
+  metadata?: {
+    tile_count?: number;
+    bytes?: number;
+    has_tiles?: boolean;
+  } | null;
+};
+
+export type OfflineSyncResult = {
+  uploaded: string[];
+  conflicts: string[];
 };
 
 function isLikelyWestBankLngLat(point: [number, number]) {
@@ -67,25 +88,68 @@ function normalizeRouteCoordinates(routeCoordinates?: [number, number][]) {
   return routeCoordinates.map(normalizeRoutePoint);
 }
 
+async function requestOfflineArchive(trailId: string) {
+  const token = await getAccessToken();
+  const headers = new Headers();
+
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+
+  const response = await fetch(`${getApiBaseUrl()}/api/offline/maps/${trailId}`, {
+    method: 'POST',
+    headers,
+  });
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => '');
+    let message = body || 'Unable to download offline map.';
+    try {
+      const payload = JSON.parse(body) as { error?: string; details?: string };
+      message = payload.details || payload.error || message;
+    } catch {
+      // Keep the text response as the fallback message.
+    }
+    throw new Error(message);
+  }
+
+  await response.arrayBuffer().catch(() => undefined);
+}
+
 export async function getPendingSync(params: { since?: string } = {}) {
   const response = await apiRequest<Envelope<Record<string, unknown>[]>>('/api/offline/sync', {}, params);
   return response.data;
 }
 
 export async function syncOfflineActivities(activities: OfflineActivityPayload[]) {
-  const response = await apiRequest<Envelope<Record<string, unknown>>>('/api/offline/sync', {
+  const response = await apiRequest<Envelope<OfflineSyncResult>>('/api/offline/sync', {
     method: 'POST',
     body: JSON.stringify({ activities }),
   });
   return response.data;
 }
 
+export async function getUserOfflineMaps() {
+  const response = await apiRequest<Envelope<OfflineMapRecord[]>>('/api/offline/maps');
+  return response.data;
+}
+
+export async function deleteOfflineMap(id: string) {
+  await apiRequest<void>(`/api/offline/maps/${id}`, { method: 'DELETE' });
+}
+
 export async function downloadOfflineMap(trailId: string) {
-  const response = await apiRequest<Envelope<OfflineRoutePayload>>(`/api/offline/maps/${trailId}`);
-  const routeCoordinates = response.data.routeCoordinates ?? response.data.route;
+  await requestOfflineArchive(trailId);
 
   return {
-    ...response.data,
-    routeCoordinates: normalizeRouteCoordinates(routeCoordinates),
+    trailId,
+    trailName: undefined,
+    trailNameAr: undefined,
+    region: undefined,
+    regionAr: undefined,
+    coordinates: undefined,
+    tileRegion: `trail-${trailId}`,
+    tileUrlTemplate: '',
+    routeCoordinates: normalizeRouteCoordinates(undefined),
   };
 }

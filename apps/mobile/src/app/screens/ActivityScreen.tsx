@@ -6,7 +6,9 @@ import { StackNavigationProp } from '@react-navigation/stack';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
+import { deleteActivityPost } from '../api/activitiesApi';
 import { addReviewComment, commentOnActivity, followUser, getFollowing, getReviewComments, likeActivity, likeReview, unfollowUser, unlikeReview, getSocialFeed, type ActivityComment, type ReviewComment } from '../api/socialApi';
+import { deleteTrailReview } from '../api/trailsApi';
 import { listMeetups } from '../api/meetupsApi';
 import { type FeedCommentPreview, type FeedItem } from '../data/activitySocial';
 import { getLocalFeedItems } from '../data/localSocial';
@@ -307,6 +309,7 @@ type FeedCardProps = {
   onToggleLike: (item: RecapItem) => Promise<void>;
   onSendComment: (item: RecapItem, body: string) => Promise<void>;
   onToggleFollow: (item: RecapItem) => Promise<void>;
+  onDeleteRecap: (item: RecapItem) => Promise<void>;
   followedUsers: Record<string, boolean>;
 };
 
@@ -322,6 +325,7 @@ const FeedCard = memo(function FeedCard({
   onToggleLike,
   onSendComment,
   onToggleFollow,
+  onDeleteRecap,
   followedUsers,
 }: FeedCardProps) {
   return (
@@ -337,6 +341,7 @@ const FeedCard = memo(function FeedCard({
           onToggleLike={onToggleLike}
           onSendComment={onSendComment}
           onToggleFollow={onToggleFollow}
+          onDeleteRecap={onDeleteRecap}
           isFollowed={Boolean(item.userId && followedUsers[item.userId])}
         />
       ) : (
@@ -424,6 +429,7 @@ const RecapCard = memo(function RecapCard({
   onToggleLike,
   onSendComment,
   onToggleFollow,
+  onDeleteRecap,
   isFollowed,
 }: {
   item: RecapItem;
@@ -435,11 +441,12 @@ const RecapCard = memo(function RecapCard({
   onToggleLike: (item: RecapItem) => Promise<void>;
   onSendComment: (item: RecapItem, body: string) => Promise<void>;
   onToggleFollow: (item: RecapItem) => Promise<void>;
+  onDeleteRecap: (item: RecapItem) => Promise<void>;
   isFollowed: boolean;
 }) {
   const [commentDraft, setCommentDraft] = useState('');
   const [commentOpen, setCommentOpen] = useState(false);
-  const [pendingAction, setPendingAction] = useState<'like' | 'comment' | 'follow' | null>(null);
+  const [pendingAction, setPendingAction] = useState<'like' | 'comment' | 'follow' | 'delete' | null>(null);
   const imageUri = hasImageUri(item.image) ? item.image.trim() : null;
   const visibleComments = item.previewComments ?? [];
 
@@ -476,7 +483,30 @@ const RecapCard = memo(function RecapCard({
     }
   };
 
+  const handleDelete = () => {
+    Alert.alert(
+      isArabic ? 'حذف المنشور؟' : 'Delete post?',
+      isArabic ? 'سيتم حذف هذا المنشور من خلاصتك.' : 'This removes this post from your feed.',
+      [
+        { text: isArabic ? 'إلغاء' : 'Cancel', style: 'cancel' },
+        {
+          text: isArabic ? 'حذف' : 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            setPendingAction('delete');
+            try {
+              await onDeleteRecap(item);
+            } finally {
+              setPendingAction(null);
+            }
+          },
+        },
+      ],
+    );
+  };
+
   const showFollowButton = item.userId && item.userId !== currentUserId;
+  const showDeleteButton = item.userId && item.userId === currentUserId;
 
   return (
     <Pressable style={styles.card} onPress={() => onOpenRecap(item)}>
@@ -493,7 +523,22 @@ const RecapCard = memo(function RecapCard({
         badgeStyle="hike"
         onOpenProfile={item.userId ? () => onOpenProfile(item.userId!) : undefined}
         rightAccessory={
-          showFollowButton ? (
+          showDeleteButton ? (
+            <Pressable
+              style={styles.deletePostButton}
+              onPress={(event) => {
+                event.stopPropagation();
+                handleDelete();
+              }}
+              disabled={pendingAction === 'delete'}
+            >
+              {pendingAction === 'delete' ? (
+                <ActivityIndicator size="small" color="#8B1E1E" />
+              ) : (
+                <Ionicons name="trash-outline" size={15} color="#8B1E1E" />
+              )}
+            </Pressable>
+          ) : showFollowButton ? (
             <Pressable
               style={[styles.followButton, isFollowed && styles.followButtonActive]}
               onPress={(event) => {
@@ -921,6 +966,25 @@ export function ActivityScreen() {
     [followedUsers, isArabic],
   );
 
+  const handleDeleteRecap = useCallback(
+    async (item: RecapItem) => {
+      try {
+        if (item.sourceType === 'review') {
+          await deleteTrailReview(item.id);
+        } else if (item.sourceType === 'activity') {
+          await deleteActivityPost(item.id);
+        } else {
+          throw new Error('Delete target is not available for this post.');
+        }
+
+        setRemoteRecaps((current) => current.filter((feedItem) => feedItem.id !== item.id));
+      } catch (error) {
+        Alert.alert(isArabic ? 'تعذر حذف المنشور' : 'Unable to delete post', error instanceof Error ? error.message : 'Please try again.');
+      }
+    },
+    [isArabic],
+  );
+
   const filteredFeed = useMemo(
     () => feedData.filter((item) => matchesQuery(item, normalizedQuery)),
     [feedData, normalizedQuery],
@@ -988,10 +1052,11 @@ export function ActivityScreen() {
         onToggleLike={handleToggleLike}
         onSendComment={handleSendComment}
         onToggleFollow={handleToggleFollow}
+        onDeleteRecap={handleDeleteRecap}
         followedUsers={followedUsers}
       />
     ),
-    [followedUsers, handleOpenPlan, handleOpenProfile, handleOpenRecap, handleOpenTrail, handleSendComment, handleToggleFollow, handleToggleLike, isArabic, user?.id],
+    [followedUsers, handleDeleteRecap, handleOpenPlan, handleOpenProfile, handleOpenRecap, handleOpenTrail, handleSendComment, handleToggleFollow, handleToggleLike, isArabic, user?.id],
   );
 
   const keyExtractor = useCallback((item: FeedItem) => item.id, []);
@@ -1003,11 +1068,6 @@ export function ActivityScreen() {
           <View style={[styles.header, isArabic ? rtlRow : ltrRow]}>
             <View style={styles.headerCopy}>
               <Text style={[styles.pageTitle, isArabic ? rtlText : ltrText]}>{t('tabActivity')}</Text>
-              <Text style={[styles.pageSubtitle, isArabic ? rtlText : ltrText]}>
-                {isArabic
-                  ? 'رحلات الأصدقاء، اللقاءات القريبة، وإلهام المسار التالي.'
-                  : 'Friend hikes, nearby meetups, and ideas for your next trail.'}
-              </Text>
             </View>
 
             <View style={[styles.headerActions, isArabic && styles.headerActionsRtl]}>
@@ -1391,6 +1451,16 @@ const styles = StyleSheet.create({
   },
   followButtonTextActive: {
     color: '#fff',
+  },
+  deletePostButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F7EBE8',
+    borderWidth: 1,
+    borderColor: '#E7D8C3',
   },
   userRow: {
     flexDirection: 'row',

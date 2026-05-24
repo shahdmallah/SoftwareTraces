@@ -3,13 +3,28 @@ import * as Location from 'expo-location';
 import { Pedometer } from 'expo-sensors';
 import type { Trail } from '../api/trailsApi';
 import { getTrailById } from '../api/trailsApi';
-import { addActivityPoints, completeActivity, createActivity } from '../api/activitiesApi';
+import {
+  addActivityPoints,
+  completeActivity,
+  createActivity,
+  getActivityById,
+  getActivityMedia,
+  updateActivityStatus,
+  uploadActivityMedia,
+} from '../api/activitiesApi';
+import {
+  checkNavigationPosition,
+  endNavigationSession,
+  startNavigationSession,
+} from '../api/navigationApi';
 
 export type SessionPhoto = {
   id: string;
   uri: string;
   coordinate: [number, number];
   capturedAt: number;
+  remoteId?: string;
+  syncStatus?: 'pending' | 'synced' | 'failed';
 };
 
 export type ActiveTrailSession = {
@@ -30,6 +45,12 @@ export type ActiveTrailSession = {
   backendActivityId: string | null;
   backendSyncMessage: string | null;
   nearestDistance: number | null;
+  syncedPointCount: number;
+  navigationSessionId: string | null;
+  navigationInstruction: string | null;
+  navigationProgressPercent: number | null;
+  navigationOffTrack: boolean | null;
+  navigationDeviationMeters: number | null;
 };
 
 export type CompletedTrailSession = {
@@ -48,6 +69,7 @@ type TrailTrackingContextValue = {
   activeSessionTrailId: string | null;
   finishedSession: CompletedTrailSession | null;
   startTrailSession: (trailId: string) => Promise<void>;
+  resumeTrailSession: (trailId: string, activityId: string) => Promise<void>;
   pauseOrResumeTracking: () => void;
   addSessionPhoto: (photo: SessionPhoto) => void;
   finishTrailSession: () => CompletedTrailSession | null;
@@ -60,6 +82,8 @@ const locationOptions: Location.LocationOptions = {
   timeInterval: 4000,
   distanceInterval: 5,
 };
+const LIVE_POINT_SYNC_INTERVAL_MS = 20000;
+const NAVIGATION_CHECK_INTERVAL_MS = 12000;
 
 const TrailTrackingContext = createContext<TrailTrackingContextValue | undefined>(undefined);
 
@@ -96,6 +120,61 @@ function getPathDistanceMeters(path: [number, number][]) {
   }, 0);
 }
 
+function toTimestamp(value?: string | null) {
+  if (!value) {
+    return null;
+  }
+
+  const timestamp = new Date(value).getTime();
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function estimateElapsedMsFromActivity(
+  activity: Awaited<ReturnType<typeof getActivityById>>,
+  photoCapturedTimes: number[],
+) {
+  if (typeof activity.elapsed_time_seconds === 'number' && Number.isFinite(activity.elapsed_time_seconds)) {
+    return Math.max(0, activity.elapsed_time_seconds * 1000);
+  }
+
+  const startMs = toTimestamp(activity.start_time);
+  if (!startMs) {
+    return 0;
+  }
+
+  if (activity.status !== 'paused') {
+    return Math.max(0, Date.now() - startMs);
+  }
+
+  const pointTimes = activity.points
+    .map((point) => toTimestamp(point.recorded_at))
+    .filter((timestamp): timestamp is number => timestamp != null);
+  const photoTimes = photoCapturedTimes.filter((timestamp) => Number.isFinite(timestamp));
+  const lastRecordedMs = Math.max(...pointTimes, ...photoTimes);
+
+  return Number.isFinite(lastRecordedMs) ? Math.max(0, lastRecordedMs - startMs) : 0;
+}
+
+function mediaFileFromUri(uri: string, id: string) {
+  const cleanUri = uri.split('?')[0] ?? uri;
+  const extension = cleanUri.split('.').pop()?.toLowerCase() || 'jpg';
+  const normalizedExtension = ['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(extension) ? extension : 'jpg';
+  const mimeType =
+    normalizedExtension === 'png'
+      ? 'image/png'
+      : normalizedExtension === 'webp'
+      ? 'image/webp'
+      : normalizedExtension === 'gif'
+      ? 'image/gif'
+      : 'image/jpeg';
+
+  return {
+    uri,
+    name: `activity-photo-${id}.${normalizedExtension === 'jpeg' ? 'jpg' : normalizedExtension}`,
+    type: mimeType,
+  };
+}
+
 export function TrailTrackingProvider({ children }: { children: ReactNode }) {
   const [activeSession, setActiveSession] = useState<ActiveTrailSession | null>(null);
   const [activeSessionTrailId, setActiveSessionTrailId] = useState<string | null>(null);
@@ -105,6 +184,13 @@ export function TrailTrackingProvider({ children }: { children: ReactNode }) {
   const stepsOffsetRef = useRef(0);
   const pedometerEnabledRef = useRef(false);
   const sessionRunIdRef = useRef(0);
+  const activeSessionRef = useRef<ActiveTrailSession | null>(null);
+  const navigationCheckInFlightRef = useRef(false);
+  const lastNavigationCheckAtRef = useRef(0);
+
+  useEffect(() => {
+    activeSessionRef.current = activeSession;
+  }, [activeSession]);
 
   const stopPedometer = useCallback(() => {
     pedometerSubscription.current?.remove();
@@ -120,6 +206,76 @@ export function TrailTrackingProvider({ children }: { children: ReactNode }) {
     stopLocationWatch();
     stopPedometer();
   }, [stopLocationWatch, stopPedometer]);
+
+  const attachNavigationSession = useCallback((trailId: string, runId: number) => {
+    lastNavigationCheckAtRef.current = 0;
+    navigationCheckInFlightRef.current = false;
+
+    startNavigationSession(trailId)
+      .then((navigationSession) => {
+        if (sessionRunIdRef.current !== runId) {
+          return;
+        }
+
+        setActiveSession((current) =>
+          current && current.trailId === trailId
+            ? {
+                ...current,
+                navigationSessionId: navigationSession.id,
+                navigationInstruction: navigationSession.instruction ?? null,
+                navigationProgressPercent: 0,
+                navigationOffTrack: false,
+                navigationDeviationMeters: null,
+              }
+            : current,
+        );
+      })
+      .catch(() => undefined);
+  }, []);
+
+  const reportNavigationPosition = useCallback((coordinate: [number, number], position: Location.LocationObject) => {
+    const session = activeSessionRef.current;
+    const navigationSessionId = session?.navigationSessionId;
+
+    if (!session?.isTracking || !navigationSessionId) {
+      return;
+    }
+
+    const now = Date.now();
+    if (navigationCheckInFlightRef.current || now - lastNavigationCheckAtRef.current < NAVIGATION_CHECK_INTERVAL_MS) {
+      return;
+    }
+
+    navigationCheckInFlightRef.current = true;
+    lastNavigationCheckAtRef.current = now;
+    const heading = typeof position.coords.heading === 'number' && Number.isFinite(position.coords.heading)
+      ? position.coords.heading
+      : undefined;
+
+    checkNavigationPosition(navigationSessionId, {
+      latitude: coordinate[1],
+      longitude: coordinate[0],
+      heading,
+      timestamp: new Date(position.timestamp || now).toISOString(),
+    })
+      .then((result) => {
+        setActiveSession((current) =>
+          current?.navigationSessionId === navigationSessionId
+            ? {
+                ...current,
+                navigationInstruction: result.instruction,
+                navigationProgressPercent: result.progress_percent,
+                navigationOffTrack: result.off_track,
+                navigationDeviationMeters: result.deviation_meters,
+              }
+            : current,
+        );
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        navigationCheckInFlightRef.current = false;
+      });
+  }, []);
 
   const beginPedometerWatch = useCallback((runId: number) => {
     stopPedometer();
@@ -178,6 +334,7 @@ export function TrailTrackingProvider({ children }: { children: ReactNode }) {
         nearestDistance: getNearestDistanceToTrail(initialCoordinate, current.trail),
       };
     });
+    reportNavigationPosition(initialCoordinate, initialPosition);
 
     watchSubscription.current = await Location.watchPositionAsync(locationOptions, (position) => {
       if (sessionRunIdRef.current !== runId) {
@@ -205,8 +362,9 @@ export function TrailTrackingProvider({ children }: { children: ReactNode }) {
           nearestDistance: getNearestDistanceToTrail(nextCoordinate, current.trail),
         };
       });
+      reportNavigationPosition(nextCoordinate, position);
     });
-  }, []);
+  }, [reportNavigationPosition]);
 
   const ensurePedometerReady = useCallback(async (runId: number) => {
     try {
@@ -284,6 +442,91 @@ export function TrailTrackingProvider({ children }: { children: ReactNode }) {
     }
   }, [beginPedometerWatch]);
 
+  const syncActivityPoints = useCallback(async () => {
+    const session = activeSessionRef.current;
+
+    if (!session?.backendActivityId || session.recordedPath.length <= session.syncedPointCount) {
+      return;
+    }
+
+    const newPoints = session.recordedPath.slice(session.syncedPointCount);
+    const elapsedMs = session.isTracking && session.startedAt ? Date.now() - session.startedAt : session.elapsedMs;
+    const startedAt = session.startedAt ?? Date.now() - elapsedMs;
+    const pointIntervalMs = session.recordedPath.length > 1 ? Math.max(1000, Math.floor(elapsedMs / session.recordedPath.length)) : 1000;
+
+    try {
+      await addActivityPoints(
+        session.backendActivityId,
+        newPoints.map(([lng, lat], index) => ({
+          lat,
+          lng,
+          recordedAt: new Date(startedAt + (session.syncedPointCount + index) * pointIntervalMs).toISOString(),
+        })),
+      );
+
+      setActiveSession((current) =>
+        current?.backendActivityId === session.backendActivityId
+          ? {
+              ...current,
+              syncedPointCount: Math.max(current.syncedPointCount, session.syncedPointCount + newPoints.length),
+              backendSyncMessage: null,
+            }
+          : current,
+      );
+    } catch (error) {
+      setActiveSession((current) =>
+        current?.backendActivityId === session.backendActivityId
+          ? {
+              ...current,
+              backendSyncMessage: error instanceof Error ? error.message : 'Unable to sync latest GPS points.',
+            }
+          : current,
+      );
+    }
+  }, []);
+
+  const syncSessionPhoto = useCallback(async (activityId: string, photo: SessionPhoto) => {
+    try {
+      const uploadedPhoto = await uploadActivityMedia(activityId, {
+        photo: mediaFileFromUri(photo.uri, photo.id),
+        latitude: photo.coordinate[1],
+        longitude: photo.coordinate[0],
+        capturedAt: new Date(photo.capturedAt).toISOString(),
+      });
+
+      setActiveSession((current) =>
+        current?.backendActivityId === activityId
+          ? {
+              ...current,
+              sessionPhotos: current.sessionPhotos.map((item) =>
+                item.id === photo.id
+                  ? {
+                      ...item,
+                      remoteId: uploadedPhoto.id,
+                      uri: uploadedPhoto.public_url || item.uri,
+                      syncStatus: 'synced',
+                    }
+                  : item,
+              ),
+              backendSyncMessage: null,
+            }
+          : current,
+      );
+    } catch (error) {
+      setActiveSession((current) =>
+        current?.backendActivityId === activityId
+          ? {
+              ...current,
+              sessionPhotos: current.sessionPhotos.map((item) =>
+                item.id === photo.id ? { ...item, syncStatus: 'failed' } : item,
+              ),
+              backendSyncMessage: error instanceof Error ? error.message : 'Unable to sync photo.',
+            }
+          : current,
+      );
+    }
+  }, []);
+
   const startTrailSession = useCallback(
     async (trailId: string) => {
       if (activeSession?.trailId === trailId) {
@@ -315,9 +558,16 @@ export function TrailTrackingProvider({ children }: { children: ReactNode }) {
         backendActivityId: null,
         backendSyncMessage: null,
         nearestDistance: null,
+        syncedPointCount: 0,
+        navigationSessionId: null,
+        navigationInstruction: null,
+        navigationProgressPercent: null,
+        navigationOffTrack: null,
+        navigationDeviationMeters: null,
       });
 
       const startedAtIso = new Date().toISOString();
+      attachNavigationSession(trailId, runId);
       createActivity({ trailId, startedAt: startedAtIso, title: 'Trail recording' })
         .then((activity) => {
           if (sessionRunIdRef.current !== runId) {
@@ -396,7 +646,148 @@ export function TrailTrackingProvider({ children }: { children: ReactNode }) {
 
       await ensurePedometerReady(runId);
     },
-    [activeSession?.trailId, beginLocationWatch, cleanupSubscriptions, ensurePedometerReady],
+    [activeSession?.trailId, attachNavigationSession, beginLocationWatch, cleanupSubscriptions, ensurePedometerReady],
+  );
+
+  const resumeTrailSession = useCallback(
+    async (trailId: string, activityId: string) => {
+      if (activeSession?.backendActivityId === activityId) {
+        return;
+      }
+
+      const runId = sessionRunIdRef.current + 1;
+      sessionRunIdRef.current = runId;
+      cleanupSubscriptions();
+      stepsOffsetRef.current = 0;
+      pedometerEnabledRef.current = false;
+      setFinishedSession(null);
+      setActiveSessionTrailId(trailId);
+      setActiveSession({
+        trailId,
+        trail: null,
+        isTrailLoading: true,
+        trailError: null,
+        locationMessage: null,
+        stepMessage: null,
+        currentLocation: null,
+        recordedPath: [],
+        sessionPhotos: [],
+        isTracking: true,
+        isStepCountingAvailable: null,
+        stepCount: 0,
+        elapsedMs: 0,
+        startedAt: Date.now(),
+        backendActivityId: activityId,
+        backendSyncMessage: null,
+        nearestDistance: null,
+        syncedPointCount: 0,
+        navigationSessionId: null,
+        navigationInstruction: null,
+        navigationProgressPercent: null,
+        navigationOffTrack: null,
+        navigationDeviationMeters: null,
+      });
+      attachNavigationSession(trailId, runId);
+
+      try {
+        const [trail, activity, media] = await Promise.all([
+          getTrailById(trailId),
+          getActivityById(activityId),
+          getActivityMedia(activityId).catch(() => []),
+        ]);
+
+        if (sessionRunIdRef.current !== runId) {
+          return;
+        }
+
+        const recordedPath: [number, number][] = activity.points
+          .map((point) => [point.longitude, point.latitude] as [number, number])
+          .filter(([lng, lat]) => Number.isFinite(lng) && Number.isFinite(lat));
+        const isTracking = activity.status !== 'paused';
+        const mediaCapturedTimes = media
+          .map((photo) => toTimestamp(photo.captured_at) ?? toTimestamp(photo.created_at))
+          .filter((timestamp): timestamp is number => timestamp != null);
+        const sessionPhotos = media.reduce<SessionPhoto[]>((photos, photo) => {
+          const lat = Number(photo.latitude);
+          const lng = Number(photo.longitude);
+          const uri = photo.url?.trim();
+
+          if (!uri || !Number.isFinite(lat) || !Number.isFinite(lng)) {
+            return photos;
+          }
+
+          if (photos.some((existing) => existing.remoteId === photo.id || existing.uri === uri)) {
+            return photos;
+          }
+
+          photos.push({
+            id: photo.id,
+            uri,
+            coordinate: [lng, lat] as [number, number],
+            capturedAt: toTimestamp(photo.captured_at) ?? toTimestamp(photo.created_at) ?? Date.now(),
+            remoteId: photo.id,
+            syncStatus: 'synced',
+          });
+
+          return photos;
+        }, []);
+        const elapsedMsFromActivity = estimateElapsedMsFromActivity(activity, mediaCapturedTimes);
+
+        setActiveSession((current) =>
+          current && current.backendActivityId === activityId
+            ? {
+                ...current,
+                trail,
+                isTrailLoading: false,
+                trailError: null,
+                recordedPath,
+                sessionPhotos,
+                isTracking,
+                elapsedMs: elapsedMsFromActivity,
+                startedAt: isTracking ? Date.now() - elapsedMsFromActivity : null,
+                backendActivityId: activityId,
+                backendSyncMessage: null,
+                syncedPointCount: recordedPath.length,
+                nearestDistance: current.currentLocation ? getNearestDistanceToTrail(current.currentLocation, trail) : null,
+              }
+            : current,
+        );
+      } catch (error) {
+        if (sessionRunIdRef.current !== runId) {
+          return;
+        }
+
+        setActiveSession((current) =>
+          current && current.backendActivityId === activityId
+            ? {
+                ...current,
+                isTrailLoading: false,
+                trailError: error instanceof Error ? error.message : 'Unable to load this activity.',
+              }
+            : current,
+        );
+      }
+
+      try {
+        await beginLocationWatch(runId);
+      } catch (error) {
+        if (sessionRunIdRef.current !== runId) {
+          return;
+        }
+
+        setActiveSession((current) =>
+          current && current.backendActivityId === activityId
+            ? {
+                ...current,
+                locationMessage: error instanceof Error ? error.message : 'Unable to access your location.',
+              }
+            : current,
+        );
+      }
+
+      await ensurePedometerReady(runId);
+    },
+    [activeSession?.backendActivityId, attachNavigationSession, beginLocationWatch, cleanupSubscriptions, ensurePedometerReady],
   );
 
   useEffect(() => {
@@ -419,6 +810,18 @@ export function TrailTrackingProvider({ children }: { children: ReactNode }) {
 
     return () => clearInterval(interval);
   }, [activeSession?.isTracking, activeSession?.startedAt]);
+
+  useEffect(() => {
+    if (!activeSession?.backendActivityId || !activeSession.isTracking) {
+      return;
+    }
+
+    const interval = setInterval(() => {
+      void syncActivityPoints();
+    }, LIVE_POINT_SYNC_INTERVAL_MS);
+
+    return () => clearInterval(interval);
+  }, [activeSession?.backendActivityId, activeSession?.isTracking, syncActivityPoints]);
 
   useEffect(() => () => cleanupSubscriptions(), [cleanupSubscriptions]);
 
@@ -450,18 +853,51 @@ export function TrailTrackingProvider({ children }: { children: ReactNode }) {
     if (wasTracking === false && pedometerEnabledRef.current) {
       beginPedometerWatch(sessionRunIdRef.current);
     }
-  }, [activeSession?.isTracking, beginPedometerWatch, stopPedometer]);
+
+    const backendActivityId = activeSession?.backendActivityId;
+    if (backendActivityId && typeof wasTracking === 'boolean') {
+      void updateActivityStatus(backendActivityId, wasTracking ? 'paused' : 'recording').catch(() => undefined);
+    }
+  }, [activeSession?.backendActivityId, activeSession?.isTracking, beginPedometerWatch, stopPedometer]);
 
   const addSessionPhoto = useCallback((photo: SessionPhoto) => {
     setActiveSession((current) =>
       current
         ? {
             ...current,
-            sessionPhotos: [photo, ...current.sessionPhotos],
+            sessionPhotos: [{ ...photo, syncStatus: current.backendActivityId ? 'pending' : undefined }, ...current.sessionPhotos],
           }
         : current,
     );
-  }, []);
+
+    if (activeSession?.backendActivityId) {
+      void syncSessionPhoto(activeSession.backendActivityId, photo);
+    }
+  }, [activeSession?.backendActivityId, syncSessionPhoto]);
+
+  useEffect(() => {
+    const activityId = activeSession?.backendActivityId;
+
+    if (!activityId) {
+      return;
+    }
+
+    activeSession.sessionPhotos
+      .filter((photo) => !photo.remoteId && photo.syncStatus == null)
+      .forEach((photo) => {
+        setActiveSession((current) =>
+          current?.backendActivityId === activityId
+            ? {
+                ...current,
+                sessionPhotos: current.sessionPhotos.map((item) =>
+                  item.id === photo.id ? { ...item, syncStatus: 'pending' } : item,
+                ),
+              }
+            : current,
+        );
+        void syncSessionPhoto(activityId, photo);
+      });
+  }, [activeSession?.backendActivityId, activeSession?.sessionPhotos, syncSessionPhoto]);
 
   const finishTrailSession = useCallback(() => {
     if (!activeSession) {
@@ -469,6 +905,7 @@ export function TrailTrackingProvider({ children }: { children: ReactNode }) {
     }
 
     const backendActivityId = activeSession.backendActivityId;
+    const navigationSessionId = activeSession.navigationSessionId;
     const finishedAt = Date.now();
     const elapsedMs = activeSession.isTracking && activeSession.startedAt ? finishedAt - activeSession.startedAt : activeSession.elapsedMs;
     const distanceMeters = getPathDistanceMeters(activeSession.recordedPath);
@@ -485,17 +922,20 @@ export function TrailTrackingProvider({ children }: { children: ReactNode }) {
     };
 
     if (backendActivityId) {
+      const newPoints = activeSession.recordedPath.slice(activeSession.syncedPointCount);
       const startedAt = activeSession.startedAt ?? finishedAt - elapsedMs;
       const pointIntervalMs = activeSession.recordedPath.length > 1 ? Math.max(1000, Math.floor(elapsedMs / activeSession.recordedPath.length)) : 1000;
 
-      void addActivityPoints(
-        backendActivityId,
-        activeSession.recordedPath.map(([lng, lat], index) => ({
-          lat,
-          lng,
-          recordedAt: new Date(startedAt + index * pointIntervalMs).toISOString(),
-        })),
-      ).catch(() => undefined);
+      if (newPoints.length) {
+        void addActivityPoints(
+          backendActivityId,
+          newPoints.map(([lng, lat], index) => ({
+            lat,
+            lng,
+            recordedAt: new Date(startedAt + (activeSession.syncedPointCount + index) * pointIntervalMs).toISOString(),
+          })),
+        ).catch(() => undefined);
+      }
 
       void completeActivity(backendActivityId, {
         endedAt: new Date(finishedAt).toISOString(),
@@ -509,6 +949,10 @@ export function TrailTrackingProvider({ children }: { children: ReactNode }) {
       }).catch(() => undefined);
     }
 
+    if (navigationSessionId) {
+      void endNavigationSession(navigationSessionId).catch(() => undefined);
+    }
+
     sessionRunIdRef.current += 1;
     cleanupSubscriptions();
     setFinishedSession(completed);
@@ -518,6 +962,11 @@ export function TrailTrackingProvider({ children }: { children: ReactNode }) {
   }, [activeSession, cleanupSubscriptions]);
 
   const cancelTrailSession = useCallback(() => {
+    const navigationSessionId = activeSessionRef.current?.navigationSessionId;
+    if (navigationSessionId) {
+      void endNavigationSession(navigationSessionId).catch(() => undefined);
+    }
+
     sessionRunIdRef.current += 1;
     cleanupSubscriptions();
     setFinishedSession(null);
@@ -535,6 +984,7 @@ export function TrailTrackingProvider({ children }: { children: ReactNode }) {
       activeSessionTrailId,
       finishedSession,
       startTrailSession,
+      resumeTrailSession,
       pauseOrResumeTracking,
       addSessionPhoto,
       finishTrailSession,
@@ -546,6 +996,7 @@ export function TrailTrackingProvider({ children }: { children: ReactNode }) {
       activeSessionTrailId,
       finishedSession,
       startTrailSession,
+      resumeTrailSession,
       pauseOrResumeTracking,
       addSessionPhoto,
       finishTrailSession,
