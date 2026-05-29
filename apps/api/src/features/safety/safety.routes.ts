@@ -3,6 +3,7 @@ import { z } from "zod";
 import { pool } from "../../db/pool";
 import { asyncHandler } from "../../lib/asyncHandler";
 import { authenticate } from "../../middleware/auth";
+import { createNotification } from "../notifications/notifications.service";
 import { fetchOchaIncidents } from "./ocha.fetcher";
 
 function haversineMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
@@ -72,6 +73,37 @@ const reportIncidentSchema = z.object({
 function toNumber(value: string | number | null | undefined): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function isUuid(value: unknown): value is string {
+  return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+async function createSafetyNotificationBestEffort(input: {
+  user_id: string;
+  title: string;
+  body: string;
+  entity_id?: string | null;
+  data: Record<string, unknown>;
+}): Promise<void> {
+  try {
+    console.log("[safety.routes] Creating safety notification:", {
+      user_id: input.user_id,
+      title: input.title,
+      entity_id: input.entity_id,
+    });
+    await createNotification({
+      user_id: input.user_id,
+      type: "danger_alert",
+      title: input.title,
+      body: input.body,
+      entity_type: "trail",
+      entity_id: input.entity_id ?? null,
+      data: input.data,
+    });
+  } catch (error) {
+    console.error("[safety.routes] Failed to create safety notification:", error);
+  }
 }
 
 function getRiskPenalty(riskLevel: string): number {
@@ -179,6 +211,8 @@ router.get(
     const lat = Number(req.query.lat);
     const lng = Number(req.query.lng);
     const radius = req.query.radius === undefined ? 5000 : Number(req.query.radius);
+    const userId = req.auth?.sub ?? (isUuid(req.query.user_id) ? req.query.user_id : null);
+    const trailId = isUuid(req.query.trail_id) ? req.query.trail_id : null;
 
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
       res.status(400).json({ error: "lat and lng query parameters are required and must be numeric" });
@@ -227,7 +261,39 @@ router.get(
         }))
         .filter((location) => location.distance_meters <= radius);
 
-      res.json({ data: [...incidents, ...locations].sort((left, right) => left.distance_meters - right.distance_meters) });
+      const alerts = [...incidents, ...locations].sort((left, right) => left.distance_meters - right.distance_meters);
+
+      if (userId) {
+        console.log("[safety.routes] Creating nearby alert notifications for user:", userId);
+        for (const alert of alerts) {
+          const isLocation = alert.kind === "location";
+          const locationName = isLocation
+            ? alert.name
+            : alert.headline ?? alert.description ?? alert.incident_type;
+          const locationType = isLocation ? alert.location_type : alert.incident_type;
+          const riskLevel = isLocation ? alert.risk_level : alert.severity;
+          const title = locationType === "settlement" || locationType.includes("settlement")
+            ? "Settlement nearby"
+            : "Danger reported nearby";
+
+          await createSafetyNotificationBestEffort({
+            user_id: userId,
+            title,
+            body: `${locationName} is ${Math.round(alert.distance_meters)}m from your location. Exercise caution.`,
+            entity_id: trailId,
+            data: {
+              severity: riskLevel,
+              danger_type: locationType,
+              source: "safety",
+              latitude: alert.latitude,
+              longitude: alert.longitude,
+              distance_meters: alert.distance_meters,
+            },
+          });
+        }
+      }
+
+      res.json({ data: alerts });
     } catch (error) {
       console.error("[safety.routes] /nearby-alerts database error:", error);
       res.status(500).json({ error: "Failed to fetch nearby alerts", detail: error instanceof Error ? error.message : String(error) });
