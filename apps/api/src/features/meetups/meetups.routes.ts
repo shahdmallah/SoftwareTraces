@@ -3,11 +3,19 @@ import { Router } from "express";
 import jwt from "jsonwebtoken";
 import { env } from "../../config/env";
 import { asyncHandler } from "../../lib/asyncHandler";
-import { getProfile, getProfilePhotos, getProfileReviews } from "./profiles.controller";
+import { authenticate } from "../../middleware/auth";
+import {
+  createMeetupHandler,
+  getMeetupHandler,
+  joinMeetupHandler,
+  leaveMeetupHandler,
+  listMeetupsHandler,
+} from "./meetups.controller";
 
 const router = Router();
 
 function optionalAuthenticate(req: Request, _res: Response, next: NextFunction): void {
+  console.log("[meetups.routes] optionalAuthenticate start");
   const authHeader = req.headers.authorization;
 
   if (!authHeader?.startsWith("Bearer ")) {
@@ -30,15 +38,18 @@ function optionalAuthenticate(req: Request, _res: Response, next: NextFunction):
         email: payload.email,
       };
     }
-  } catch (error) {
-    console.warn("[profiles.routes] Optional auth token ignored:", error instanceof Error ? error.message : error);
-  }
 
-  next();
+    next();
+  } catch (error) {
+    console.warn("[meetups.routes] Optional auth token ignored:", error instanceof Error ? error.message : error);
+    next();
+  }
 }
 
-router.get("/:id", optionalAuthenticate, asyncHandler(getProfile));
-router.get("/:id/reviews", asyncHandler(getProfileReviews));
-router.get("/:id/photos", asyncHandler(getProfilePhotos));
+router.get("/", optionalAuthenticate, asyncHandler(listMeetupsHandler));
+router.get("/:id", optionalAuthenticate, asyncHandler(getMeetupHandler));
+router.post("/", authenticate, asyncHandler(createMeetupHandler));
+router.post("/:id/join", authenticate, asyncHandler(joinMeetupHandler));
+router.delete("/:id/join", authenticate, asyncHandler(leaveMeetupHandler));
 
 export default router;

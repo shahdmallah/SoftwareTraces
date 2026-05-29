@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import multer from "multer";
 import {
+  analyzeRoute,
   calculateTrailStats,
   checkSavedStatus,
   createTrail,
@@ -17,9 +18,11 @@ import {
   getTrailConditions,
   getTrailPhotos,
   getTrailReviews,
+  parseTrailDescription,
   getSavedTrails,
   publishTrail,
   saveTrail,
+  searchOrGenerateTrail,
   searchTrails,
   setPrimaryPhoto,
   unsaveTrail,
@@ -42,6 +45,9 @@ router.get("/ping", (_req, res) => {
 });
 
 router.post("/calculate", asyncHandler(calculateTrailStats));
+router.post("/analyze-route", asyncHandler(analyzeRoute));
+router.post("/parse-description", asyncHandler(parseTrailDescription));
+router.post("/search-or-generate", asyncHandler(searchOrGenerateTrail));
 router.post("/", authenticate, asyncHandler(createTrail));
 router.get("/", asyncHandler(getAllTrails));
 router.get("/nearby", validate(z.object({ lat: z.coerce.number(), lng: z.coerce.number(), radius: z.coerce.number().optional() }), "query"), asyncHandler(getNearbyTrails));
