@@ -5,6 +5,7 @@ import { env } from "../../config/env";
 import { pool } from "../../db/pool";
 import { HttpError } from "../../lib/httpError";
 import { requireAuth } from "../../middleware/auth";
+import { verifyPhoto } from "../../services/photoVerificationService";
 
 interface StartActivityBody {
   trail_id?: string;
@@ -213,6 +214,22 @@ export async function addActivityMedia(req: Request, res: Response): Promise<voi
       `,
       [req.params.id, auth.sub, isVideo ? "video" : "photo", storagePath, publicUrl, caption, latitude, longitude, capturedAt]
     );
+
+    const mediaId = insertResult.rows[0]?.id;
+    if (!isVideo && mediaId) {
+      try {
+        console.log("[activities.addActivityMedia] verifying uploaded activity photo", { media_id: mediaId });
+        await verifyPhoto(mediaId, "activity_media", file.buffer);
+        console.log("[activities.addActivityMedia] activity photo verification complete", { media_id: mediaId });
+      } catch (verificationError) {
+        console.error("[activities.addActivityMedia] activity photo verification failed but upload will continue", {
+          media_id: mediaId,
+          error: verificationError instanceof Error ? verificationError.message : String(verificationError),
+        });
+      }
+    } else if (isVideo) {
+      console.log("[activities.addActivityMedia] skipping AI photo verification for video media");
+    }
 
     console.log("[activities.addActivityMedia] returning created media", { media_id: insertResult.rows[0]?.id });
     res.status(201).json({ data: insertResult.rows[0] });
