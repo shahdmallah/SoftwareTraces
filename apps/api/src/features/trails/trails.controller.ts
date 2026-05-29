@@ -16,6 +16,7 @@ import {
 } from "../../services/aiService";
 import { generateTrailFromDescription } from "../../services/trailGenerationService";
 import { searchTrailsByCriteria } from "../../services/trailSearchService";
+import { verifyPhoto } from "../../services/photoVerificationService";
 
 const calculateTrailStatsBodySchema = z.object({
   coordinates: z.array(z.tuple([z.number(), z.number()])).min(2),
@@ -302,6 +303,12 @@ interface ReviewPhotoResponse {
   id: string;
   url: string;
   created_at?: string;
+}
+
+interface PendingPhotoVerification {
+  id: string;
+  type: "trail_photo" | "review_photo";
+  buffer: Buffer;
 }
 
 interface TrailReviewWithPhotosRow {
@@ -1045,7 +1052,7 @@ export async function createTrailReview(req: Request, res: Response): Promise<vo
            created_at,
            updated_at
          )
-         VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+         VALUES ($1::uuid, $2::uuid, $3, $4, $5, NOW(), NOW())
          ON CONFLICT (trail_id, user_id)
          DO UPDATE SET
            rating = EXCLUDED.rating,
@@ -1059,6 +1066,7 @@ export async function createTrailReview(req: Request, res: Response): Promise<vo
       const review = result.rows[0];
       const reviewId = review.id;
       const uploadedPhotos: ReviewPhotoResponse[] = [];
+      const pendingPhotoVerifications: PendingPhotoVerification[] = [];
       console.log("[createTrailReview] Step 4: Review upserted with ID:", reviewId);
 
       if (files.length > 0) {
@@ -1092,7 +1100,7 @@ export async function createTrailReview(req: Request, res: Response): Promise<vo
                photo_url,
                photo_storage_path
              )
-             VALUES ($1, $2, $3, $4)
+             VALUES ($1::uuid, $2::uuid, $3, $4)
              RETURNING id, user_id, photo_url, photo_storage_path, created_at`,
             [reviewId, auth.sub, urlData?.publicUrl ?? "", storagePath]
           );
@@ -1103,6 +1111,11 @@ export async function createTrailReview(req: Request, res: Response): Promise<vo
             url: photo.photo_url,
             created_at: photo.created_at,
           });
+          pendingPhotoVerifications.push({
+            id: photo.id,
+            type: "review_photo",
+            buffer: file.buffer,
+          });
           console.log("[createTrailReview] Photo record inserted with ID:", photo.id);
         }
       }
@@ -1110,6 +1123,19 @@ export async function createTrailReview(req: Request, res: Response): Promise<vo
       console.log("[createTrailReview] Step 7: All photos uploaded, committing transaction");
       await client.query("COMMIT");
       console.log("[createTrailReview] Transaction committed successfully");
+
+      for (const pendingPhoto of pendingPhotoVerifications) {
+        try {
+          console.log("[createTrailReview] Verifying review photo:", pendingPhoto.id);
+          await verifyPhoto(pendingPhoto.id, pendingPhoto.type, pendingPhoto.buffer);
+          console.log("[createTrailReview] Review photo verified:", pendingPhoto.id);
+        } catch (verificationError) {
+          console.error("[createTrailReview] Review photo verification failed but upload will continue:", {
+            photoId: pendingPhoto.id,
+            error: verificationError instanceof Error ? verificationError.message : String(verificationError),
+          });
+        }
+      }
 
       res.status(201).json({
         data: {
@@ -1830,7 +1856,7 @@ export async function uploadTrailPhoto(req: Request & { file?: Express.Multer.Fi
     // Check trail exists and is not soft-deleted
     console.log("[uploadTrailPhoto] 2. Checking trail exists...");
     const trailCheck = await pool.query(
-      "SELECT id FROM trails WHERE id = $1 AND deleted_at IS NULL",
+      "SELECT id FROM trails WHERE id = $1::uuid AND deleted_at IS NULL",
       [trailId]
     );
 
@@ -1867,7 +1893,7 @@ export async function uploadTrailPhoto(req: Request & { file?: Express.Multer.Fi
     // Check if this is the first photo
     console.log("[uploadTrailPhoto] 5. Checking if first photo...");
     const photosCountResult = await pool.query(
-      "SELECT COUNT(*) as count FROM trail_photos WHERE trail_id = $1",
+      "SELECT COUNT(*) as count FROM trail_photos WHERE trail_id = $1::uuid",
       [trailId]
     );
     const isFirstPhoto = parseInt(photosCountResult.rows[0].count, 10) === 0;
@@ -1876,7 +1902,7 @@ export async function uploadTrailPhoto(req: Request & { file?: Express.Multer.Fi
     console.log("[uploadTrailPhoto] 6. Inserting photo record into DB...");
     const insertResult = await pool.query(
       `INSERT INTO trail_photos (trail_id, user_id, storage_path, caption, is_primary)
-       VALUES ($1, $2, $3, $4, $5)
+       VALUES ($1::uuid, $2::uuid, $3, $4, $5)
        RETURNING id`,
       [trailId, auth.sub, storagePath, caption || null, isFirstPhoto]
     );
@@ -1884,16 +1910,27 @@ export async function uploadTrailPhoto(req: Request & { file?: Express.Multer.Fi
     const photoId = insertResult.rows[0].id;
     console.log("[uploadTrailPhoto] 7. Photo record created, ID:", photoId);
 
+    try {
+      console.log("[uploadTrailPhoto] 8. Verifying uploaded trail photo...");
+      await verifyPhoto(photoId, "trail_photo", req.file.buffer);
+      console.log("[uploadTrailPhoto] Trail photo verification complete:", photoId);
+    } catch (verificationError) {
+      console.error("[uploadTrailPhoto] Trail photo verification failed but upload will continue:", {
+        photoId,
+        error: verificationError instanceof Error ? verificationError.message : String(verificationError),
+      });
+    }
+
     // If first photo, update trails.image
     if (isFirstPhoto) {
-      console.log("[uploadTrailPhoto] 8. Setting as primary, updating trails.image...");
+      console.log("[uploadTrailPhoto] 9. Setting as primary, updating trails.image...");
       await pool.query(
-        "UPDATE trails SET image = $1 WHERE id = $2",
+        "UPDATE trails SET image = $1 WHERE id = $2::uuid",
         [publicUrl, trailId]
       );
     }
 
-    console.log("[uploadTrailPhoto] 9. Upload complete");
+    console.log("[uploadTrailPhoto] 10. Upload complete");
     res.status(201).json({ data: { id: photoId, url: publicUrl }, message: "Photo uploaded successfully" });
   } catch (error) {
     console.error("[uploadTrailPhoto] ❌ ERROR CAUGHT:");
@@ -1910,36 +1947,62 @@ export async function getTrailPhotos(req: Request, res: Response): Promise<void>
   try {
     const trailId = req.params.id;
 
-    console.log("[getTrailPhotos] 1. Querying direct and review photos for trail...");
+    console.log("[getTrailPhotos] 1. Querying direct, review, and media photos for trail...");
     const result = await pool.query(
       `SELECT 
          rp.id,
          rp.photo_storage_path AS storage_path,
+         rp.photo_url AS photo_url,
+         NULL::text AS thumbnail_url,
          tr.title AS caption,
          false AS is_primary,
          rp.created_at,
+         COALESCE(rp.helpful_score, 0) AS helpful_score,
          p.full_name AS uploaded_by,
          'review' AS source
        FROM review_photos rp
        JOIN trail_reviews tr ON tr.id = rp.review_id
        LEFT JOIN profiles p ON rp.user_id = p.id
-       WHERE tr.trail_id = $1
+       WHERE tr.trail_id = $1::uuid
+         AND rp.approved_for_trail_page = true
 
        UNION ALL
 
        SELECT 
          tp.id,
          tp.storage_path,
+         NULL::text AS photo_url,
+         NULL::text AS thumbnail_url,
          tp.caption,
          tp.is_primary,
          tp.created_at,
+         COALESCE(tp.helpful_score, 0) AS helpful_score,
          p.full_name AS uploaded_by,
          'direct' AS source
        FROM trail_photos tp
        LEFT JOIN profiles p ON tp.user_id = p.id
-       WHERE tp.trail_id = $1
+       WHERE tp.trail_id = $1::uuid
+         AND tp.approved_for_trail_page = true
 
-       ORDER BY is_primary DESC, created_at DESC`,
+       UNION ALL
+
+       SELECT
+         m.id,
+         NULL::text AS storage_path,
+         m.url AS photo_url,
+         m.thumbnail_url,
+         m.caption,
+         false AS is_primary,
+         m.created_at,
+         COALESCE(m.helpful_score, 0) AS helpful_score,
+         p.full_name AS uploaded_by,
+         'media' AS source
+       FROM media m
+       LEFT JOIN profiles p ON p.id = m.uploader_id
+       WHERE m.trip_id = $1::uuid
+         AND m.approved_for_trail_page = true
+
+       ORDER BY helpful_score DESC, created_at DESC`,
       [trailId]
     );
 
@@ -1949,13 +2012,19 @@ export async function getTrailPhotos(req: Request, res: Response): Promise<void>
     const supabase = getSupabaseStorageClient();
     const photosWithUrls = result.rows.map((photo) => {
       const bucket = photo.source === "review" ? "review-photos" : "trail-photos";
-      const { data: urlData } = supabase.storage.from(bucket).getPublicUrl(photo.storage_path);
+      const url =
+        photo.source === "media"
+          ? photo.photo_url
+          : supabase.storage.from(bucket).getPublicUrl(photo.storage_path).data?.publicUrl;
+
       return {
         id: photo.id,
-        url: urlData?.publicUrl || "",
+        url: url || "",
+        thumbnail_url: photo.thumbnail_url || url || "",
         caption: photo.caption,
         is_primary: photo.is_primary,
         created_at: photo.created_at,
+        helpful_score: Number(photo.helpful_score ?? 0),
         uploaded_by: photo.uploaded_by,
         source: photo.source
       };

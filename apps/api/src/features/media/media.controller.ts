@@ -5,6 +5,7 @@ import { env } from "../../config/env";
 import { pool } from "../../db/pool";
 import { HttpError } from "../../lib/httpError";
 import { requireAuth } from "../../middleware/auth";
+import { verifyPhoto } from "../../services/photoVerificationService";
 
 const mediaBucket = "media";
 const validMediaMimeTypes = ["image/jpeg", "image/png", "image/gif", "image/webp"] as const;
@@ -15,6 +16,12 @@ const mediaExtensionByMimeType: Record<(typeof validMediaMimeTypes)[number], str
   "image/webp": "webp"
 };
 const maxMediaSizeBytes = 10 * 1024 * 1024;
+
+interface UploadedMediaFile {
+  buffer: Buffer;
+  mimetype: string;
+  size: number;
+}
 
 function parseRequiredNumber(value: unknown, fieldName: string): number {
   const parsed = Number(value);
@@ -116,7 +123,7 @@ function sendMediaError(functionName: string, res: Response, error: unknown): vo
   });
 }
 
-export async function uploadMedia(req: Request, res: Response): Promise<void> {
+export async function uploadMedia(req: Request & { file?: UploadedMediaFile }, res: Response): Promise<void> {
   try {
     console.log("[media.uploadMedia] requiring auth");
     const auth = requireAuth(req);
@@ -192,6 +199,17 @@ export async function uploadMedia(req: Request, res: Response): Promise<void> {
 
     const media = insertResult.rows[0];
     console.log("[media.uploadMedia] media row created", { media_id: media.id });
+
+    try {
+      console.log("[media.uploadMedia] verifying uploaded media photo", { media_id: media.id });
+      await verifyPhoto(media.id, "media", file.buffer);
+      console.log("[media.uploadMedia] media photo verification complete", { media_id: media.id });
+    } catch (verificationError) {
+      console.error("[media.uploadMedia] media photo verification failed but upload will continue", {
+        media_id: media.id,
+        error: verificationError instanceof Error ? verificationError.message : String(verificationError),
+      });
+    }
 
     res.status(201).json({
       data: {
