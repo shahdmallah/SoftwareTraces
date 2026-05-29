@@ -7,6 +7,8 @@ import {
   getFriendCount as countFriends,
   getFriends as listFriends,
 } from "../../services/friendService";
+import { createNotification } from "../notifications/notifications.service";
+import type { CreateNotificationInput } from "../notifications/notifications.types";
 
 interface FeedReviewRow {
   id: string;
@@ -112,6 +114,29 @@ async function ensureReviewExists(reviewId: string): Promise<void> {
   }
 }
 
+async function createNotificationBestEffort(input: CreateNotificationInput): Promise<void> {
+  if (input.actor_id && input.actor_id === input.user_id) {
+    console.log("[social.createNotificationBestEffort] Skipping self-notification:", {
+      type: input.type,
+      user_id: input.user_id,
+    });
+    return;
+  }
+
+  try {
+    console.log("[social.createNotificationBestEffort] Creating notification:", {
+      type: input.type,
+      user_id: input.user_id,
+      actor_id: input.actor_id,
+      entity_type: input.entity_type,
+      entity_id: input.entity_id,
+    });
+    await createNotification(input);
+  } catch (error) {
+    console.error("[social.createNotificationBestEffort] Failed to create notification:", error);
+  }
+}
+
 export async function getFollowers(req: Request, res: Response): Promise<void> {
   const functionName = "getFollowers";
   const targetUserId = getRequestId(req.params.id);
@@ -194,6 +219,24 @@ export async function followUser(req: Request, res: Response): Promise<void> {
       res.status(409).json({ error: "Already following this user" });
       return;
     }
+
+    console.log("[followUser] Step 4: Fetching follower profile for notification...");
+    const followerProfileResult = await pool.query<{ full_name: string | null }>(
+      "SELECT full_name FROM profiles WHERE id = $1::uuid LIMIT 1",
+      [currentUserId]
+    );
+    const currentUserFullName = followerProfileResult.rows[0]?.full_name ?? "Someone";
+
+    await createNotificationBestEffort({
+      user_id: targetUserId,
+      actor_id: currentUserId,
+      type: "follow",
+      title: "New follower",
+      body: `${currentUserFullName} started following you`,
+      entity_type: "user",
+      entity_id: currentUserId,
+      data: { follower_id: currentUserId },
+    });
 
     res.status(201).json({ message: "User followed successfully", data: { follower_id: currentUserId, following_id: targetUserId } });
   } catch (error) {
@@ -684,7 +727,7 @@ export async function addReviewComment(req: Request, res: Response): Promise<voi
     await ensureReviewExists(reviewId);
 
     console.log("[addReviewComment] Step 2: Inserting comment and fetching profile...");
-    const [commentResult, profileResult] = await Promise.all([
+    const [commentResult, profileResult, reviewOwnerResult] = await Promise.all([
       pool.query<{ id: string; content: string; created_at: string }>(
         `INSERT INTO review_comments (review_id, user_id, content)
          VALUES ($1::uuid, $2::uuid, $3)
@@ -700,6 +743,10 @@ export async function addReviewComment(req: Request, res: Response): Promise<voi
          WHERE id = $1::uuid`,
         [userId]
       ),
+      pool.query<{ user_id: string }>(
+        "SELECT user_id FROM trail_reviews WHERE id = $1::uuid LIMIT 1",
+        [reviewId]
+      ),
     ]);
     console.log("[addReviewComment] Step 3: Insert rows:", commentResult.rows.length, "Profile rows:", profileResult.rows.length);
 
@@ -707,11 +754,26 @@ export async function addReviewComment(req: Request, res: Response): Promise<voi
       throw new HttpError(404, "User not found");
     }
 
+    const comment = commentResult.rows[0];
+    const reviewOwnerId = reviewOwnerResult.rows[0]?.user_id;
+    if (reviewOwnerId) {
+      await createNotificationBestEffort({
+        user_id: reviewOwnerId,
+        actor_id: userId,
+        type: "review_comment",
+        title: "New comment on your review",
+        body: `${profileResult.rows[0].full_name} commented on your review`,
+        entity_type: "review",
+        entity_id: reviewId,
+        data: { comment_id: comment.id, content_preview: content.substring(0, 100) },
+      });
+    }
+
     res.status(201).json({
       data: {
-        id: commentResult.rows[0].id,
-        content: commentResult.rows[0].content,
-        created_at: commentResult.rows[0].created_at,
+        id: comment.id,
+        content: comment.content,
+        created_at: comment.created_at,
         user: {
           id: profileResult.rows[0].id,
           full_name: profileResult.rows[0].full_name,
@@ -719,7 +781,7 @@ export async function addReviewComment(req: Request, res: Response): Promise<voi
         },
       },
     });
-    console.log("[addReviewComment] Step 4: Response sent for comment:", commentResult.rows[0].id);
+    console.log("[addReviewComment] Step 4: Response sent for comment:", comment.id);
   } catch (error) {
     sendSocialError(functionName, res, error);
   }
@@ -853,6 +915,39 @@ export async function likeReview(req: Request, res: Response): Promise<void> {
       console.warn("[likeReview] Review already liked:", { reviewId, userId });
       res.status(409).json({ error: "Review already liked" });
       return;
+    }
+
+    console.log("[likeReview] Step 4: Fetching review owner and actor for notification...");
+    const notificationContextResult = await pool.query<{
+      review_owner_id: string;
+      trail_name: string | null;
+      user_full_name: string | null;
+    }>(
+      `SELECT
+         tr.user_id AS review_owner_id,
+         t.name AS trail_name,
+         p.full_name AS user_full_name
+       FROM trail_reviews tr
+       LEFT JOIN trails t ON t.id = tr.trail_id
+       LEFT JOIN profiles p ON p.id = $2::uuid
+       WHERE tr.id = $1::uuid
+       LIMIT 1`,
+      [reviewId, userId]
+    );
+    const notificationContext = notificationContextResult.rows[0];
+    if (notificationContext) {
+      const userFullName = notificationContext.user_full_name ?? "Someone";
+      const trailName = notificationContext.trail_name ?? "a trail";
+
+      await createNotificationBestEffort({
+        user_id: notificationContext.review_owner_id,
+        actor_id: userId,
+        type: "review_like",
+        title: "Someone liked your review",
+        body: `${userFullName} liked your review of ${trailName}`,
+        entity_type: "review",
+        entity_id: reviewId,
+      });
     }
 
     res.status(201).json({ message: "Review liked successfully", data: { review_id: reviewId, user_id: userId } });
