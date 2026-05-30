@@ -8,6 +8,14 @@ interface ProfileAchievementStats {
   total_meetups_hosted: string | number | null;
   total_incidents_reported: string | number | null;
   total_reviews_written: string | number | null;
+  total_photos_uploaded: string | number | null;
+  total_meetups_joined: string | number | null;
+  total_summit_count: string | number | null;
+  unique_springs_visited: string[] | null;
+  unique_valleys_visited: string[] | null;
+  unique_heritage_sites_visited: string[] | null;
+  regions_visited: string[] | null;
+  region_trail_counts: Record<string, string | number> | null;
 }
 
 interface LeaderboardRow {
@@ -23,11 +31,16 @@ function toNumber(value: unknown): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function normalizeStatsKey(value: string): string {
+  return value.trim().toLowerCase();
+}
+
 function getCriteriaTarget(criteriaValue: Record<string, unknown>): number {
   return toNumber(
     criteriaValue.target ??
       criteriaValue.value ??
       criteriaValue.count ??
+      criteriaValue.kilometers ??
       criteriaValue.distance ??
       criteriaValue.distance_km ??
       criteriaValue.total
@@ -42,39 +55,6 @@ function normalizeAchievement(row: Achievement): Achievement {
   };
 }
 
-function statForCriteria(userStats: ProfileAchievementStats, achievement: Achievement): number {
-  const criteriaType = achievement.criteria_type.toLowerCase();
-
-  if (criteriaType.includes("distance")) {
-    return toNumber(userStats.total_distance_km);
-  }
-
-  if (criteriaType.includes("trail")) {
-    return toNumber(userStats.total_trails_completed);
-  }
-
-  if (criteriaType.includes("meetup") || criteriaType.includes("host")) {
-    return toNumber(userStats.total_meetups_hosted);
-  }
-
-  if (criteriaType.includes("incident") || criteriaType.includes("safety")) {
-    return toNumber(userStats.total_incidents_reported);
-  }
-
-  if (criteriaType.includes("review")) {
-    return toNumber(userStats.total_reviews_written);
-  }
-
-  const statKey = String(
-    achievement.criteria_value.stat ??
-      achievement.criteria_value.field ??
-      achievement.criteria_value.profile_stat ??
-      ""
-  );
-
-  return toNumber((userStats as unknown as Record<string, unknown>)[statKey]);
-}
-
 export function evaluateCriteria(
   userStats: ProfileAchievementStats,
   achievement: Achievement
@@ -85,8 +65,54 @@ export function evaluateCriteria(
     criteria_type: achievement.criteria_type,
   });
 
-  const target = getCriteriaTarget(achievement.criteria_value);
-  const progress = statForCriteria(userStats, achievement);
+  const criteriaValue = achievement.criteria_value ?? {};
+  const target = getCriteriaTarget(criteriaValue);
+  let current = 0;
+
+  switch (achievement.criteria_type) {
+    case "trails_count":
+      current = toNumber(userStats.total_trails_completed);
+      break;
+    case "reviews_count":
+      current = toNumber(userStats.total_reviews_written);
+      break;
+    case "photos_count":
+      current = toNumber(userStats.total_photos_uploaded);
+      break;
+    case "distance_km":
+      current = toNumber(userStats.total_distance_km);
+      break;
+    case "summits":
+      current = toNumber(userStats.total_summit_count);
+      break;
+    case "meetups_joined":
+      current = toNumber(userStats.total_meetups_joined);
+      break;
+    case "meetups_hosted":
+      current = toNumber(userStats.total_meetups_hosted);
+      break;
+    case "unique_places":
+      if (criteriaValue.type === "spring") {
+        current = userStats.unique_springs_visited?.length ?? 0;
+      } else if (criteriaValue.type === "valley") {
+        current = userStats.unique_valleys_visited?.length ?? 0;
+      } else if (criteriaValue.type === "heritage") {
+        current = userStats.unique_heritage_sites_visited?.length ?? 0;
+      }
+      break;
+    case "region_trails": {
+      const region = normalizeStatsKey(String(criteriaValue.region ?? ""));
+      current = region ? toNumber(userStats.region_trail_counts?.[region]) : 0;
+      break;
+    }
+    case "regions_visited":
+      current = userStats.regions_visited?.length ?? 0;
+      break;
+    default:
+      current = 0;
+  }
+
+  const progress = Math.min(current, target);
   const completed = target > 0 && progress >= target;
 
   console.log("[achievements.evaluateCriteria] Result:", { progress, target, completed });
@@ -153,6 +179,31 @@ export async function getUserAchievements(userId: string): Promise<UserAchieveme
   }));
 }
 
+async function getUserStats(userId: string): Promise<ProfileAchievementStats | undefined> {
+  const result = await pool.query<ProfileAchievementStats>(
+    `SELECT
+       COALESCE(total_distance_km, 0) AS total_distance_km,
+       COALESCE(total_trails_completed, 0) AS total_trails_completed,
+       COALESCE(total_meetups_hosted, 0) AS total_meetups_hosted,
+       COALESCE(total_incidents_reported, 0) AS total_incidents_reported,
+       COALESCE(total_reviews_written, 0) AS total_reviews_written,
+       COALESCE(total_photos_uploaded, 0) AS total_photos_uploaded,
+       COALESCE(total_meetups_joined, 0) AS total_meetups_joined,
+       COALESCE(total_summit_count, 0) AS total_summit_count,
+       COALESCE(unique_springs_visited, ARRAY[]::text[]) AS unique_springs_visited,
+       COALESCE(unique_valleys_visited, ARRAY[]::text[]) AS unique_valleys_visited,
+       COALESCE(unique_heritage_sites_visited, ARRAY[]::text[]) AS unique_heritage_sites_visited,
+       COALESCE(regions_visited, ARRAY[]::text[]) AS regions_visited,
+       COALESCE(region_trail_counts, '{}'::jsonb) AS region_trail_counts
+     FROM profiles
+     WHERE user_id = $1::uuid OR id = $1::uuid
+     LIMIT 1`,
+    [userId]
+  );
+
+  return result.rows[0];
+}
+
 async function createAchievementNotification(userId: string, achievement: Achievement): Promise<void> {
   try {
     console.log("[achievements.createAchievementNotification] Creating notification:", {
@@ -184,19 +235,8 @@ export async function checkAndAwardAchievements(userId: string): Promise<Achieve
   console.log("[achievements.checkAndAwardAchievements] ========== START ==========");
   console.log("[achievements.checkAndAwardAchievements] userId:", userId);
 
-  const [profileResult, achievementsResult, progressResult] = await Promise.all([
-    pool.query<ProfileAchievementStats>(
-      `SELECT
-         COALESCE(total_distance_km, 0) AS total_distance_km,
-         COALESCE(total_trails_completed, 0) AS total_trails_completed,
-         COALESCE(total_meetups_hosted, 0) AS total_meetups_hosted,
-         COALESCE(total_incidents_reported, 0) AS total_incidents_reported,
-         COALESCE(total_reviews_written, 0) AS total_reviews_written
-       FROM profiles
-       WHERE user_id = $1::uuid OR id = $1::uuid
-       LIMIT 1`,
-      [userId]
-    ),
+  const [userStats, achievementsResult, progressResult] = await Promise.all([
+    getUserStats(userId),
     pool.query<Achievement>(
       `SELECT id, code, name, name_ar, description, description_ar, category,
               badge_icon_url, criteria_type, criteria_value, points
@@ -211,7 +251,6 @@ export async function checkAndAwardAchievements(userId: string): Promise<Achieve
     ),
   ]);
 
-  const userStats = profileResult.rows[0];
   if (!userStats) {
     console.log("[achievements.checkAndAwardAchievements] No profile found; nothing to award");
     return [];
@@ -226,40 +265,11 @@ export async function checkAndAwardAchievements(userId: string): Promise<Achieve
     const existing = existingByAchievementId.get(achievement.id);
     const criteria = evaluateCriteria(userStats, achievement);
 
-    if (existing) {
-      console.log("[achievements.checkAndAwardAchievements] Updating progress:", {
-        achievement_id: achievement.id,
-        user_achievement_id: existing.id,
-        completed: criteria.completed,
-      });
-      const updateResult = await pool.query<UserAchievement>(
-        `UPDATE user_achievements
-         SET progress_current = $3,
-             progress_target = $4,
-             earned_at = CASE
-               WHEN earned_at IS NULL AND $5::boolean THEN NOW()
-               ELSE earned_at
-             END,
-             updated_at = NOW()
-         WHERE id = $1::uuid
-           AND user_id = $2::uuid
-         RETURNING id, user_id, achievement_id, progress_current, progress_target, earned_at`,
-        [existing.id, userId, criteria.progress, criteria.target, criteria.completed]
-      );
-
-      if (!existing.earned_at && updateResult.rows[0]?.earned_at) {
-        newlyAwarded.push(achievement);
-        await createAchievementNotification(userId, achievement);
-      }
-
-      continue;
-    }
-
-    console.log("[achievements.checkAndAwardAchievements] Inserting progress:", {
+    console.log("[achievements.checkAndAwardAchievements] Upserting progress:", {
       achievement_id: achievement.id,
       completed: criteria.completed,
     });
-    const insertResult = await pool.query<UserAchievement>(
+    const upsertResult = await pool.query<UserAchievement>(
       `INSERT INTO user_achievements (
          user_id,
          achievement_id,
@@ -268,11 +278,19 @@ export async function checkAndAwardAchievements(userId: string): Promise<Achieve
          earned_at
        )
        VALUES ($1::uuid, $2::uuid, $3, $4, CASE WHEN $5::boolean THEN NOW() ELSE NULL END)
+       ON CONFLICT (user_id, achievement_id)
+       DO UPDATE SET
+         progress_current = EXCLUDED.progress_current,
+         progress_target = EXCLUDED.progress_target,
+         earned_at = CASE
+           WHEN user_achievements.earned_at IS NULL AND $5::boolean THEN NOW()
+           ELSE user_achievements.earned_at
+         END
        RETURNING id, user_id, achievement_id, progress_current, progress_target, earned_at`,
       [userId, achievement.id, criteria.progress, criteria.target, criteria.completed]
     );
 
-    if (insertResult.rows[0]?.earned_at) {
+    if (!existing?.earned_at && upsertResult.rows[0]?.earned_at) {
       newlyAwarded.push(achievement);
       await createAchievementNotification(userId, achievement);
     }
@@ -284,10 +302,27 @@ export async function checkAndAwardAchievements(userId: string): Promise<Achieve
 
 export async function updateUserStats(
   userId: string,
-  stats: { distance?: number; trails?: number; meetups?: number; incidents?: number; reviews?: number }
+  stats: {
+    distance?: number;
+    trails?: number;
+    meetupsHosted?: number;
+    meetups?: number;
+    incidents?: number;
+    reviews?: number;
+    photos?: number;
+    meetupsJoined?: number;
+    summit?: number;
+    uniqueSpring?: string;
+    uniqueValley?: string;
+    uniqueHeritageSite?: string;
+    regionTrail?: { region: string; count?: number };
+    regionVisited?: string;
+  }
 ): Promise<void> {
   console.log("[achievements.updateUserStats] ========== START ==========");
   console.log("[achievements.updateUserStats] Params:", { userId, stats });
+  const regionTrailKey = stats.regionTrail?.region ? normalizeStatsKey(stats.regionTrail.region) : null;
+  const regionVisitedKey = stats.regionVisited ? normalizeStatsKey(stats.regionVisited) : null;
 
   await pool.query(
     `UPDATE profiles
@@ -296,15 +331,56 @@ export async function updateUserStats(
          total_meetups_hosted = COALESCE(total_meetups_hosted, 0) + $4::int,
          total_incidents_reported = COALESCE(total_incidents_reported, 0) + $5::int,
          total_reviews_written = COALESCE(total_reviews_written, 0) + $6::int,
+         total_photos_uploaded = COALESCE(total_photos_uploaded, 0) + $7::int,
+         total_meetups_joined = COALESCE(total_meetups_joined, 0) + $8::int,
+         total_summit_count = COALESCE(total_summit_count, 0) + $9::int,
+         unique_springs_visited = CASE
+           WHEN $10::text IS NULL THEN COALESCE(unique_springs_visited, ARRAY[]::text[])
+           WHEN $10::text = ANY(COALESCE(unique_springs_visited, ARRAY[]::text[])) THEN COALESCE(unique_springs_visited, ARRAY[]::text[])
+           ELSE array_append(COALESCE(unique_springs_visited, ARRAY[]::text[]), $10::text)
+         END,
+         unique_valleys_visited = CASE
+           WHEN $11::text IS NULL THEN COALESCE(unique_valleys_visited, ARRAY[]::text[])
+           WHEN $11::text = ANY(COALESCE(unique_valleys_visited, ARRAY[]::text[])) THEN COALESCE(unique_valleys_visited, ARRAY[]::text[])
+           ELSE array_append(COALESCE(unique_valleys_visited, ARRAY[]::text[]), $11::text)
+         END,
+         unique_heritage_sites_visited = CASE
+           WHEN $12::text IS NULL THEN COALESCE(unique_heritage_sites_visited, ARRAY[]::text[])
+           WHEN $12::text = ANY(COALESCE(unique_heritage_sites_visited, ARRAY[]::text[])) THEN COALESCE(unique_heritage_sites_visited, ARRAY[]::text[])
+           ELSE array_append(COALESCE(unique_heritage_sites_visited, ARRAY[]::text[]), $12::text)
+         END,
+         regions_visited = CASE
+           WHEN $13::text IS NULL THEN COALESCE(regions_visited, ARRAY[]::text[])
+           WHEN $13::text = ANY(COALESCE(regions_visited, ARRAY[]::text[])) THEN COALESCE(regions_visited, ARRAY[]::text[])
+           ELSE array_append(COALESCE(regions_visited, ARRAY[]::text[]), $13::text)
+         END,
+         region_trail_counts = CASE
+           WHEN $14::text IS NULL THEN COALESCE(region_trail_counts, '{}'::jsonb)
+           ELSE jsonb_set(
+             COALESCE(region_trail_counts, '{}'::jsonb),
+             ARRAY[$14::text],
+             to_jsonb(COALESCE((COALESCE(region_trail_counts, '{}'::jsonb)->>$14::text)::int, 0) + $15::int),
+             true
+           )
+         END,
          updated_at = NOW()
      WHERE user_id = $1::uuid OR id = $1::uuid`,
     [
       userId,
       stats.distance ?? 0,
       stats.trails ?? 0,
-      stats.meetups ?? 0,
+      stats.meetupsHosted ?? stats.meetups ?? 0,
       stats.incidents ?? 0,
       stats.reviews ?? 0,
+      stats.photos ?? 0,
+      stats.meetupsJoined ?? 0,
+      stats.summit ?? 0,
+      stats.uniqueSpring ?? null,
+      stats.uniqueValley ?? null,
+      stats.uniqueHeritageSite ?? null,
+      regionVisitedKey,
+      regionTrailKey,
+      stats.regionTrail?.count ?? 1,
     ]
   );
 
