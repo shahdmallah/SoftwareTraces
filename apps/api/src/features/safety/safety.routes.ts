@@ -3,7 +3,9 @@ import { z } from "zod";
 import { pool } from "../../db/pool";
 import { asyncHandler } from "../../lib/asyncHandler";
 import { authenticate } from "../../middleware/auth";
+import { updateUserStats } from "../achievements/achievements.service";
 import { createNotification } from "../notifications/notifications.service";
+import { getCheckpointStatus, reportCheckpointWait } from "../trails/access.controller";
 import { fetchOchaIncidents } from "./ocha.fetcher";
 
 function haversineMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
@@ -49,6 +51,9 @@ interface SafetyIncidentRow {
 }
 
 const router = Router();
+
+router.post("/checkpoints/:id/report", authenticate, asyncHandler(reportCheckpointWait));
+router.get("/checkpoints/:id/status", asyncHandler(getCheckpointStatus));
 
 const reportIncidentSchema = z.object({
   incident_type: z.enum([
@@ -481,6 +486,9 @@ router.post(
           req.auth.sub,
         ]
       );
+
+      console.log("[safety.routes] Updating achievement stats for incident report");
+      await updateUserStats(req.auth.sub, { incidents: 1 });
 
       res.status(201).json({ data: { id: result.rows[0].id } });
     } catch (error) {

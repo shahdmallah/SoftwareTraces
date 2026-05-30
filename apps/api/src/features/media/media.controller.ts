@@ -6,6 +6,7 @@ import { pool } from "../../db/pool";
 import { HttpError } from "../../lib/httpError";
 import { requireAuth } from "../../middleware/auth";
 import { verifyPhoto } from "../../services/photoVerificationService";
+import { updateUserStats } from "../achievements/achievements.service";
 
 const mediaBucket = "media";
 const validMediaMimeTypes = ["image/jpeg", "image/png", "image/gif", "image/webp"] as const;
@@ -210,6 +211,9 @@ export async function uploadMedia(req: Request & { file?: UploadedMediaFile }, r
         error: verificationError instanceof Error ? verificationError.message : String(verificationError),
       });
     }
+
+    console.log("[media.uploadMedia] updating achievement stats for uploaded photo");
+    await updateUserStats(auth.sub, { photos: 1 });
 
     res.status(201).json({
       data: {

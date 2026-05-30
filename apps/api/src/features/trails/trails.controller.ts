@@ -1605,8 +1605,8 @@ export async function saveTrail(req: Request, res: Response): Promise<void> {
 
     // Check trail exists and is not soft-deleted
     console.log("[saveTrail] 3. Checking trail exists...");
-    const trailCheck = await pool.query(
-      "SELECT id FROM trails WHERE id = $1 AND deleted_at IS NULL",
+    const trailCheck = await pool.query<{ id: string; region: string | null }>(
+      "SELECT id, region FROM trails WHERE id = $1 AND deleted_at IS NULL",
       [trailId]
     );
 
@@ -1615,6 +1615,12 @@ export async function saveTrail(req: Request, res: Response): Promise<void> {
       res.status(404).json({ error: "Trail not found" });
       return;
     }
+
+    const alreadySavedResult = await pool.query(
+      "SELECT id FROM saved_trails WHERE user_id = $1 AND trail_id = $2 AND list_type = $3",
+      [auth.sub, trailId, list_type]
+    );
+    const isNewSavedTrail = alreadySavedResult.rows.length === 0;
 
     // Upsert into saved_trails
     console.log("[saveTrail] 4. Upserting saved trail...");
@@ -1628,6 +1634,17 @@ export async function saveTrail(req: Request, res: Response): Promise<void> {
     );
 
     console.log("[saveTrail] 5. Upsert successful, saved_trail ID:", result.rows[0].id);
+
+    if (list_type === "completed" && isNewSavedTrail) {
+      const region = trailCheck.rows[0]?.region;
+      console.log("[saveTrail] 6. Updating achievement stats for completed trail", { region });
+      await updateUserStats(auth.sub, {
+        trails: 1,
+        regionTrail: region ? { region } : undefined,
+        regionVisited: region ?? undefined,
+      });
+    }
+
     res.status(201).json({ data: { id: result.rows[0].id }, message: "Trail saved successfully" });
   } catch (error) {
     console.error("[saveTrail] ❌ ERROR CAUGHT:");

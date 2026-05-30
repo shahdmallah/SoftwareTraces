@@ -749,9 +749,27 @@ export async function completeActivity(req: Request, res: Response): Promise<voi
     );
 
     console.log("[activities.completeActivity] updating achievement stats");
-    await updateUserStats(auth.sub, {
+    const achievementStats: Parameters<typeof updateUserStats>[1] = {
       distance: distance_meters / 1000,
-      trails: updatedActivity.trail_id ? 1 : 0
+      trails: updatedActivity.trail_id ? 1 : 0,
+      summit: 1
+    };
+
+    if (updatedActivity.trail_id) {
+      const trailResult = await pool.query<{ region: string | null }>(
+        "SELECT region FROM trails WHERE id = $1::uuid",
+        [updatedActivity.trail_id]
+      );
+      const region = trailResult.rows[0]?.region;
+
+      if (region) {
+        achievementStats.regionTrail = { region };
+        achievementStats.regionVisited = region;
+      }
+    }
+
+    await updateUserStats(auth.sub, {
+      ...achievementStats
     });
 
     console.log("[activities.completeActivity] returning updated activity", { activity_id: req.params.id });

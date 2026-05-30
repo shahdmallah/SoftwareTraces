@@ -313,7 +313,7 @@ export async function createMeetup(userId: string, input: CreateMeetupInput): Pr
     console.log("[meetups.createMeetup] 7. Fetching created meetup...");
     const meetup = await getMeetup(meetupId, userId);
     console.log("[meetups.createMeetup] 8. Updating achievement stats...");
-    await updateUserStats(userId, { meetups: 1 });
+    await updateUserStats(userId, { meetupsHosted: 1 });
     console.log("[meetups.createMeetup] 9. Returning meetup");
 
     return meetup;
@@ -444,6 +444,8 @@ export async function createMeetupFull(userId: string, input: CreateMeetupInput)
 
     console.log("[meetups.createMeetupFull] 12. COMMIT transaction");
     await client.query("COMMIT");
+    console.log("[meetups.createMeetupFull] Updating achievement stats");
+    await updateUserStats(userId, { meetupsHosted: 1 });
     console.log("[meetups.createMeetupFull] createMeetupFull complete:", meetupId);
     return meetup;
   } catch (error) {
@@ -642,6 +644,7 @@ export async function joinMeetup(meetupId: string, userId: string, guestCount: n
     );
 
     await client.query("COMMIT");
+    await updateUserStats(userId, { meetupsJoined: 1 });
     return {
       meetup_id: meetupId,
       status: "joined",
