@@ -17,6 +17,7 @@ import {
 import { generateTrailFromDescription } from "../../services/trailGenerationService";
 import { searchTrailsByCriteria } from "../../services/trailSearchService";
 import { verifyPhoto } from "../../services/photoVerificationService";
+import { updateUserStats } from "../achievements/achievements.service";
 
 const calculateTrailStatsBodySchema = z.object({
   coordinates: z.array(z.tuple([z.number(), z.number()])).min(2),
@@ -1136,6 +1137,9 @@ export async function createTrailReview(req: Request, res: Response): Promise<vo
           });
         }
       }
+
+      console.log("[createTrailReview] Updating achievement stats for review");
+      await updateUserStats(auth.sub, { reviews: 1 });
 
       res.status(201).json({
         data: {

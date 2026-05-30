@@ -1,5 +1,6 @@
 import type { PoolClient } from "pg";
 import { pool } from "../../db/pool";
+import { updateUserStats } from "../achievements/achievements.service";
 import type {
   CreateMeetupInput,
   JoinMeetupResult,
@@ -311,7 +312,9 @@ export async function createMeetup(userId: string, input: CreateMeetupInput): Pr
 
     console.log("[meetups.createMeetup] 7. Fetching created meetup...");
     const meetup = await getMeetup(meetupId, userId);
-    console.log("[meetups.createMeetup] 8. Returning meetup");
+    console.log("[meetups.createMeetup] 8. Updating achievement stats...");
+    await updateUserStats(userId, { meetups: 1 });
+    console.log("[meetups.createMeetup] 9. Returning meetup");
 
     return meetup;
   } catch (error) {

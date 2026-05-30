@@ -6,6 +6,7 @@ import { pool } from "../../db/pool";
 import { HttpError } from "../../lib/httpError";
 import { requireAuth } from "../../middleware/auth";
 import { verifyPhoto } from "../../services/photoVerificationService";
+import { updateUserStats } from "../achievements/achievements.service";
 
 interface StartActivityBody {
   trail_id?: string;
@@ -746,6 +747,12 @@ export async function completeActivity(req: Request, res: Response): Promise<voi
       `,
       [req.params.id, ended_at]
     );
+
+    console.log("[activities.completeActivity] updating achievement stats");
+    await updateUserStats(auth.sub, {
+      distance: distance_meters / 1000,
+      trails: updatedActivity.trail_id ? 1 : 0
+    });
 
     console.log("[activities.completeActivity] returning updated activity", { activity_id: req.params.id });
     res.status(200).json(updatedActivity);
