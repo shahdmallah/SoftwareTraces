@@ -5,7 +5,12 @@ import { asyncHandler } from "../../lib/asyncHandler";
 import { authenticate } from "../../middleware/auth";
 import { updateUserStats } from "../achievements/achievements.service";
 import { createNotification } from "../notifications/notifications.service";
-import { getCheckpointStatus, reportCheckpointWait } from "../trails/access.controller";
+import {
+  getCheckpointStatus,
+  getSuggestedCheckpointRoutes,
+  reportCheckpointWait,
+  suggestCheckpointRoute,
+} from "../trails/access.controller";
 import { fetchOchaIncidents } from "./ocha.fetcher";
 
 function haversineMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
@@ -54,6 +59,8 @@ const router = Router();
 
 router.post("/checkpoints/:id/report", authenticate, asyncHandler(reportCheckpointWait));
 router.get("/checkpoints/:id/status", asyncHandler(getCheckpointStatus));
+router.post("/checkpoints/:id/suggest-route", authenticate, asyncHandler(suggestCheckpointRoute));
+router.get("/checkpoints/:id/suggested-routes", asyncHandler(getSuggestedCheckpointRoutes));
 
 const reportIncidentSchema = z.object({
   incident_type: z.enum([
