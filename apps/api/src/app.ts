@@ -9,6 +9,7 @@ import authRoutes from "./features/auth/auth.routes";
 import debugRoutes from "./features/debug/debug.routes";
 import healthRoutes from "./features/health/health.routes";
 import mediaRoutes from "./features/media/media.routes";
+import messagesRoutes from "./features/messages/messages.routes";
 import meetupsRoutes from "./features/meetups/meetups.routes";
 import navigationRoutes from "./features/navigation/navigation.routes";
 import notificationsRoutes from "./features/notifications/notifications.routes";
@@ -43,6 +44,7 @@ export function createApp() {
   app.use("/api/trails", trailsRoutes);
   app.use("/api/activities", activitiesRoutes);
   app.use("/api/media", mediaRoutes);
+  app.use("/api/messages", messagesRoutes);
   app.use("/api/meetups", meetupsRoutes);
   app.use("/api/navigation", navigationRoutes);
   app.use("/api/notifications", notificationsRoutes);
