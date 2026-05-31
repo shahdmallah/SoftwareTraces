@@ -15,8 +15,10 @@ import notificationsRoutes from "./features/notifications/notifications.routes";
 import offlineRoutes from "./features/offline/offline.routes";
 import photosRoutes from "./features/photos/photos.routes";
 import profilesRoutes from "./features/profiles/profiles.routes";
+import recommendationsRoutes from "./features/recommendations/recommendations.routes";
 import safetyRoutes from "./features/safety/safety.routes";
 import socialRoutes from "./features/social/social.routes";
+import accessRoutes from "./features/trails/access.routes";
 import trailsRoutes from "./features/trails/trails.routes";
 import { errorHandler } from "./middleware/errorHandler";
 import { asyncHandler } from "./lib/asyncHandler";
@@ -37,6 +39,7 @@ export function createApp() {
 
   app.use("/api/auth", authRoutes);
   app.use("/api/debug", debugRoutes);
+  app.use("/api/trails", accessRoutes);
   app.use("/api/trails", trailsRoutes);
   app.use("/api/activities", activitiesRoutes);
   app.use("/api/media", mediaRoutes);
@@ -51,6 +54,7 @@ export function createApp() {
   app.use("/api/profiles", profilesRoutes);
   app.use("/api/offline", offlineRoutes);
   app.use("/api/achievements", achievementsRoutes);
+  app.use("/api/recommendations", recommendationsRoutes);
 
   if (process.env.NODE_ENV !== "test") {
     cron.schedule("0 * * * *", () => {
