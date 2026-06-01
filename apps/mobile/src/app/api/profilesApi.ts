@@ -25,6 +25,8 @@ export type Profile = {
     total_following: number;
     total_friends?: number;
     friends_count?: number;
+    total_points?: number;
+    achievements_count?: number;
   };
   relationship?: {
     is_following: boolean;
@@ -33,6 +35,20 @@ export type Profile = {
   };
   recent_reviews?: ProfileReview[];
   recent_photos?: ProfilePhoto[];
+  recent_achievements?: ProfileAchievement[];
+};
+
+export type ProfileAchievement = {
+  id: string;
+  code?: string;
+  name: string;
+  name_ar?: string | null;
+  description?: string | null;
+  description_ar?: string | null;
+  category?: string | null;
+  badge_icon_url?: string | null;
+  points?: number;
+  earned_at?: string | null;
 };
 
 export type ProfileReview = {

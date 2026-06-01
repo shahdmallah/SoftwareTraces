@@ -20,6 +20,21 @@ interface ProfileStatsRow {
   total_followers: string;
   total_following: string;
   total_friends: string;
+  total_points: string;
+  achievements_count: string;
+}
+
+interface RecentAchievementRow {
+  id: string;
+  code: string;
+  name: string;
+  name_ar: string | null;
+  description: string;
+  description_ar: string | null;
+  category: string;
+  badge_icon_url: string | null;
+  points: number;
+  earned_at: string;
 }
 
 interface ProfileReviewRow {
@@ -111,7 +126,7 @@ export async function getProfile(req: Request, res: Response): Promise<void> {
     const profile = await getProfileByUserId(requestedId);
     const viewerId = req.auth?.sub ?? null;
 
-    const [statsResult, recentReviewsResult, recentPhotosResult] = await Promise.all([
+    const [statsResult, recentReviewsResult, recentPhotosResult, recentAchievementsResult] = await Promise.all([
       pool.query<ProfileStatsRow>(
         `SELECT
            (SELECT COUNT(*) FROM trail_reviews tr WHERE tr.user_id = $1) AS total_reviews,
@@ -135,7 +150,16 @@ export async function getProfile(req: Request, res: Response): Promise<void> {
                ON f2.follower_id = f1.following_id
               AND f2.following_id = f1.follower_id
              WHERE f1.follower_id = $1
-           ) AS total_friends`,
+           ) AS total_friends,
+           (SELECT COALESCE(SUM(a.points), 0)
+            FROM user_achievements ua
+            JOIN achievements a ON a.id = ua.achievement_id
+            WHERE ua.user_id = $1::uuid
+              AND ua.earned_at IS NOT NULL) AS total_points,
+           (SELECT COUNT(*)
+            FROM user_achievements ua
+            WHERE ua.user_id = $1::uuid
+              AND ua.earned_at IS NOT NULL) AS achievements_count`,
         [profile.user_id]
       ),
       pool.query<ProfileReviewRow>(
@@ -203,6 +227,26 @@ export async function getProfile(req: Request, res: Response): Promise<void> {
          LIMIT 5`,
         [profile.user_id]
       ),
+      pool.query<RecentAchievementRow>(
+        `SELECT
+           a.id,
+           a.code,
+           a.name,
+           a.name_ar,
+           a.description,
+           a.description_ar,
+           a.category,
+           a.badge_icon_url,
+           a.points,
+           ua.earned_at
+         FROM user_achievements ua
+         JOIN achievements a ON a.id = ua.achievement_id
+         WHERE ua.user_id = $1::uuid
+           AND ua.earned_at IS NOT NULL
+         ORDER BY ua.earned_at DESC
+         LIMIT 5`,
+        [profile.user_id]
+      ),
     ]);
 
     const stats = statsResult.rows[0];
@@ -230,6 +274,8 @@ export async function getProfile(req: Request, res: Response): Promise<void> {
           total_following: Number(stats.total_following),
           total_friends: Number(stats.total_friends),
           friends_count: Number(stats.total_friends),
+          total_points: Number(stats.total_points),
+          achievements_count: Number(stats.achievements_count),
         },
         relationship: {
           is_following: isViewerFollowing,
@@ -257,6 +303,18 @@ export async function getProfile(req: Request, res: Response): Promise<void> {
           source: row.source,
           trail_id: row.trail_id,
           trail_name: row.trail_name,
+        })),
+        recent_achievements: recentAchievementsResult.rows.map((row) => ({
+          id: row.id,
+          code: row.code,
+          name: row.name,
+          name_ar: row.name_ar,
+          description: row.description,
+          description_ar: row.description_ar,
+          category: row.category,
+          badge_icon_url: row.badge_icon_url,
+          points: Number(row.points),
+          earned_at: row.earned_at,
         })),
       },
     });

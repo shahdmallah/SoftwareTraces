@@ -58,7 +58,14 @@ export type TrailReview = {
   title?: string | null;
   content: string;
   created_at: string;
-  photos?: Array<{ id: string; url: string; created_at?: string }>;
+  photos?: Array<{
+    id: string;
+    url: string;
+    created_at?: string;
+    approved_for_trail_page?: boolean;
+    helpful_score?: number;
+    flag_count?: number;
+  }>;
   user?: {
     id?: string;
     full_name?: string | null;
@@ -78,11 +85,17 @@ export type TrailReview = {
 export type TrailPhoto = {
   id: string;
   url: string;
+  thumbnail_url?: string | null;
   caption?: string | null;
   is_primary?: boolean;
   created_at?: string;
   uploaded_by?: string | null;
-  source?: 'direct' | 'review';
+  source?: 'direct' | 'review' | 'media' | 'activity_media';
+  approved_for_trail_page?: boolean;
+  manual_review_required?: boolean;
+  helpful_score?: number;
+  flag_count?: number;
+  quality_score?: number | null;
 };
 
 export type ReactNativeFile = {

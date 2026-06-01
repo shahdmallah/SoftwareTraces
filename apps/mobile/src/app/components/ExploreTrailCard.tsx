@@ -351,29 +351,29 @@ export function ExploreTrailCard({
               </Text>
             </View>
 
-            <Pressable
-              style={({ pressed }) => [
-                styles.cardMapAction,
-                isDownloaded && styles.cardMapActionDownloaded,
-                pressed && styles.cardActionIconPressed,
-              ]}
-              disabled={isDownloading}
-              onPress={(e) => {
-                e.stopPropagation();
-                onDownload();
-              }}
-            >
-              {isDownloading ? (
-                <ActivityIndicator color="#630E13" />
-              ) : (
-                <Ionicons
-                  name={isDownloaded ? 'cloud-done' : 'cloud-download-sharp'}
-                  size={36}
-                  color={isDownloaded ? '#1E7A46' : '#630E13'}
-                />
-              )}
-            </Pressable>
-          </View>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.cardMapAction,
+                  isDownloaded && styles.cardMapActionDownloaded,
+                  pressed && styles.cardActionIconPressed,
+                ]}
+                disabled={isDownloading}
+                onPress={(e) => {
+                  e.stopPropagation();
+                  onDownload();
+                }}
+              >
+                {isDownloading ? (
+                  <ActivityIndicator color="#630E13" />
+                ) : (
+                  <Ionicons
+                    name={isDownloaded ? 'cloud-done' : 'cloud-download-sharp'}
+                    size={36}
+                    color={isDownloaded ? '#1E7A46' : '#630E13'}
+                  />
+                )}
+              </Pressable>
+            </View>
 
           {trailLabels.length ? (
             <View style={[styles.labelRow, isArabic ? rtlRow : ltrRow]}>

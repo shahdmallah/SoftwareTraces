@@ -345,6 +345,20 @@ function buildDirectionsUrl(waypoints: LngLat[]) {
   return `https://api.mapbox.com/directions/v5/mapbox/walking/${coordinates}?${params.toString()}`;
 }
 
+function getRouteBounds(coordinates: LngLat[]) {
+  if (coordinates.length < 2) {
+    return null;
+  }
+
+  const longitudes = coordinates.map((point) => point[0]);
+  const latitudes = coordinates.map((point) => point[1]);
+
+  return {
+    northEast: [Math.max(...longitudes), Math.max(...latitudes)] as LngLat,
+    southWest: [Math.min(...longitudes), Math.min(...latitudes)] as LngLat,
+  };
+}
+
 export function TrailCreator({
   styleURL,
   initialCenter = [35.24, 31.78],
@@ -398,6 +412,7 @@ export function TrailCreator({
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState<string | null>(null);
   const [recordingStartedAt, setRecordingStartedAt] = useState<number | null>(null);
+  const [isMapReady, setIsMapReady] = useState(false);
 
   const [zoomLevel, setZoomLevel] = useState(initialZoom);
   const [pitch, setPitch] = useState(0); // 0 for 2D, 45 for 3D
@@ -435,6 +450,10 @@ export function TrailCreator({
   };
 
   const routeGeojson = useMemo(() => toLineFeature(routeCoordinates), [routeCoordinates]);
+  const routeKey = useMemo(
+    () => routeCoordinates.map(([lng, lat]) => `${lng.toFixed(5)},${lat.toFixed(5)}`).join('|'),
+    [routeCoordinates],
+  );
   const startGeojson = useMemo(() => toPointFeature(startCoordinate), [startCoordinate]);
   const middleGeojson = useMemo(() => toPointsFeatureCollection(middleCoordinates), [middleCoordinates]);
   const endGeojson = useMemo(() => toPointFeature(endCoordinate), [endCoordinate]);
@@ -493,6 +512,19 @@ export function TrailCreator({
       });
     }
   }, [initialGeneratedTrail]);
+
+  useEffect(() => {
+    if (!isMapReady || routeCoordinates.length < 2) {
+      return;
+    }
+
+    const bounds = getRouteBounds(routeCoordinates);
+    if (!bounds) {
+      return;
+    }
+
+    cameraRef.current?.fitBounds(bounds.northEast, bounds.southWest, 80, 800);
+  }, [isMapReady, routeKey, routeCoordinates]);
 
   const begin = () => {
     locationSubscriptionRef.current?.remove();
@@ -857,6 +889,7 @@ export function TrailCreator({
         scaleBarEnabled={false}
         logoEnabled={false}
         attributionEnabled={false}
+        onDidFinishLoadingMap={() => setIsMapReady(true)}
         onPress={(e) => {
           const coord = (e.geometry?.coordinates ?? null) as unknown as LngLat | null;
           handleMapPress(coord);
@@ -869,7 +902,7 @@ export function TrailCreator({
           pitch={pitch}
         />
 
-        <Mapbox.ShapeSource id="trail-route-source" shape={routeGeojson}>
+        <Mapbox.ShapeSource key={`trail-route-source-${routeKey}`} id="trail-route-source" shape={routeGeojson}>
           <Mapbox.LineLayer
             id="trail-line"
             style={{

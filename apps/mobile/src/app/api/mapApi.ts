@@ -20,6 +20,7 @@ export type MapBubblePhoto = {
   thumbnail_url?: string | null;
   public_url?: string | null;
   caption?: string | null;
+  source?: 'media' | 'activity_media';
   uploader_name?: string | null;
   uploaded_by?: string | null;
   user?: {
@@ -222,6 +223,7 @@ export async function getMapBubbles(params: {
   sw_lat: number;
   sw_lng: number;
   zoom: number;
+  limit?: number;
 }) {
   const response = await apiRequest<Envelope<RawMapBubbleResponse>>('/api/media/map/bubbles', {}, params);
   return normalizeRawBubbles(response).map(normalizeBubble).filter((bubble): bubble is MapBubble => Boolean(bubble));

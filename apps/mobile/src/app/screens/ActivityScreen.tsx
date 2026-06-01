@@ -7,7 +7,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
 import { deleteActivityPost } from '../api/activitiesApi';
-import { addReviewComment, commentOnActivity, followUser, getFollowing, getReviewComments, likeActivity, likeReview, unfollowUser, unlikeReview, getSocialFeed, type ActivityComment, type ReviewComment } from '../api/socialApi';
+import { addReviewComment, commentOnActivity, followUser, getFollowing, getFriendSuggestions, getReviewComments, likeActivity, likeReview, unfollowUser, unlikeReview, getSocialFeed, type ActivityComment, type FriendSuggestion, type ReviewComment } from '../api/socialApi';
 import { deleteTrailReview } from '../api/trailsApi';
 import { listMeetups } from '../api/meetupsApi';
 import { type FeedCommentPreview, type FeedItem } from '../data/activitySocial';
@@ -297,6 +297,15 @@ function matchesQuery(item: FeedItem, query: string): boolean {
   });
 }
 
+function isUpcomingPlan(item: FeedItem, now = Date.now()): boolean {
+  if (item.kind !== 'plan' || !item.startsAt) {
+    return true;
+  }
+
+  const startsAtMs = new Date(item.startsAt).getTime();
+  return Number.isNaN(startsAtMs) || startsAtMs > now;
+}
+
 type FeedCardProps = {
   item: FeedItem;
   index: number;
@@ -345,7 +354,7 @@ const FeedCard = memo(function FeedCard({
           isFollowed={Boolean(item.userId && followedUsers[item.userId])}
         />
       ) : (
-        <PlanCard item={item} isArabic={isArabic} onOpenPlan={onOpenPlan} />
+        <PlanCard item={item} isArabic={isArabic} onOpenPlan={onOpenPlan} onOpenProfile={onOpenProfile} />
       )}
     </AnimatedBlock>
   );
@@ -612,14 +621,16 @@ const RecapCard = memo(function RecapCard({
           </Pressable>
           <Ionicons name="navigate-outline" size={19} color="#2C2418" />
         </View>
-        <Pressable
-          onPress={(event) => {
-            event.stopPropagation();
-            onOpenTrail(item.trailId);
-          }}
-        >
-          <Ionicons name="map-outline" size={19} color="#2C2418" />
-        </Pressable>
+        {item.trailId ? (
+          <Pressable
+            onPress={(event) => {
+              event.stopPropagation();
+              onOpenTrail(item.trailId);
+            }}
+          >
+            <Ionicons name="map-outline" size={19} color="#2C2418" />
+          </Pressable>
+        ) : null}
       </View>
 
       <View style={styles.cardBody}>
@@ -642,13 +653,23 @@ const RecapCard = memo(function RecapCard({
           <View style={styles.commentPreviewList}>
             {visibleComments.map((comment) => (
               <View key={comment.id} style={[styles.commentPreviewRow, isArabic ? rtlRow : ltrRow]}>
-                {hasImageUri(comment.avatar) ? (
-                  <Image source={{ uri: comment.avatar.trim() }} style={styles.commentPreviewAvatar} />
-                ) : (
-                  <View style={[styles.commentPreviewAvatar, styles.commentPreviewAvatarFallback]}>
-                    <Text style={styles.commentPreviewAvatarText}>{getInitials(comment.user)}</Text>
-                  </View>
-                )}
+                <Pressable
+                  onPress={(event) => {
+                    event.stopPropagation();
+                    if (comment.userId) {
+                      onOpenProfile(comment.userId);
+                    }
+                  }}
+                  disabled={!comment.userId}
+                >
+                  {hasImageUri(comment.avatar) ? (
+                    <Image source={{ uri: comment.avatar.trim() }} style={styles.commentPreviewAvatar} />
+                  ) : (
+                    <View style={[styles.commentPreviewAvatar, styles.commentPreviewAvatarFallback]}>
+                      <Text style={styles.commentPreviewAvatarText}>{getInitials(comment.user)}</Text>
+                    </View>
+                  )}
+                </Pressable>
                 <View style={styles.commentPreviewBubble}>
                   <Text style={[styles.commentPreviewText, isArabic ? rtlText : ltrText, { textAlign: isArabic ? 'right' : 'left' }]} numberOfLines={2}>
                     <Text style={styles.commentPreviewUser}>{comment.user} </Text>
@@ -694,10 +715,12 @@ const PlanCard = memo(function PlanCard({
   item,
   isArabic,
   onOpenPlan,
+  onOpenProfile,
 }: {
   item: PlanItem;
   isArabic: boolean;
   onOpenPlan: (item: PlanItem) => void;
+  onOpenProfile: (userId: string) => void;
 }) {
   const coverUri = hasImageUri(item.cover) ? item.cover.trim() : null;
 
@@ -712,6 +735,7 @@ const PlanCard = memo(function PlanCard({
         badgeLabelEn="Meetup"
         badgeLabelAr="لقاء"
         badgeStyle="meetup"
+        onOpenProfile={item.userId ? () => onOpenProfile(item.userId!) : undefined}
       />
 
       {/* Full-bleed cover with event details overlaid */}
@@ -753,6 +777,80 @@ const PlanCard = memo(function PlanCard({
 });
 
 // ─── Screen ───────────────────────────────────────────────────────────────────
+const SuggestedHikersRail = memo(function SuggestedHikersRail({
+  hikers,
+  isArabic,
+  pendingSuggestionId,
+  onOpenProfile,
+  onFollow,
+}: {
+  hikers: FriendSuggestion[];
+  isArabic: boolean;
+  pendingSuggestionId: string | null;
+  onOpenProfile: (userId: string) => void;
+  onFollow: (hiker: FriendSuggestion) => Promise<void>;
+}) {
+  if (!hikers.length) {
+    return null;
+  }
+
+  return (
+    <AnimatedBlock delay={95}>
+      <View style={styles.suggestionSection}>
+        <View style={[styles.suggestionHeader, isArabic ? rtlRow : ltrRow]}>
+          <Text style={[styles.suggestionTitle, isArabic ? rtlText : ltrText]}>
+            {isArabic ? 'Suggestions' : 'Suggested hikers'}
+          </Text>
+        </View>
+        <FlatList
+          horizontal
+          data={hikers}
+          keyExtractor={(hiker) => hiker.id}
+          renderItem={({ item }) => (
+            <Pressable style={styles.suggestionCard} onPress={() => onOpenProfile(item.id)}>
+              {hasImageUri(item.avatar_url) ? (
+                <Image source={{ uri: item.avatar_url.trim() }} style={styles.suggestionAvatar} />
+              ) : (
+                <View style={[styles.suggestionAvatar, styles.avatarFallback]}>
+                  <Text style={styles.avatarFallbackText}>{getInitials(item.full_name)}</Text>
+                </View>
+              )}
+              <Text numberOfLines={1} style={[styles.suggestionName, isArabic ? rtlText : ltrText]}>
+                {item.full_name}
+              </Text>
+              <Text numberOfLines={2} style={[styles.suggestionMeta, isArabic ? rtlText : ltrText]}>
+                {item.mutual_following_count > 0
+                  ? `${item.mutual_following_count} mutual follows`
+                  : 'Recommended for your trail network'}
+              </Text>
+              <Pressable
+                style={styles.suggestionFollowButton}
+                onPress={(event) => {
+                  event.stopPropagation();
+                  void onFollow(item);
+                }}
+                disabled={pendingSuggestionId === item.id}
+              >
+                {pendingSuggestionId === item.id ? (
+                  <ActivityIndicator size="small" color="#630E13" />
+                ) : (
+                  <>
+                    <Ionicons name="person-add-outline" size={14} color="#630E13" />
+                    <Text style={styles.suggestionFollowText}>{isArabic ? 'Follow' : 'Follow'}</Text>
+                  </>
+                )}
+              </Pressable>
+            </Pressable>
+          )}
+          contentContainerStyle={[styles.suggestionList, isArabic && styles.suggestionListRtl]}
+          showsHorizontalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        />
+      </View>
+    </AnimatedBlock>
+  );
+});
+
 export function ActivityScreen() {
   const navigation = useNavigation<ActivityNavigationProp>();
   const insets = useSafeAreaInsets();
@@ -768,18 +866,26 @@ export function ActivityScreen() {
   const [feedError, setFeedError] = useState('');
   const [isFeedLoading, setIsFeedLoading] = useState(false);
   const [followedUsers, setFollowedUsers] = useState<Record<string, boolean>>({});
+  const [suggestedHikers, setSuggestedHikers] = useState<FriendSuggestion[]>([]);
+  const [pendingSuggestionId, setPendingSuggestionId] = useState<string | null>(null);
   const [calendarVisible, setCalendarVisible] = useState(false);
+  const [currentTimeMs, setCurrentTimeMs] = useState(() => Date.now());
 
   const normalizedQuery = useMemo(() => normalize(searchQuery), [searchQuery]);
 
   const feedData = useMemo(() => {
-    return [...localFeedItems, ...remoteMeetups, ...(isAuthenticated ? remoteRecaps : [])];
-  }, [isAuthenticated, localFeedItems, remoteMeetups, remoteRecaps]);
+    return [...localFeedItems, ...remoteMeetups, ...(isAuthenticated ? remoteRecaps : [])]
+      .filter((item) => isUpcomingPlan(item, currentTimeMs));
+  }, [currentTimeMs, isAuthenticated, localFeedItems, remoteMeetups, remoteRecaps]);
 
   const refreshMeetups = useCallback(async () => {
     try {
       const response = await listMeetups({ page: 1, limit: 30 });
-      setRemoteMeetups(response.data.map(mapMeetupToFeedItem));
+      setRemoteMeetups(
+        response.data
+          .map(mapMeetupToFeedItem)
+          .filter(isUpcomingPlan),
+      );
     } catch {
       setRemoteMeetups([]);
     }
@@ -787,10 +893,16 @@ export function ActivityScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      setCurrentTimeMs(Date.now());
       setLocalFeedItems(getLocalFeedItems());
       void refreshMeetups();
     }, [refreshMeetups]),
   );
+
+  useEffect(() => {
+    const intervalId = setInterval(() => setCurrentTimeMs(Date.now()), 60 * 1000);
+    return () => clearInterval(intervalId);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -869,17 +981,22 @@ export function ActivityScreen() {
   useEffect(() => {
     if (!isAuthenticated || !user?.id) {
       setFollowedUsers({});
+      setSuggestedHikers([]);
       return;
     }
 
     const loadFollowing = async () => {
       try {
-        const response = await getFollowing(user.id);
+        const [response, suggestionsResponse] = await Promise.all([
+          getFollowing(user.id),
+          getFriendSuggestions({ page: 1, limit: 12 }).catch(() => ({ data: [] as FriendSuggestion[] })),
+        ]);
         const followingMap = response.data.reduce((acc, profile) => {
           acc[profile.id] = true;
           return acc;
         }, {} as Record<string, boolean>);
         setFollowedUsers(followingMap);
+        setSuggestedHikers(suggestionsResponse.data.filter((hiker) => hiker.id !== user.id));
       } catch {
         // Handle error if needed
       }
@@ -887,6 +1004,26 @@ export function ActivityScreen() {
 
     void loadFollowing();
   }, [isAuthenticated, user?.id]);
+
+  const handleFollowSuggestion = useCallback(
+    async (hiker: FriendSuggestion) => {
+      if (pendingSuggestionId) {
+        return;
+      }
+
+      setPendingSuggestionId(hiker.id);
+      try {
+        await followUser(hiker.id);
+        setSuggestedHikers((current) => current.filter((item) => item.id !== hiker.id));
+        setFollowedUsers((current) => ({ ...current, [hiker.id]: true }));
+      } catch (error) {
+        Alert.alert(isArabic ? 'طھط¹ط°ط± طھط­ط¯ظٹط« ط§ظ„ظ…طھط§ط¨ط¹ط©' : 'Unable to follow', error instanceof Error ? error.message : 'Please try again.');
+      } finally {
+        setPendingSuggestionId(null);
+      }
+    },
+    [isArabic, pendingSuggestionId],
+  );
 
   const updateRecap = useCallback((id: string, updater: (item: RecapItem) => RecapItem) => {
     const updateItems = (items: FeedItem[]) => items.map((item) => (item.kind === 'recap' && item.id === id ? updater(item) : item));
@@ -1084,6 +1221,14 @@ export function ActivityScreen() {
           </View>
         </AnimatedBlock>
 
+        <SuggestedHikersRail
+          hikers={suggestedHikers}
+          isArabic={isArabic}
+          pendingSuggestionId={pendingSuggestionId}
+          onOpenProfile={handleOpenProfile}
+          onFollow={handleFollowSuggestion}
+        />
+
         {searchOpen ? (
           <AnimatedBlock delay={60}>
             <View style={styles.searchCard}>
@@ -1144,7 +1289,7 @@ export function ActivityScreen() {
         ) : null}
       </View>
     ),
-    [calendarVisible, feedError, isArabic, isFeedLoading, navigation, searchOpen, searchQuery, t],
+    [calendarVisible, feedError, handleFollowSuggestion, handleOpenProfile, isArabic, isFeedLoading, navigation, pendingSuggestionId, searchOpen, searchQuery, suggestedHikers, t],
   );
 
   return (
@@ -1234,6 +1379,73 @@ const styles = StyleSheet.create({
   },
 
   // ─── Search ────────────────────────────────────────────────────────────────
+  suggestionSection: {
+    marginBottom: 14,
+  },
+  suggestionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  suggestionTitle: {
+    color: '#2C2418',
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  suggestionList: {
+    gap: 10,
+    paddingRight: 4,
+  },
+  suggestionListRtl: {
+    flexDirection: 'row-reverse',
+    paddingRight: 0,
+    paddingLeft: 4,
+  },
+  suggestionCard: {
+    width: 156,
+    minHeight: 176,
+    borderRadius: 18,
+    padding: 12,
+    backgroundColor: '#FFF8F1',
+    borderWidth: 1,
+    borderColor: '#E7D8C3',
+  },
+  suggestionAvatar: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#E7D8C3',
+  },
+  suggestionName: {
+    marginTop: 10,
+    color: '#2C2418',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  suggestionMeta: {
+    marginTop: 6,
+    minHeight: 34,
+    color: '#6B5D4E',
+    fontSize: 11,
+    lineHeight: 16,
+    fontWeight: '700',
+  },
+  suggestionFollowButton: {
+    minHeight: 34,
+    marginTop: 10,
+    borderRadius: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: '#F7EBE8',
+  },
+  suggestionFollowText: {
+    color: '#630E13',
+    fontSize: 12,
+    fontWeight: '900',
+  },
   searchCard: {
     backgroundColor: '#FFFFFF',
     borderRadius: 18,

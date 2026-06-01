@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import { ArrowLeft, Save, Send, MapPin, Image as ImageIcon, RotateCcw } from 'lucide-react';
+import { ArrowLeft, Save, Send, MapPin, Image as ImageIcon, RotateCcw, Sparkles } from 'lucide-react';
 import { Link, useNavigate } from 'react-router';
 import { MapboxTrailMap } from '../components/MapboxTrailMap';
-import { createTrail, getNearbyTrails, getTrailStats, type Trail } from '../api/trails';
+import { createTrail, getNearbyTrails, getTrailStats, searchOrGenerateTrail, type Trail } from '../api/trails';
 import { getAccessToken } from '../api/client';
 import { translateTrailContentToArabic } from '../utils/translateTrailContent';
 
@@ -73,6 +73,11 @@ export function CreateTrailPage() {
   const navigate = useNavigate();
   const [trailName, setTrailName] = useState('');
   const [description, setDescription] = useState('');
+  const [region, setRegion] = useState('');
+  const [features, setFeatures] = useState<string[]>([]);
+  const [trailPrompt, setTrailPrompt] = useState('');
+  const [isGeneratingTrail, setIsGeneratingTrail] = useState(false);
+  const [generatedMessage, setGeneratedMessage] = useState('');
   const [routePoints, setRoutePoints] = useState<[number, number][]>([
     [35.235, 31.776],
     [35.255, 31.785],
@@ -80,6 +85,43 @@ export function CreateTrailPage() {
   const [isSaving, setIsSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const isGuest = !getAccessToken();
+
+  const handleGenerateTrail = async () => {
+    const prompt = trailPrompt.trim();
+    if (!prompt) {
+      setErrorMessage('Describe the trail you want to generate.');
+      return;
+    }
+
+    setIsGeneratingTrail(true);
+    setErrorMessage('');
+    setGeneratedMessage('');
+    try {
+      const result = await searchOrGenerateTrail(prompt);
+      const generatedTrail = result.generated_trail;
+
+      if (!generatedTrail || generatedTrail.coordinates.length < 2) {
+        const firstExistingTrail = result.existing_trails[0];
+        setGeneratedMessage(
+          firstExistingTrail
+            ? `Found an existing match: ${firstExistingTrail.name}. Adjust the description to generate a new draft.`
+            : 'No generated route came back. Try adding a region, distance, or difficulty.',
+        );
+        return;
+      }
+
+      setRoutePoints(generatedTrail.coordinates);
+      setTrailName(generatedTrail.name_suggestion || result.parsed.name_suggestion || 'Suggested Trail');
+      setDescription(generatedTrail.description_suggestion || result.parsed.description_suggestion || prompt);
+      setRegion(result.parsed.region || '');
+      setFeatures(Array.from(new Set((generatedTrail.labels.length ? generatedTrail.labels : result.parsed.labels).filter(Boolean))));
+      setGeneratedMessage('Generated a route draft from your description. Review the map and details before creating it.');
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Unable to generate a trail from that description.');
+    } finally {
+      setIsGeneratingTrail(false);
+    }
+  };
 
   const handleSubmit = async () => {
     if (isGuest) {
@@ -120,12 +162,19 @@ export function CreateTrailPage() {
       const translatedTrail = await translateTrailContentToArabic({
         name: trailName.trim(),
         description: description.trim() || undefined,
+        region: region.trim() || undefined,
+        features,
       });
       const trail = await createTrail({
         name: trailName.trim(),
         nameAr: translatedTrail.nameAr,
         description: description.trim(),
         descriptionAr: translatedTrail.descriptionAr,
+        region: region.trim() || undefined,
+        regionAr: translatedTrail.regionAr,
+        features,
+        featuresAr: translatedTrail.featuresAr,
+        tags: features,
         coordinates: routePoints,
         stats,
       });
@@ -174,6 +223,32 @@ export function CreateTrailPage() {
 
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
         {errorMessage && <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl p-4">{errorMessage}</div>}
+
+        <div className="bg-card rounded-xl border border-border p-6">
+          <div className="flex items-center gap-2 mb-4">
+            <Sparkles className="w-5 h-5 text-primary" />
+            <h3>Generate from Description</h3>
+          </div>
+          <div className="space-y-3">
+            <textarea
+              value={trailPrompt}
+              onChange={(event) => setTrailPrompt(event.target.value)}
+              placeholder="e.g., easy 5km loop near Ramallah with views and a shaded picnic stop"
+              rows={3}
+              className="w-full px-4 py-3 bg-input-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 resize-none"
+            />
+            <button
+              type="button"
+              onClick={handleGenerateTrail}
+              disabled={isGeneratingTrail || !trailPrompt.trim()}
+              className="inline-flex items-center justify-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
+            >
+              <Sparkles className="w-4 h-4" />
+              <span>{isGeneratingTrail ? 'Generating...' : 'Generate Route'}</span>
+            </button>
+            {generatedMessage && <p className="text-sm text-secondary">{generatedMessage}</p>}
+          </div>
+        </div>
 
         <div className="bg-card rounded-xl border border-border p-6">
           <h3 className="mb-4">Basic Information</h3>

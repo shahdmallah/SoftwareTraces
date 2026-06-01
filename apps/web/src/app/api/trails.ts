@@ -1,6 +1,7 @@
 import { apiRequest } from './client';
 
 export type TrailDifficulty = 'Easy' | 'Moderate' | 'Hard' | 'Expert';
+export type TrailDifficultyApi = 'easy' | 'moderate' | 'hard' | 'expert';
 
 export type Trail = {
   id: string;
@@ -36,6 +37,30 @@ export type TrailReview = {
   user?: { full_name?: string | null; avatar_url?: string | null } | null;
   profile?: { full_name?: string | null; avatar_url?: string | null } | null;
   full_name?: string | null;
+  photos?: Array<{
+    id: string;
+    url: string;
+    created_at?: string;
+    approved_for_trail_page?: boolean;
+    helpful_score?: number;
+    flag_count?: number;
+  }>;
+};
+
+export type TrailPhoto = {
+  id: string;
+  url: string;
+  thumbnail_url?: string | null;
+  caption?: string | null;
+  is_primary?: boolean;
+  created_at?: string;
+  uploaded_by?: string | null;
+  source?: 'direct' | 'review' | 'media' | 'activity_media';
+  approved_for_trail_page?: boolean;
+  manual_review_required?: boolean;
+  helpful_score?: number;
+  flag_count?: number;
+  quality_score?: number | null;
 };
 
 export type TrailCondition = {
@@ -57,6 +82,41 @@ type SavedTrailRow = Trail & {
   notes?: string | null;
 };
 
+export type GeneratedTrailSuggestion = {
+  coordinates: [number, number][];
+  length_meters: number;
+  elevation_gain_meters: number;
+  estimated_duration_minutes: number;
+  difficulty: TrailDifficultyApi;
+  name_suggestion: string | null;
+  description_suggestion: string | null;
+  labels: string[];
+};
+
+export type ExistingTrailSuggestion = {
+  id: string;
+  name: string;
+  region?: string | null;
+  match_score?: number;
+  distance_km?: number;
+  difficulty?: TrailDifficultyApi | string | null;
+  labels?: string[];
+};
+
+export type TrailSearchOrGenerateResult = {
+  parsed: {
+    length_km: number | null;
+    difficulty: TrailDifficultyApi | null;
+    region: string | null;
+    duration_minutes: number | null;
+    labels: string[];
+    name_suggestion: string | null;
+    description_suggestion: string | null;
+  };
+  existing_trails: ExistingTrailSuggestion[];
+  generated_trail: GeneratedTrailSuggestion | null;
+};
+
 function normalizeDifficulty(value: unknown): TrailDifficulty {
   switch (String(value ?? '').toLowerCase()) {
     case 'moderate':
@@ -75,6 +135,14 @@ function normalizePoint(point: [number, number]): [number, number] {
   const looksLatLng = a >= 29 && a <= 33.8 && b >= 34 && b <= 36.8;
   const looksLngLat = a >= 34 && a <= 36.8 && b >= 29 && b <= 33.8;
   return looksLatLng && !looksLngLat ? [b, a] : point;
+}
+
+function normalizeRouteCoordinates(routeCoordinates?: [number, number][]) {
+  if (!Array.isArray(routeCoordinates)) {
+    return [];
+  }
+
+  return routeCoordinates.map(normalizePoint);
 }
 
 export function normalizeTrail(raw: Trail): Trail {
@@ -133,7 +201,7 @@ export async function getTrailConditions(id: string) {
 }
 
 export async function getTrailPhotos(id: string) {
-  const response = await apiRequest<Envelope<Array<{ id: string; url: string; is_primary?: boolean }>>>(`/api/trails/${id}/photos`);
+  const response = await apiRequest<Envelope<TrailPhoto[]>>(`/api/trails/${id}/photos`);
   return response.data;
 }
 
@@ -148,6 +216,25 @@ export async function getTrailStats(coordinates: [number, number][]) {
     body: JSON.stringify({ coordinates }),
   });
   return response.data;
+}
+
+export async function searchOrGenerateTrail(description: string) {
+  const response = await apiRequest<Envelope<TrailSearchOrGenerateResult>>('/api/trails/search-or-generate', {
+    method: 'POST',
+    body: JSON.stringify({ description }),
+  });
+
+  return {
+    ...response.data,
+    existing_trails: Array.isArray(response.data.existing_trails) ? response.data.existing_trails : [],
+    generated_trail: response.data.generated_trail
+      ? {
+          ...response.data.generated_trail,
+          coordinates: normalizeRouteCoordinates(response.data.generated_trail.coordinates),
+          labels: Array.isArray(response.data.generated_trail.labels) ? response.data.generated_trail.labels : [],
+        }
+      : null,
+  };
 }
 
 export async function createTrail(payload: {

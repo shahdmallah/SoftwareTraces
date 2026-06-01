@@ -9,10 +9,23 @@ export type RootStackParamList = {
   ForgotPassword: { email?: string } | undefined;
   AppTabs: NavigatorScreenParams<AppTabParamList> | undefined;
   TrailDetail: { trailId: string };
+  TrailAccess: { trailId: string; trailName?: string };
   AllReviews: { trailId: string; trailName: string };
   TrailMedia: { trailId: string };
   ActivityMessages: undefined;
-  ActivityThread: { threadId?: string; friendId?: string };
+  ActivityThread: {
+    conversationId?: string;
+    threadId?: string;
+    friendId?: string;
+    participantId?: string;
+    participantName?: string;
+    participantAvatar?: string | null;
+    contextType?: 'direct' | 'meetup' | 'trail' | 'activity' | 'profile' | 'photo' | 'review';
+    contextId?: string;
+    contextTitle?: string;
+    contextSubtitle?: string;
+    initialMessage?: string;
+  };
   ActivityPlanJoin: { plan: Extract<FeedItem, { kind: 'plan' }> };
   ActivityShare: { draft?: TrailCompletionDraft } | undefined;
   ActivityShareComposer: {

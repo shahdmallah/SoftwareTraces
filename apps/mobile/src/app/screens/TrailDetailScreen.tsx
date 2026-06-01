@@ -34,11 +34,11 @@ import { CommunityPostsSection } from '../components/CommunityPostsSection';
 import { useTrailTracking } from '../contexts/TrailTrackingContext';
 import { getMyActivities, type Activity } from '../api/activitiesApi';
 import { getSocialFeed } from '../api/socialApi';
-import { getTrailPhotos } from '../api/mediaApi';
 import { getProfile, type Profile } from '../api/profilesApi';
 import { formatSafetyDistance, getSafetyBand, getTrailSafety, type TrailSafety } from '../api/safetyApi';
 import { type FeedItem } from '../data/activitySocial';
 import { mapSocialFeedItemToFeedItem } from '../utils/socialFeedMap';
+import { getApprovedTrailPhotos, getTrailPhotoUrls } from '../utils/trailPhotos';
 
 type TrailDetailScreenRouteProp = RouteProp<RootStackParamList, 'TrailDetail'>;
 type TrailDetailNavigationProp = StackNavigationProp<RootStackParamList>;
@@ -151,10 +151,10 @@ export function TrailDetailScreen() {
       setLoadError(null);
 
       try {
-        const [nextTrail, rawReviews, nextPhotos, nextConditions] = await Promise.all([
-          getTrailById(trailId),
+        const nextTrail = await getTrailById(trailId);
+        const [rawReviews, nextPhotos, nextConditions] = await Promise.all([
           getTrailReviews(trailId).catch(() => []),
-          getTrailPhotos(trailId).catch(() => []),
+          getApprovedTrailPhotos(trailId, nextTrail).catch(() => []),
           getTrailConditions(trailId).catch(() => []),
         ]);
         const nextSafety = await getTrailSafety(trailId).catch(() => null);
@@ -165,11 +165,7 @@ export function TrailDetailScreen() {
           setTrailSafety(nextSafety);
           setReviews(nextReviews);
           setTrailConditions(nextConditions);
-          setTrailMediaImages(
-            nextPhotos
-              .map((photo) => photo.url)
-              .filter((url, index, collection): url is string => Boolean(url) && collection.indexOf(url) === index),
-          );
+          setTrailMediaImages(getTrailPhotoUrls(nextPhotos));
         }
 
         if (isAuthenticated && !cancelled) {
@@ -276,16 +272,11 @@ export function TrailDetailScreen() {
 
   const weeklyForecast = useMemo(() => buildForecast(trail, language), [language, trail]);
   const trailImages = useMemo(() => {
-    const reviewImages = reviews.flatMap((review) => review.photos?.map((photo) => photo.url).filter(Boolean) ?? []);
-    const postImages = communityPosts
-      .map((post) => ('image' in post ? post.image : 'cover' in post ? post.cover : undefined))
-      .filter(Boolean);
-
-    return [...trailMediaImages, ...reviewImages, ...postImages].filter(
+    return trailMediaImages.filter(
       (imageUri, index, collection): imageUri is string =>
         Boolean(imageUri) && collection.indexOf(imageUri) === index,
     );
-  }, [communityPosts, reviews, trailMediaImages]);
+  }, [trailMediaImages]);
   const miniRoutePoints = useMemo(() => buildMiniRoutePreviewPoints(trail?.routeCoordinates), [trail?.routeCoordinates]);
   const miniRoutePath = useMemo(() => buildSmoothPath(miniRoutePoints), [miniRoutePoints]);
   const mapImageUri = useMemo(() => {
@@ -447,6 +438,7 @@ export function TrailDetailScreen() {
   const posts = communityPosts;
   const isThisTrailActive = activeSessionTrailId === trail.id || ongoingTrailActivity?.trail_id === trail.id;
   const safetyBand = trailSafety ? getSafetyBand(trailSafety.safety_score) : null;
+  const canAskTrailOwner = Boolean(trail.userId && trail.userId !== user?.id);
   const planTripButton = (
     <Pressable
       style={styles.planTripButton}
@@ -614,6 +606,59 @@ export function TrailDetailScreen() {
   </View>
 </AnimatedBlock>
 
+          {canAskTrailOwner ? (
+            <AnimatedBlock delay={180}>
+              <Pressable
+                style={styles.askTrailButton}
+                onPress={() => navigation.navigate('ActivityThread', {
+                  participantId: trail.userId!,
+                  friendId: trail.userId!,
+                  participantName: isArabic ? trail.nameAr || trail.name : trail.name,
+                  contextType: 'trail',
+                  contextId: trail.id,
+                  contextTitle: isArabic ? trail.nameAr || trail.name : trail.name,
+                  contextSubtitle: isArabic ? 'اسأل عن هذا المسار' : 'Ask about this trail',
+                })}
+              >
+                <View style={styles.askTrailIcon}>
+                  <Ionicons name="chatbubble-ellipses-outline" size={18} color="#fff" />
+                </View>
+                <View style={styles.askTrailCopy}>
+                  <Text style={[styles.askTrailTitle, isArabic ? { textAlign: 'right' } : null]}>
+                    {isArabic ? 'اسأل عن هذا المسار' : 'Ask about this trail'}
+                  </Text>
+                  <Text style={[styles.askTrailSubtitle, isArabic ? { textAlign: 'right' } : null]}>
+                    {isArabic ? 'افتح محادثة مرتبطة بتفاصيل المسار.' : 'Open a conversation linked to this trail.'}
+                  </Text>
+                </View>
+                <Ionicons name={isArabic ? 'chevron-back' : 'chevron-forward'} size={18} color="#8A7A6A" />
+              </Pressable>
+            </AnimatedBlock>
+          ) : null}
+
+          <AnimatedBlock delay={190}>
+            <Pressable
+              style={styles.gettingThereCard}
+              onPress={() => navigation.navigate('TrailAccess', {
+                trailId: trail.id,
+                trailName: isArabic ? trail.nameAr || trail.name : trail.name,
+              })}
+            >
+              <View style={styles.gettingThereIcon}>
+                <Ionicons name="car-outline" size={20} color="#630E13" />
+              </View>
+              <View style={styles.gettingThereCopy}>
+                <Text style={[styles.gettingThereTitle, isArabic ? { textAlign: 'right' } : null]}>
+                  {isArabic ? 'الوصول إلى بداية المسار' : 'Getting There'}
+                </Text>
+                <Text style={[styles.gettingThereSubtitle, isArabic ? { textAlign: 'right' } : null]}>
+                  {isArabic ? 'اعرض الطريق، الحواجز، والتنبيهات قبل الانطلاق.' : 'Open route, checkpoint, and access safety details.'}
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={20} color="#8A7A6A" />
+            </Pressable>
+          </AnimatedBlock>
+
           <AnimatedBlock delay={210}>
             <TrailMapPreview
               trail={trail}
@@ -700,6 +745,7 @@ export function TrailDetailScreen() {
               currentUserId={user?.id}
               onRequireAuth={() => navigation.navigate('Auth', { mode: 'signin' })}
               onViewAllReviews={openAllReviews}
+              onOpenProfile={(profileId) => navigation.navigate('PublicProfile', { profileId })}
               onReviewAdded={(review) => setReviews((current) => [review, ...current])}
               onReviewDeleted={(reviewId) => setReviews((current) => current.filter((review) => review.id !== reviewId))}
             />
@@ -709,6 +755,7 @@ export function TrailDetailScreen() {
             <CommunityPostsSection
               posts={posts}
               onOpenActivity={() => navigation.navigate('AppTabs', { screen: 'Activity' })}
+              onOpenProfile={(profileId) => navigation.navigate('PublicProfile', { profileId })}
             />
           </AnimatedBlock>
 
@@ -930,6 +977,72 @@ const styles = StyleSheet.create({
     color: '#7B6D5A',
     fontSize: 12,
     lineHeight: 18,
+    fontWeight: '700',
+  },
+  gettingThereCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    borderRadius: 20,
+    padding: 14,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#EEE5DA',
+  },
+  gettingThereIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F7EBE8',
+  },
+  gettingThereCopy: {
+    flex: 1,
+  },
+  gettingThereTitle: {
+    color: '#2C2418',
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  gettingThereSubtitle: {
+    marginTop: 4,
+    color: '#7B6D5A',
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: '700',
+  },
+  askTrailButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    borderRadius: 20,
+    padding: 14,
+    backgroundColor: '#FFF8F1',
+    borderWidth: 1,
+    borderColor: '#E8D9C7',
+  },
+  askTrailIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#630E13',
+  },
+  askTrailCopy: {
+    flex: 1,
+  },
+  askTrailTitle: {
+    color: '#2C2418',
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  askTrailSubtitle: {
+    marginTop: 3,
+    color: '#7B6D5A',
+    fontSize: 12,
+    lineHeight: 17,
     fontWeight: '700',
   },
   completedButton: {

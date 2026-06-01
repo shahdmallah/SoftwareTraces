@@ -21,23 +21,24 @@
       },
       "bundleIdentifier": "com.shahdmallah.traces"
     },
-  "android": {
-    "package": "com.shahdmallah.traces",
-    "adaptiveIcon": {
-      "foregroundImage": "./assets/adaptive-icon.png",
-      "backgroundColor": "#EAE2CC"
+    "android": {
+      "package": "com.shahdmallah.traces",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#EAE2CC"
+      },
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": false,
+      "primaryColor": "#630E13",
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "FOREGROUND_SERVICE",
+        "CAMERA",
+        "READ_MEDIA_IMAGES",
+        "POST_NOTIFICATIONS"
+      ]
     },
-    "edgeToEdgeEnabled": true,
-    "predictiveBackGestureEnabled": false,
-    "primaryColor": "#630E13",
-    "permissions": [
-      "ACCESS_COARSE_LOCATION",
-      "ACCESS_FINE_LOCATION",
-      "FOREGROUND_SERVICE",
-      "CAMERA",
-      "READ_MEDIA_IMAGES"
-    ]
-  },
     "web": {
       "favicon": "./assets/favicon.png"
     },
@@ -60,6 +61,7 @@
           "motionPermission": "Allow Traces to access motion data so it can count your steps during a trail recording."
         }
       ],
+      "expo-notifications",
       "@react-native-community/datetimepicker"
     ]
   }

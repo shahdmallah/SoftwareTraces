@@ -6,10 +6,21 @@ type Envelope<T> = {
 
 export type Achievement = {
   id: string;
+  code?: string;
   name?: string;
+  name_ar?: string | null;
   title?: string;
   description?: string | null;
+  description_ar?: string | null;
+  category?: string | null;
+  badge_icon_url?: string | null;
+  criteria_type?: string | null;
+  criteria_value?: Record<string, unknown> | null;
   points?: number;
+  progress_current?: number;
+  progress_target?: number;
+  earned?: boolean;
+  earned_at?: string | null;
 };
 
 export type UserAchievement = Achievement & {
@@ -23,7 +34,12 @@ export async function getAchievements() {
 }
 
 export async function getUserAchievements(userId: string) {
-  const response = await apiRequest<Envelope<UserAchievement[]>>(`/api/achievements/users/${userId}/achievements`);
+  const response = await apiRequest<Envelope<UserAchievement[]>>(`/api/achievements/users/${userId}`);
+  return response.data;
+}
+
+export async function getMyAchievements() {
+  const response = await apiRequest<Envelope<UserAchievement[]>>('/api/achievements/me');
   return response.data;
 }
 

@@ -7,7 +7,7 @@ const workspaceNodeModules = path.resolve(workspaceRoot, 'node_modules');
 const mobileReactNativeRoot = path.resolve(projectRoot, 'node_modules/react-native');
 const config = getDefaultConfig(projectRoot);
 
-config.resolver.disableHierarchicalLookup = true;
+config.resolver.disableHierarchicalLookup = false;
 config.resolver.nodeModulesPaths = [
   path.resolve(projectRoot, 'node_modules'),
   workspaceNodeModules,

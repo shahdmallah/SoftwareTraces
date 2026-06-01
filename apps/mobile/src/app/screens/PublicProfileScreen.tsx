@@ -8,6 +8,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { followUser, getFriendCount, removeFriend, unfollowUser } from '../api/socialApi';
 import { getProfile, getProfilePhotos, getProfileReviews, type Profile, type ProfilePhoto, type ProfileReview } from '../api/profilesApi';
 import { AnimatedScreen } from '../components/AnimatedUI';
+import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { RootStackParamList } from '../navigation/types';
 import { ltrRow, ltrText, rtlRow, rtlText } from '../utils/direction';
@@ -29,6 +30,7 @@ export function PublicProfileScreen() {
   const navigation = useNavigation<PublicProfileNavigationProp>();
   const insets = useSafeAreaInsets();
   const { language } = useLanguage();
+  const { user } = useAuth();
   const isArabic = language === 'ar';
   const { profileId } = route.params;
 
@@ -74,7 +76,7 @@ export function PublicProfileScreen() {
           setPhotos([]);
           setIsFriend(false);
           setFriendCountValue(null);
-          setErrorMessage(error instanceof Error ? error.message : 'Unable to load this profile.');
+          setErrorMessage(isArabic ? 'Private profile' : 'Private profile');
         }
       } finally {
         if (!cancelled) {
@@ -88,7 +90,7 @@ export function PublicProfileScreen() {
     return () => {
       cancelled = true;
     };
-  }, [profileId]);
+  }, [isArabic, profileId]);
 
   const handleToggleFollow = async () => {
     setIsFollowPending(true);
@@ -141,6 +143,8 @@ export function PublicProfileScreen() {
   const friendCount = friendCountValue ?? profile?.stats?.total_friends ?? profile?.stats?.friends_count ?? 0;
   const reviewCount = Math.max(profile?.stats?.total_reviews ?? 0, reviews.length);
   const photoCount = Math.max(profile?.stats?.total_photos ?? 0, photos.length);
+  const profileUserId = profile?.id || profile?.user_id || profileId;
+  const canMessage = Boolean(profileUserId && profileUserId !== user?.id);
 
   return (
     <AnimatedScreen style={styles.container}>
@@ -219,6 +223,24 @@ export function PublicProfileScreen() {
                   </>
                 )}
               </Pressable>
+              {canMessage ? (
+                <Pressable
+                  style={styles.messageButton}
+                  onPress={() => navigation.navigate('ActivityThread', {
+                    participantId: profileUserId,
+                    friendId: profileUserId,
+                    participantName: displayName,
+                    participantAvatar: profile.avatar_url,
+                    contextType: 'profile',
+                    contextId: profileUserId,
+                    contextTitle: displayName,
+                    contextSubtitle: isArabic ? 'محادثة من الملف الشخصي' : 'Conversation from profile',
+                  })}
+                >
+                  <Ionicons name="chatbubble-ellipses-outline" size={16} color="#fff" />
+                  <Text style={styles.messageText}>{isArabic ? 'مراسلة' : 'Message'}</Text>
+                </Pressable>
+              ) : null}
               {isFriend ? (
                 <Pressable style={styles.removeFriendButton} onPress={handleRemoveFriend} disabled={isFriendPending}>
                   {isFriendPending ? (
@@ -297,6 +319,8 @@ const styles = StyleSheet.create({
   followTextActive: { color: '#fff' },
   removeFriendButton: { minHeight: 44, marginTop: 10, borderRadius: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#FFF4F1', borderWidth: 1, borderColor: '#F1D3CC' },
   removeFriendText: { color: '#8B1E1E', fontSize: 13, fontWeight: '900' },
+  messageButton: { minHeight: 48, marginTop: 10, borderRadius: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#630E13' },
+  messageText: { color: '#fff', fontSize: 14, fontWeight: '900' },
   inlineError: { marginTop: 10, color: '#8B1E1E', fontSize: 12, fontWeight: '800' },
   section: { marginTop: 18 },
   sectionTitle: { color: '#2C2418', fontSize: 17, fontWeight: '900', marginBottom: 10 },

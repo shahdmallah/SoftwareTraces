@@ -21,9 +21,18 @@ import Svg, { Circle, Defs, LinearGradient, Path, Stop } from 'react-native-svg'
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { RootStackParamList } from '../navigation/types';
 import { getTrailById, getTrailElevationProfile, type ElevationProfile, type Trail } from '../api/trailsApi';
-import { deleteReviewPhoto, deleteTrailPhoto, getTrailPhotos, setPrimaryTrailPhoto, type TrailPhoto } from '../api/mediaApi';
+import {
+  deleteReviewPhoto,
+  deleteTrailPhoto,
+  flagPhoto,
+  getPhotoTypeForTrailPhoto,
+  setPrimaryTrailPhoto,
+  votePhoto,
+  type TrailPhoto,
+} from '../api/mediaApi';
 import { useAuth } from '../contexts/AuthContext';
 import { theme } from '../theme';
+import { getApprovedTrailPhotos } from '../utils/trailPhotos';
 
 type TrailMediaScreenRouteProp = RouteProp<RootStackParamList, 'TrailMedia'>;
 type TrailMediaNavigationProp = StackNavigationProp<RootStackParamList>;
@@ -290,6 +299,7 @@ export function TrailMediaScreen() {
   const [tourProgress, setTourProgress] = useState(0);
   const [tourPlaying, setTourPlaying] = useState(false);
   const [pendingPhotoAction, setPendingPhotoAction] = useState<string | null>(null);
+  const [photoVotes, setPhotoVotes] = useState<Record<string, -1 | 0 | 1>>({});
 
   const imageFade = useRef(new Animated.Value(1)).current;
   const prevPhotoIndexRef = useRef(0);
@@ -302,9 +312,9 @@ export function TrailMediaScreen() {
       setError(null);
 
       try {
-        const [nextTrail, nextPhotos, profile] = await Promise.all([
-          getTrailById(trailId),
-          getTrailPhotos(trailId).catch(() => []),
+        const nextTrail = await getTrailById(trailId);
+        const [nextPhotos, profile] = await Promise.all([
+          getApprovedTrailPhotos(trailId, nextTrail).catch(() => []),
           getTrailElevationProfile(trailId, { points: ELEVATION_CHART_POINTS, simplify: true }).catch(() => null),
         ]);
 
@@ -336,10 +346,8 @@ export function TrailMediaScreen() {
 
   const refreshTrailPhotos = useCallback(async () => {
     try {
-      const [nextTrail, nextPhotos] = await Promise.all([
-        getTrailById(trailId),
-        getTrailPhotos(trailId).catch(() => []),
-      ]);
+      const nextTrail = await getTrailById(trailId);
+      const nextPhotos = await getApprovedTrailPhotos(trailId, nextTrail).catch(() => []);
 
       setTrail(nextTrail);
       setTrailPhotos(nextPhotos);
@@ -402,7 +410,84 @@ export function TrailMediaScreen() {
     ]);
   }, [isAuthenticated, navigation, refreshTrailPhotos]);
 
+  const updatePhotoStatus = useCallback((photoId: string, status: { helpful_score?: number; flag_count?: number }) => {
+    setTrailPhotos((current) =>
+      current.map((photo) =>
+        photo.id === photoId
+          ? {
+              ...photo,
+              helpful_score: typeof status.helpful_score === 'number' ? status.helpful_score : photo.helpful_score,
+              flag_count: typeof status.flag_count === 'number' ? status.flag_count : photo.flag_count,
+            }
+          : photo,
+      ),
+    );
+  }, []);
+
+  const handleVotePhoto = useCallback(async (photo: TrailPhoto, vote: -1 | 1) => {
+    if (!isAuthenticated) {
+      navigation.navigate('Auth', { mode: 'signin' });
+      return;
+    }
+
+    const currentVote = photoVotes[photo.id] ?? 0;
+    const nextVote = currentVote === vote ? 0 : vote;
+    const previousVotes = photoVotes;
+    const previousScore = Number(photo.helpful_score ?? 0);
+    const optimisticScore = previousScore - currentVote + nextVote;
+
+    setPhotoVotes((current) => ({ ...current, [photo.id]: nextVote }));
+    setTrailPhotos((current) =>
+      current.map((item) => (item.id === photo.id ? { ...item, helpful_score: optimisticScore } : item)),
+    );
+    setPendingPhotoAction(`vote-${photo.id}`);
+
+    try {
+      const status = await votePhoto(photo.id, getPhotoTypeForTrailPhoto(photo), nextVote);
+      updatePhotoStatus(photo.id, status);
+    } catch (nextError) {
+      setPhotoVotes(previousVotes);
+      setTrailPhotos((current) =>
+        current.map((item) => (item.id === photo.id ? { ...item, helpful_score: previousScore } : item)),
+      );
+      Alert.alert('Unable to vote on photo', nextError instanceof Error ? nextError.message : 'Please try again.');
+    } finally {
+      setPendingPhotoAction(null);
+    }
+  }, [isAuthenticated, navigation, photoVotes, updatePhotoStatus]);
+
+  const handleFlagPhoto = useCallback((photo: TrailPhoto) => {
+    if (!isAuthenticated) {
+      navigation.navigate('Auth', { mode: 'signin' });
+      return;
+    }
+
+    Alert.alert('Flag photo?', 'This asks the community team to review the photo.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Flag',
+        style: 'destructive',
+        onPress: async () => {
+          setPendingPhotoAction(`flag-${photo.id}`);
+          try {
+            const status = await flagPhoto(photo.id, getPhotoTypeForTrailPhoto(photo), 'irrelevant');
+            updatePhotoStatus(photo.id, status);
+            Alert.alert('Photo flagged', 'Thanks. We will review it.');
+          } catch (nextError) {
+            Alert.alert('Unable to flag photo', nextError instanceof Error ? nextError.message : 'Please try again.');
+          } finally {
+            setPendingPhotoAction(null);
+          }
+        },
+      },
+    ]);
+  }, [isAuthenticated, navigation, updatePhotoStatus]);
+
   const canManagePhoto = useCallback((photo: TrailPhoto) => {
+    if (photo.source !== 'direct' && photo.source !== 'review') {
+      return false;
+    }
+
     if (!user?.id) {
       return false;
     }
@@ -718,6 +803,40 @@ export function TrailMediaScreen() {
                     <Image source={{ uri: item.imageUri }} style={styles.galleryImage} resizeMode="cover" />
                     <View style={styles.galleryGradient} />
                     <Text style={styles.galleryLabel}>{item.label}</Text>
+                    {item.photo ? (
+                      <View style={styles.photoFeedback}>
+                        <Pressable
+                          style={[styles.photoVoteButton, photoVotes[item.photo.id] === 1 && styles.photoVoteButtonActive]}
+                          disabled={pendingPhotoAction === `vote-${item.photo.id}`}
+                          onPress={() => void handleVotePhoto(item.photo!, 1)}
+                        >
+                          {pendingPhotoAction === `vote-${item.photo.id}` ? (
+                            <ActivityIndicator size="small" color="#fff" />
+                          ) : (
+                            <Ionicons name="thumbs-up-outline" size={14} color="#fff" />
+                          )}
+                        </Pressable>
+                        <Text style={styles.photoScoreText}>{Number(item.photo.helpful_score ?? 0)}</Text>
+                        <Pressable
+                          style={[styles.photoVoteButton, photoVotes[item.photo.id] === -1 && styles.photoVoteButtonActive]}
+                          disabled={pendingPhotoAction === `vote-${item.photo.id}`}
+                          onPress={() => void handleVotePhoto(item.photo!, -1)}
+                        >
+                          <Ionicons name="thumbs-down-outline" size={14} color="#fff" />
+                        </Pressable>
+                        <Pressable
+                          style={styles.photoVoteButton}
+                          disabled={pendingPhotoAction === `flag-${item.photo.id}`}
+                          onPress={() => handleFlagPhoto(item.photo!)}
+                        >
+                          {pendingPhotoAction === `flag-${item.photo.id}` ? (
+                            <ActivityIndicator size="small" color="#fff" />
+                          ) : (
+                            <Ionicons name="flag-outline" size={14} color="#fff" />
+                          )}
+                        </Pressable>
+                      </View>
+                    ) : null}
                     {item.photo && canManagePhoto(item.photo) ? (
                       <View style={styles.photoActions}>
                         {item.photo.source === 'direct' ? (
@@ -871,10 +990,42 @@ const styles = StyleSheet.create({
   },
   photoActions: {
     position: 'absolute',
-    top: 12,
+    top: 54,
     right: 12,
     flexDirection: 'row',
     gap: 8,
+  },
+  photoFeedback: {
+    position: 'absolute',
+    top: 12,
+    left: 12,
+    maxWidth: COLUMN_WIDTH - 24,
+    minHeight: 34,
+    borderRadius: 999,
+    paddingHorizontal: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(16,23,14,0.58)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.18)',
+  },
+  photoVoteButton: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  photoVoteButtonActive: {
+    backgroundColor: '#630E13',
+  },
+  photoScoreText: {
+    minWidth: 16,
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '800',
+    textAlign: 'center',
   },
   photoActionButton: {
     width: 38,

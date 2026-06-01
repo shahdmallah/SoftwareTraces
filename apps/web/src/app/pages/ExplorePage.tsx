@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Search, SlidersHorizontal } from 'lucide-react';
 import { TrailCard } from '../components/TrailCard';
 import { FilterChip, FilterChipsContainer } from '../components/FilterChips';
+import { RecommendedTrailsSection } from '../components/RecommendedTrailsSection';
 import { downloadOfflineMap } from '../api/offline';
 import { getAccessToken } from '../api/client';
 import {
@@ -157,6 +158,8 @@ export function ExplorePage() {
         {errorMessage && (
           <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 mb-6">{errorMessage}</div>
         )}
+
+        <RecommendedTrailsSection />
 
         {isLoading ? (
           <div className="bg-card rounded-xl border border-border p-12 text-center text-muted-foreground">Loading trails...</div>

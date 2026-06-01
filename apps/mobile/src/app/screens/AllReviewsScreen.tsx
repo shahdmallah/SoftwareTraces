@@ -36,6 +36,10 @@ function getReviewerAvatar(review: TrailReview) {
   return review.user?.avatar_url?.trim() || review.profile?.avatar_url?.trim() || review.avatar_url?.trim() || '';
 }
 
+function getReviewerId(review: TrailReview) {
+  return review.user?.id?.trim() || review.profile?.id?.trim() || review.user_id?.trim() || '';
+}
+
 async function hydrateReviewProfiles(reviews: TrailReview[]): Promise<TrailReview[]> {
   const userIds = Array.from(new Set(reviews.map((review) => review.user_id).filter(Boolean)));
   if (!userIds.length) {
@@ -188,13 +192,18 @@ export function AllReviewsScreen() {
           reviews.map((review, index) => {
             const reviewerName = getReviewerName(review, isArabic);
             const reviewerAvatar = getReviewerAvatar(review);
+            const reviewerId = getReviewerId(review);
             const canDeleteReview = Boolean(user?.id && review.user_id === user.id) || review.user_id === 'me';
 
             return (
             <AnimatedBlock key={review.id} delay={120 + index * 35}>
               <View style={styles.reviewCard}>
                 <View style={[styles.reviewHeader, isArabic ? rtlRow : ltrRow]}>
-                  <View style={[styles.reviewerRow, isArabic ? rtlRow : ltrRow]}>
+                  <Pressable
+                    style={[styles.reviewerRow, isArabic ? rtlRow : ltrRow]}
+                    onPress={() => reviewerId && navigation.navigate('PublicProfile', { profileId: reviewerId })}
+                    disabled={!reviewerId}
+                  >
                     <View style={styles.avatar}>
                       {reviewerAvatar ? (
                         <Image source={{ uri: reviewerAvatar }} style={styles.avatarImage} />
@@ -208,7 +217,7 @@ export function AllReviewsScreen() {
                         {review.created_at ? new Date(review.created_at).toLocaleDateString() : ''}
                       </Text>
                     </View>
-                  </View>
+                  </Pressable>
                   <View style={[styles.reviewHeaderActions, isArabic ? rtlRow : ltrRow]}>
                     <Text style={styles.reviewRating}>
                       {formatRating(review.rating)} <Ionicons name="star" size={12} color="#D4A843" />

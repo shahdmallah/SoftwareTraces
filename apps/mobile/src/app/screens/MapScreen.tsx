@@ -31,6 +31,9 @@ type MapScreenRouteProp = RouteProp<AppTabParamList, 'Map'>;
 type MapboxModule = typeof import('@rnmapbox/maps');
 
 const { width, height } = Dimensions.get('window');
+const GALLERY_HORIZONTAL_PADDING = 16;
+const GALLERY_GRID_GAP = 10;
+const PHOTO_TILE_WIDTH = (width - GALLERY_HORIZONTAL_PADDING * 2 - GALLERY_GRID_GAP) / 2;
 const MAPBOX_ACCESS_TOKEN = process.env.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN ?? '';
 const MAPBOX_STYLE_URL =
   process.env.EXPO_PUBLIC_MAPBOX_STYLE_URL ?? 'mapbox://styles/shahdmallah/cmnqgt687000h01s66inve68a';
@@ -236,6 +239,7 @@ export function MapScreen() {
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [zoomLevel, setZoomLevel] = useState(7.6);
   const [isThreeD, setIsThreeD] = useState(true);
+  const [isOfflineMode, setIsOfflineMode] = useState(false);
   const insets = useSafeAreaInsets();
   const { t, language } = useLanguage();
   const isArabic = language === 'ar';
@@ -574,6 +578,7 @@ export function MapScreen() {
 
     if (existingTrail) {
       setSelectedTrail(existingTrail);
+      setIsOfflineMode(false);
       return;
     }
 
@@ -586,6 +591,7 @@ export function MapScreen() {
         if (!cancelled) {
           setSelectedTrail(trail);
           setNearbyTrails((current) => (current.some((item) => item.id === trail.id) ? current : [trail, ...current]));
+          setIsOfflineMode(false);
         }
       } catch {
         const offlinePack = (await getOfflineMapPacks()).find((pack) => pack.trailId === selectedTrailId);
@@ -595,6 +601,7 @@ export function MapScreen() {
           setSelectedTrail(trail);
           setNearbyTrails((current) => (current.some((item) => item.id === trail.id) ? current : [trail, ...current]));
           setFetchError(null);
+          setIsOfflineMode(true);
         }
       }
     };
@@ -872,6 +879,14 @@ export function MapScreen() {
           </View>
         ) : null}
 
+        {isOfflineMode ? (
+          <View style={styles.infoBanner}>
+            <Text style={[styles.infoBannerText, isArabic ? rtlText : ltrText]}>
+              {isArabic ? 'وضع عدم الاتصال نشط. يتم عرض بيانات المسار والسلامة المحفوظة.' : 'Offline Mode Active. Showing last saved trail and safety data.'}
+            </Text>
+          </View>
+        ) : null}
+
         {locationMessage ? (
           <View style={styles.infoBanner}>
             <Text style={[styles.infoBannerText, isArabic ? rtlText : ltrText]}>{locationMessage}</Text>
@@ -1082,7 +1097,11 @@ export function MapScreen() {
             </View>
 
             {selectedPhoto ? (
-              <View style={styles.photoViewer}>
+              <ScrollView
+                style={styles.galleryList}
+                contentContainerStyle={styles.photoViewer}
+                showsVerticalScrollIndicator={false}
+              >
                 <Pressable style={styles.photoBackButton} onPress={() => setSelectedPhoto(null)}>
                   <Ionicons name={isArabic ? 'chevron-forward' : 'chevron-back'} size={18} color="#2C2418" />
                   <Text style={styles.photoBackText}>{isArabic ? 'الصور' : 'Gallery'}</Text>
@@ -1112,7 +1131,7 @@ export function MapScreen() {
                     ))}
                   </View>
                 </View>
-              </View>
+              </ScrollView>
             ) : isBubbleLoading ? (
               <View style={styles.galleryState}>
                 <Text style={styles.stateTitle}>{isArabic ? 'جار تحميل الصور...' : 'Loading photos...'}</Text>
@@ -1127,8 +1146,11 @@ export function MapScreen() {
                 data={bubblePhotos}
                 keyExtractor={(photo) => photo.id}
                 numColumns={2}
+                style={styles.galleryList}
                 columnWrapperStyle={styles.galleryGridRow}
                 contentContainerStyle={styles.galleryGrid}
+                showsVerticalScrollIndicator
+                nestedScrollEnabled
                 renderItem={({ item }) => (
                   <Pressable style={styles.photoTile} onPress={() => setSelectedPhoto(item)}>
                     <Image source={{ uri: photoUri(item) }} style={styles.photoTileImage} resizeMode="cover" />
@@ -1579,13 +1601,13 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(18,4,8,0.5)',
   },
   gallerySheet: {
-    maxHeight: height * 0.82,
-    minHeight: height * 0.42,
+    height: height * 0.82,
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
-    paddingHorizontal: 16,
+    paddingHorizontal: GALLERY_HORIZONTAL_PADDING,
     paddingTop: 16,
     backgroundColor: '#EAE2CC',
+    overflow: 'hidden',
   },
   galleryHeader: {
     flexDirection: 'row',
@@ -1613,16 +1635,19 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: 'rgba(255,255,255,0.72)',
   },
+  galleryList: {
+    flex: 1,
+  },
   galleryGrid: {
-    paddingBottom: 12,
-    gap: 10,
+    paddingBottom: 24,
+    gap: GALLERY_GRID_GAP,
   },
   galleryGridRow: {
-    gap: 10,
+    gap: GALLERY_GRID_GAP,
   },
   photoTile: {
-    flex: 1,
-    minHeight: 180,
+    width: PHOTO_TILE_WIDTH,
+    aspectRatio: 0.72,
     borderRadius: 20,
     overflow: 'hidden',
     backgroundColor: '#3D3428',
@@ -1652,6 +1677,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
   },
   photoViewer: {
+    paddingBottom: 24,
     gap: 12,
   },
   photoBackButton: {

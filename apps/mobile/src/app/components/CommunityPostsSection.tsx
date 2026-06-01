@@ -9,9 +9,10 @@ import type { FeedItem } from '../data/activitySocial';
 interface CommunityPostsSectionProps {
   posts: FeedItem[];
   onOpenActivity?: () => void;
+  onOpenProfile?: (profileId: string) => void;
 }
 
-export function CommunityPostsSection({ posts, onOpenActivity }: CommunityPostsSectionProps) {
+export function CommunityPostsSection({ posts, onOpenActivity, onOpenProfile }: CommunityPostsSectionProps) {
   const { t, language } = useLanguage();
   const isArabic = language === 'ar';
 
@@ -36,7 +37,11 @@ export function CommunityPostsSection({ posts, onOpenActivity }: CommunityPostsS
           post.kind === 'recap' ? (
             <View key={post.id} style={styles.recapCard}>
               <View style={[styles.postHeader, isArabic ? rtlRow : ltrRow]}>
-                <View style={[styles.userRow, isArabic ? rtlRow : ltrRow]}>
+                <Pressable
+                  style={[styles.userRow, isArabic ? rtlRow : ltrRow]}
+                  onPress={() => post.userId && onOpenProfile?.(post.userId)}
+                  disabled={!post.userId}
+                >
                   <Image source={{ uri: post.avatar }} style={styles.avatar} />
                   <View style={styles.userCopy}>
                     <Text style={[styles.userName, isArabic ? rtlText : ltrText]} numberOfLines={1}>
@@ -46,7 +51,7 @@ export function CommunityPostsSection({ posts, onOpenActivity }: CommunityPostsS
                       {post.handle} · {isArabic ? post.timeAr : post.timeEn}
                     </Text>
                   </View>
-                </View>
+                </Pressable>
                 <View style={styles.typeBadge}>
                   <Ionicons name="footsteps-outline" size={12} color="#630E13" />
                   <Text style={styles.typeBadgeText}>{isArabic ? 'رحلة' : 'Recap'}</Text>
@@ -94,7 +99,11 @@ export function CommunityPostsSection({ posts, onOpenActivity }: CommunityPostsS
               <Image source={{ uri: post.cover }} style={styles.planImage} />
               <LinearGradient colors={['rgba(20,12,8,0.08)', 'rgba(20,12,8,0.76)']} style={styles.planOverlay}>
                 <View style={[styles.postHeader, isArabic ? rtlRow : ltrRow]}>
-                  <View style={[styles.userRow, isArabic ? rtlRow : ltrRow]}>
+                  <Pressable
+                    style={[styles.userRow, isArabic ? rtlRow : ltrRow]}
+                    onPress={() => post.userId && onOpenProfile?.(post.userId)}
+                    disabled={!post.userId}
+                  >
                     <Image source={{ uri: post.avatar }} style={styles.avatar} />
                     <View style={styles.userCopy}>
                       <Text style={[styles.planUser, isArabic ? rtlText : ltrText]} numberOfLines={1}>
@@ -104,7 +113,7 @@ export function CommunityPostsSection({ posts, onOpenActivity }: CommunityPostsS
                         {post.handle}
                       </Text>
                     </View>
-                  </View>
+                  </Pressable>
                   <View style={styles.planBadge}>
                     <Ionicons name="calendar" size={12} color="#fff" />
                     <Text style={styles.planBadgeText}>{isArabic ? 'لقاء' : 'Meetup'}</Text>

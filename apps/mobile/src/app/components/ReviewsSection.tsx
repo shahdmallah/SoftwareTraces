@@ -27,6 +27,7 @@ interface ReviewsSectionProps {
   onViewAllReviews?: () => void;
   onRequireAuth?: () => void;
   onReviewDeleted?: (reviewId: string) => void;
+  onOpenProfile?: (profileId: string) => void;
   isAuthenticated?: boolean;
   currentUserId?: string;
 }
@@ -68,6 +69,10 @@ function getReviewerAvatar(review: TrailReview) {
   return review.user?.avatar_url?.trim() || review.profile?.avatar_url?.trim() || review.avatar_url?.trim() || '';
 }
 
+function getReviewerId(review: TrailReview) {
+  return review.user?.id?.trim() || review.profile?.id?.trim() || review.user_id?.trim() || '';
+}
+
 function buildReviewPhoto(asset: ImagePicker.ImagePickerAsset): ReviewDraftPhoto {
   const extension = asset.uri.split('.').pop()?.split('?')[0]?.toLowerCase() || 'jpg';
   const mimeExtension = extension === 'jpg' ? 'jpeg' : extension;
@@ -96,6 +101,7 @@ export function ReviewsSection({
   onViewAllReviews,
   onRequireAuth,
   onReviewDeleted,
+  onOpenProfile,
   isAuthenticated = true,
   currentUserId,
 }: ReviewsSectionProps) {
@@ -459,6 +465,7 @@ export function ReviewsSection({
           const commentState = getCommentState(review);
           const reviewerName = getReviewerName(review, isArabic);
           const reviewerAvatar = getReviewerAvatar(review);
+          const reviewerId = getReviewerId(review);
           const canDeleteReview = isOwnReview(review);
 
           return (
@@ -472,7 +479,16 @@ export function ReviewsSection({
               }}
             >
               <View style={[styles.reviewHeader, isArabic ? rtlRow : ltrRow]}>
-                <View style={[styles.reviewerRow, isArabic ? rtlRow : ltrRow]}>
+                <Pressable
+                  style={[styles.reviewerRow, isArabic ? rtlRow : ltrRow]}
+                  onPress={(event) => {
+                    event.stopPropagation();
+                    if (reviewerId) {
+                      onOpenProfile?.(reviewerId);
+                    }
+                  }}
+                  disabled={!reviewerId}
+                >
                   <View style={styles.reviewerAvatar}>
                     {reviewerAvatar ? (
                       <Image source={{ uri: reviewerAvatar }} style={styles.reviewerAvatarImage} />
@@ -486,7 +502,7 @@ export function ReviewsSection({
                       {review.created_at ? new Date(review.created_at).toLocaleDateString() : ''}
                     </Text>
                   </View>
-                </View>
+                </Pressable>
                 <View style={[styles.reviewHeaderActions, isArabic ? rtlRow : ltrRow]}>
                   <Text style={styles.reviewRating}>
                     {formatRating(review.rating)} <Ionicons name="star" size={12} color="#D4A843" />

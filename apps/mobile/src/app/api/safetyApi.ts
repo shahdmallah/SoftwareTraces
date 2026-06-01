@@ -56,6 +56,119 @@ export type TrailSafety = {
 
 type Envelope<T> = { data: T };
 
+export type CheckpointStatus = 'open' | 'slow' | 'closed';
+
+export type RouteLineGeometry = {
+  type: 'LineString';
+  coordinates: [number, number][];
+  source?: string;
+};
+
+export type CheckpointReport = {
+  id?: string;
+  checkpoint_id?: string;
+  status: CheckpointStatus;
+  wait_minutes: number;
+  notes?: string | null;
+  created_at?: string | null;
+  expires_at?: string | null;
+};
+
+export type CheckpointRouteSuggestion = {
+  id: string;
+  checkpoint_id: string;
+  waypoint: {
+    latitude: number;
+    longitude: number;
+    name?: string | null;
+  };
+  notes?: string | null;
+  comparison: {
+    original_distance_km: number | null;
+    original_duration_minutes: number | null;
+    suggested_distance_km: number | null;
+    suggested_duration_minutes: number | null;
+    extra_distance_km: number | null;
+    extra_time_minutes: number | null;
+  };
+  route_geometry?: RouteLineGeometry | unknown;
+  created_at?: string | null;
+  expires_at?: string | null;
+  status?: string;
+  route_available?: boolean;
+  original_route_available?: boolean;
+};
+
+export type TrailAccessDangerZone = {
+  id: string;
+  name: string;
+  name_ar?: string | null;
+  location_type: string;
+  risk_level: SafetySeverity | string;
+  latitude?: number | null;
+  longitude?: number | null;
+  distance_from_start_km?: number | null;
+  distance_from_route_meters?: number | null;
+  checkpoint_status?: CheckpointStatus | null;
+  latest_report?: CheckpointReport | null;
+  recent_reports?: CheckpointReport[];
+  suggested_routes?: CheckpointRouteSuggestion[];
+  alternatives?: Array<{
+    id: string;
+    waypoint_name?: string | null;
+    waypoint_lat?: number | null;
+    waypoint_lng?: number | null;
+    extra_distance_km?: number | null;
+    extra_time_minutes?: number | null;
+    notes?: string | null;
+  }>;
+  warning?: string | null;
+  warning_en?: string | null;
+  warning_ar?: string | null;
+};
+
+export type TrailAccess = {
+  trailhead: {
+    latitude: number;
+    longitude: number;
+    name?: string | null;
+    name_ar?: string | null;
+    parking_notes?: string | null;
+    parking_notes_ar?: string | null;
+    access_notes?: string | null;
+    access_notes_ar?: string | null;
+  };
+  driving_route: {
+    available: boolean;
+    distance_km: number | null;
+    duration_minutes: number | null;
+    geometry: RouteLineGeometry;
+    warning?: string | null;
+  };
+  danger_zones: TrailAccessDangerZone[];
+  access_risk_level: 'clear' | 'attention' | 'caution' | 'dangerous' | string;
+  safety_tips: string[];
+};
+
+export type TrailAlternativeRoute = {
+  route_available: boolean;
+  warning?: string | null;
+  waypoint?: {
+    name?: string | null;
+    latitude: number;
+    longitude: number;
+    notes?: string | null;
+  };
+  driving_route?: {
+    distance_km: number | null;
+    duration_minutes: number | null;
+    geometry: RouteLineGeometry;
+  };
+  extra_distance_km?: number | null;
+  extra_time_minutes?: number | null;
+  alternative?: CheckpointRouteSuggestion;
+};
+
 export function getRiskColor(level?: SafetySeverity | TrailRiskLevel | string) {
   switch (level) {
     case 'critical':
@@ -115,6 +228,55 @@ export async function getNearbySafetyAlerts(params: { lat: number; lng: number; 
 
 export async function getTrailSafety(trailId: string) {
   const response = await apiRequest<Envelope<TrailSafety>>(`/api/safety/trails/${trailId}/safety`);
+  return response.data;
+}
+
+export async function getTrailAccess(trailId: string, params: { from_lat: number; from_lng: number }) {
+  const response = await apiRequest<Envelope<TrailAccess>>(`/api/trails/${trailId}/access`, {}, params);
+  return response.data;
+}
+
+export async function getTrailAlternativeRoute(
+  trailId: string,
+  params: { checkpoint_id: string; from_lat: number; from_lng: number },
+) {
+  const response = await apiRequest<Envelope<TrailAlternativeRoute>>(`/api/trails/${trailId}/access/avoid`, {}, params);
+  return response.data;
+}
+
+export async function reportCheckpointStatus(
+  checkpointId: string,
+  payload: { status: CheckpointStatus; wait_minutes: number; notes?: string },
+) {
+  const response = await apiRequest<Envelope<CheckpointReport>>(`/api/safety/checkpoints/${checkpointId}/report`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+  return response.data;
+}
+
+export async function suggestCheckpointRoute(
+  checkpointId: string,
+  payload: {
+    from_lat: number;
+    from_lng: number;
+    trailhead_lat: number;
+    trailhead_lng: number;
+    waypoint_lat: number;
+    waypoint_lng: number;
+    waypoint_name?: string;
+    notes?: string;
+  },
+) {
+  const response = await apiRequest<Envelope<CheckpointRouteSuggestion>>(`/api/safety/checkpoints/${checkpointId}/suggest-route`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+  return response.data;
+}
+
+export async function getCheckpointSuggestedRoutes(checkpointId: string) {
+  const response = await apiRequest<Envelope<CheckpointRouteSuggestion[]>>(`/api/safety/checkpoints/${checkpointId}/suggested-routes`);
   return response.data;
 }
 

@@ -9,6 +9,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
 import { getMeetup, joinMeetup, leaveMeetup, type Meetup } from '../api/meetupsApi';
 import { getWeatherForecast, type WeatherForecast } from '../api/weatherApi';
+import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { RootStackParamList } from '../navigation/types';
 import { ltrRow, ltrText, rtlRow, rtlText } from '../utils/direction';
@@ -100,6 +101,7 @@ export function ActivityPlanJoinScreen() {
   const navigation = useNavigation<PlanJoinNavigationProp>();
   const insets = useSafeAreaInsets();
   const { language } = useLanguage();
+  const { user } = useAuth();
   const isArabic = language === 'ar';
   const { plan } = route.params;
 
@@ -204,6 +206,7 @@ export function ActivityPlanJoinScreen() {
   const hostHandle = meetupDetails?.host.username
     ? meetupDetails.host.username.startsWith('@') ? meetupDetails.host.username : `@${meetupDetails.host.username}`
     : plan.handle;
+  const hostId = meetupDetails?.host.id || plan.userId;
   const hostAvatar = meetupDetails?.host.avatar_url || plan.avatar;
   const meetingPlace = meetupDetails?.meeting_place || '';
   const visibilityLabel = formatVisibility(meetupDetails?.visibility || plan.visibility, isArabic);
@@ -224,6 +227,8 @@ export function ActivityPlanJoinScreen() {
       : viewerStatus === 'invited'
         ? isArabic ? 'مدعو' : 'Invited'
         : isArabic ? 'غير منضم' : 'Not joined';
+  const meetupConversationTitle = title || (isArabic ? 'لقاء المسار' : 'Trail meetup');
+  const canMessageOrganizer = Boolean(hostId && hostId !== user?.id);
 
   const updateAttendance = async () => {
     const meetupId = plan.meetupId;
@@ -346,7 +351,11 @@ export function ActivityPlanJoinScreen() {
 
         <AnimatedBlock delay={110}>
           <View style={styles.card}>
-            <View style={[styles.hostRow, isArabic ? rtlRow : ltrRow]}>
+            <Pressable
+              style={[styles.hostRow, isArabic ? rtlRow : ltrRow]}
+              onPress={() => hostId && navigation.navigate('PublicProfile', { profileId: hostId })}
+              disabled={!hostId}
+            >
               {hasImageUri(hostAvatar) ? (
                 <Image source={{ uri: hostAvatar }} style={styles.avatar} />
               ) : (
@@ -358,6 +367,40 @@ export function ActivityPlanJoinScreen() {
                 <Text style={[styles.hostName, isArabic ? rtlText : ltrText]}>{hostName}</Text>
                 <Text style={[styles.hostHandle, isArabic ? rtlText : ltrText]}>{hostHandle}</Text>
               </View>
+            </Pressable>
+            <View style={[styles.messageActionRow, isArabic ? rtlRow : ltrRow]}>
+              {canMessageOrganizer ? (
+                <Pressable
+                  style={styles.organizerMessageButton}
+                  onPress={() => navigation.navigate('ActivityThread', {
+                    participantId: hostId,
+                    friendId: hostId,
+                    participantName: hostName,
+                    participantAvatar: hostAvatar,
+                    contextType: 'meetup',
+                    contextId: meetupDetails?.id ?? plan.meetupId,
+                    contextTitle: meetupConversationTitle,
+                    contextSubtitle: isArabic ? 'رسالة إلى منظم اللقاء' : 'Message organizer',
+                  })}
+                >
+                  <Ionicons name="chatbubble-ellipses-outline" size={16} color="#fff" />
+                  <Text style={styles.organizerMessageText}>{isArabic ? 'مراسلة المنظم' : 'Message organizer'}</Text>
+                </Pressable>
+              ) : null}
+              {meetupDetails?.id || plan.meetupId ? (
+                <Pressable
+                  style={styles.meetupChatButton}
+                  onPress={() => navigation.navigate('ActivityThread', {
+                    contextType: 'meetup',
+                    contextId: meetupDetails?.id ?? plan.meetupId,
+                    contextTitle: meetupConversationTitle,
+                    contextSubtitle: isArabic ? 'محادثة اللقاء' : 'Meetup chat',
+                  })}
+                >
+                  <Ionicons name="people-outline" size={16} color="#630E13" />
+                  <Text style={styles.meetupChatText}>{isArabic ? 'دردشة اللقاء' : 'Meetup chat'}</Text>
+                </Pressable>
+              ) : null}
             </View>
             {vibe && vibe !== displayNote ? <Text style={[styles.vibe, isArabic ? rtlText : ltrText]}>{vibe}</Text> : null}
             <Text style={[styles.note, isArabic ? rtlText : ltrText]}>{displayNote}</Text>
@@ -607,6 +650,11 @@ const styles = StyleSheet.create({
   hostCopy: { flex: 1, minWidth: 0 },
   hostName: { fontSize: 15, fontWeight: '900', color: '#2C2418' },
   hostHandle: { marginTop: 2, fontSize: 12, color: '#8A7A6A' },
+  messageActionRow: { flexDirection: 'row', gap: 10, marginTop: 14 },
+  organizerMessageButton: { flex: 1, minHeight: 44, borderRadius: 15, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, backgroundColor: '#630E13' },
+  organizerMessageText: { color: '#fff', fontSize: 12, fontWeight: '900' },
+  meetupChatButton: { flex: 1, minHeight: 44, borderRadius: 15, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, backgroundColor: '#F7EBE8', borderWidth: 1, borderColor: '#E7D8C3' },
+  meetupChatText: { color: '#630E13', fontSize: 12, fontWeight: '900' },
   vibe: { marginTop: 14, fontSize: 13, lineHeight: 19, fontWeight: '900', color: '#630E13' },
   note: { marginTop: 14, fontSize: 14, lineHeight: 21, color: '#43382C' },
   loadingRow: { alignItems: 'center', gap: 8, marginTop: 12 },

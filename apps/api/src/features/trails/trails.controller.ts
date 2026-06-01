@@ -16,6 +16,8 @@ import {
 } from "../../services/aiService";
 import { generateTrailFromDescription } from "../../services/trailGenerationService";
 import { searchTrailsByCriteria } from "../../services/trailSearchService";
+import { verifyPhoto } from "../../services/photoVerificationService";
+import { updateUserStats } from "../achievements/achievements.service";
 
 const calculateTrailStatsBodySchema = z.object({
   coordinates: z.array(z.tuple([z.number(), z.number()])).min(2),
@@ -314,6 +316,12 @@ interface ReviewPhotoResponse {
   id: string;
   url: string;
   created_at?: string;
+}
+
+interface PendingPhotoVerification {
+  id: string;
+  type: "trail_photo" | "review_photo";
+  buffer: Buffer;
 }
 
 interface TrailReviewWithPhotosRow {
@@ -1077,6 +1085,12 @@ export async function createTrailReview(req: Request, res: Response): Promise<vo
       console.log("[createTrailReview] Starting database transaction...");
       await client.query("BEGIN");
 
+      const existingReviewResult = await client.query(
+        "SELECT id FROM trail_reviews WHERE trail_id = $1 AND user_id = $2",
+        [trailId, auth.sub]
+      );
+      const isNewReview = existingReviewResult.rows.length === 0;
+
       console.log("[createTrailReview] Step 3: Inserting or updating review...");
       const result = await client.query<{
         id: string;
@@ -1111,6 +1125,7 @@ export async function createTrailReview(req: Request, res: Response): Promise<vo
       const review = result.rows[0];
       const reviewId = review.id;
       const uploadedPhotos: ReviewPhotoResponse[] = [];
+      const pendingPhotoVerifications: PendingPhotoVerification[] = [];
       console.log("[createTrailReview] Step 4: Review upserted with ID:", reviewId);
 
       if (files.length > 0) {
@@ -1155,6 +1170,11 @@ export async function createTrailReview(req: Request, res: Response): Promise<vo
             url: photo.photo_url,
             created_at: photo.created_at,
           });
+          pendingPhotoVerifications.push({
+            id: photo.id,
+            type: "review_photo",
+            buffer: file.buffer,
+          });
           console.log("[createTrailReview] Photo record inserted with ID:", photo.id);
         }
       }
@@ -1162,6 +1182,24 @@ export async function createTrailReview(req: Request, res: Response): Promise<vo
       console.log("[createTrailReview] Step 7: All photos uploaded, committing transaction");
       await client.query("COMMIT");
       console.log("[createTrailReview] Transaction committed successfully");
+
+      for (const pendingPhoto of pendingPhotoVerifications) {
+        try {
+          console.log("[createTrailReview] Verifying review photo:", pendingPhoto.id);
+          await verifyPhoto(pendingPhoto.id, pendingPhoto.type, pendingPhoto.buffer);
+          console.log("[createTrailReview] Review photo verified:", pendingPhoto.id);
+        } catch (verificationError) {
+          console.error("[createTrailReview] Review photo verification failed but upload will continue:", {
+            photoId: pendingPhoto.id,
+            error: verificationError instanceof Error ? verificationError.message : String(verificationError),
+          });
+        }
+      }
+
+      if (isNewReview) {
+        console.log("[createTrailReview] Updating achievement stats for review");
+        await updateUserStats(auth.sub, { reviews: 1 });
+      }
 
       res.status(201).json({
         data: {
@@ -1627,8 +1665,8 @@ export async function saveTrail(req: Request, res: Response): Promise<void> {
 
     // Check trail exists and is not soft-deleted
     console.log("[saveTrail] 3. Checking trail exists...");
-    const trailCheck = await pool.query(
-      "SELECT id FROM trails WHERE id = $1 AND deleted_at IS NULL",
+    const trailCheck = await pool.query<{ id: string; region: string | null }>(
+      "SELECT id, region FROM trails WHERE id = $1 AND deleted_at IS NULL",
       [trailId]
     );
 
@@ -1637,6 +1675,12 @@ export async function saveTrail(req: Request, res: Response): Promise<void> {
       res.status(404).json({ error: "Trail not found" });
       return;
     }
+
+    const alreadySavedResult = await pool.query(
+      "SELECT id FROM saved_trails WHERE user_id = $1 AND trail_id = $2 AND list_type = $3",
+      [auth.sub, trailId, list_type]
+    );
+    const isNewSavedTrail = alreadySavedResult.rows.length === 0;
 
     // Upsert into saved_trails
     console.log("[saveTrail] 4. Upserting saved trail...");
@@ -1650,6 +1694,17 @@ export async function saveTrail(req: Request, res: Response): Promise<void> {
     );
 
     console.log("[saveTrail] 5. Upsert successful, saved_trail ID:", result.rows[0].id);
+
+    if (list_type === "completed" && isNewSavedTrail) {
+      const region = trailCheck.rows[0]?.region;
+      console.log("[saveTrail] 6. Updating achievement stats for completed trail", { region });
+      await updateUserStats(auth.sub, {
+        trails: 1,
+        regionTrail: region ? { region } : undefined,
+        regionVisited: region ?? undefined,
+      });
+    }
+
     res.status(201).json({ data: { id: result.rows[0].id }, message: "Trail saved successfully" });
   } catch (error) {
     console.error("[saveTrail] ❌ ERROR CAUGHT:");
@@ -1936,16 +1991,27 @@ export async function uploadTrailPhoto(req: Request & { file?: Express.Multer.Fi
     const photoId = insertResult.rows[0].id;
     console.log("[uploadTrailPhoto] 7. Photo record created, ID:", photoId);
 
+    try {
+      console.log("[uploadTrailPhoto] 8. Verifying uploaded trail photo...");
+      await verifyPhoto(photoId, "trail_photo", req.file.buffer);
+      console.log("[uploadTrailPhoto] Trail photo verification complete:", photoId);
+    } catch (verificationError) {
+      console.error("[uploadTrailPhoto] Trail photo verification failed but upload will continue:", {
+        photoId,
+        error: verificationError instanceof Error ? verificationError.message : String(verificationError),
+      });
+    }
+
     // If first photo, update trails.image
     if (isFirstPhoto) {
-      console.log("[uploadTrailPhoto] 8. Setting as primary, updating trails.image...");
+      console.log("[uploadTrailPhoto] 9. Setting as primary, updating trails.image...");
       await pool.query(
         "UPDATE trails SET image = $1 WHERE id = $2",
         [publicUrl, trailId]
       );
     }
 
-    console.log("[uploadTrailPhoto] 9. Upload complete");
+    console.log("[uploadTrailPhoto] 10. Upload complete");
     res.status(201).json({ data: { id: photoId, url: publicUrl }, message: "Photo uploaded successfully" });
   } catch (error) {
     console.error("[uploadTrailPhoto] ❌ ERROR CAUGHT:");
@@ -1962,34 +2028,105 @@ export async function getTrailPhotos(req: Request, res: Response): Promise<void>
   try {
     const trailId = req.params.id;
 
-    console.log("[getTrailPhotos] 1. Querying direct and review photos for trail...");
+    console.log("[getTrailPhotos] 1. Querying direct, review, media, and activity photos for trail...");
     const result = await pool.query(
       `SELECT 
          rp.id,
          rp.photo_storage_path AS storage_path,
+         NULL::text AS url,
+         NULL::text AS thumbnail_url,
          tr.title AS caption,
          false AS is_primary,
          rp.created_at,
          p.full_name AS uploaded_by,
-         'review' AS source
+         rp.user_id,
+         NULL::uuid AS uploader_id,
+         'review' AS source,
+         rp.approved_for_trail_page,
+         rp.manual_review_required,
+         rp.helpful_score,
+         rp.flag_count,
+         rp.quality_score,
+         rp.ai_verified_at
        FROM review_photos rp
        JOIN trail_reviews tr ON tr.id = rp.review_id
        LEFT JOIN profiles p ON rp.user_id = p.id
-       WHERE tr.trail_id = $1
+       WHERE tr.trail_id = $1::uuid
 
        UNION ALL
 
        SELECT 
          tp.id,
          tp.storage_path,
+         NULL::text AS url,
+         NULL::text AS thumbnail_url,
          tp.caption,
          tp.is_primary,
          tp.created_at,
          p.full_name AS uploaded_by,
-         'direct' AS source
+         tp.user_id,
+         NULL::uuid AS uploader_id,
+         'direct' AS source,
+         tp.approved_for_trail_page,
+         tp.manual_review_required,
+         tp.helpful_score,
+         tp.flag_count,
+         tp.quality_score,
+         tp.ai_verified_at
        FROM trail_photos tp
        LEFT JOIN profiles p ON tp.user_id = p.id
-       WHERE tp.trail_id = $1
+       WHERE tp.trail_id = $1::uuid
+
+       UNION ALL
+
+       SELECT
+         m.id,
+         NULL::text AS storage_path,
+         m.url,
+         m.thumbnail_url,
+         m.caption,
+         false AS is_primary,
+         m.created_at,
+         p.full_name AS uploaded_by,
+         m.uploader_id AS user_id,
+         m.uploader_id,
+         'media' AS source,
+         m.approved_for_trail_page,
+         m.manual_review_required,
+         m.helpful_score,
+         m.flag_count,
+         m.quality_score,
+         m.ai_verified_at
+       FROM media m
+       LEFT JOIN profiles p ON m.uploader_id = p.id
+       WHERE m.trip_id = $1::uuid
+         AND m.is_public = true
+
+       UNION ALL
+
+       SELECT
+         am.id,
+         NULL::text AS storage_path,
+         am.public_url AS url,
+         am.public_url AS thumbnail_url,
+         am.caption,
+         false AS is_primary,
+         COALESCE(am.captured_at, am.created_at) AS created_at,
+         p.full_name AS uploaded_by,
+         am.user_id,
+         NULL::uuid AS uploader_id,
+         'activity_media' AS source,
+         am.approved_for_trail_page,
+         am.manual_review_required,
+         am.helpful_score,
+         am.flag_count,
+         am.quality_score,
+         am.ai_verified_at
+       FROM activity_media am
+       JOIN activities a ON a.id = am.activity_id
+       LEFT JOIN profiles p ON am.user_id = p.id
+       WHERE a.trail_id = $1::uuid
+         AND a.is_public = true
 
        ORDER BY is_primary DESC, created_at DESC`,
       [trailId]
@@ -1997,19 +2134,32 @@ export async function getTrailPhotos(req: Request, res: Response): Promise<void>
 
     console.log("[getTrailPhotos] 2. Query successful, found", result.rows.length, "photos");
 
-    // Generate public URLs for each photo
+    // Generate public URLs for storage-backed trail/review photos. Media rows already store public URLs.
     const supabase = getSupabaseStorageClient();
     const photosWithUrls = result.rows.map((photo) => {
       const bucket = photo.source === "review" ? "review-photos" : "trail-photos";
-      const { data: urlData } = supabase.storage.from(bucket).getPublicUrl(photo.storage_path);
+      const { data: urlData } =
+        photo.storage_path && (photo.source === "review" || photo.source === "direct")
+          ? supabase.storage.from(bucket).getPublicUrl(photo.storage_path)
+          : { data: { publicUrl: photo.url } };
+
       return {
         id: photo.id,
-        url: urlData?.publicUrl || "",
+        url: urlData?.publicUrl || photo.url || "",
+        thumbnail_url: photo.thumbnail_url || urlData?.publicUrl || photo.url || null,
         caption: photo.caption,
         is_primary: photo.is_primary,
         created_at: photo.created_at,
         uploaded_by: photo.uploaded_by,
-        source: photo.source
+        user_id: photo.user_id,
+        uploader_id: photo.uploader_id,
+        source: photo.source,
+        approved_for_trail_page: photo.approved_for_trail_page,
+        manual_review_required: photo.manual_review_required,
+        helpful_score: Number(photo.helpful_score ?? 0),
+        flag_count: Number(photo.flag_count ?? 0),
+        quality_score: photo.quality_score === null || photo.quality_score === undefined ? null : Number(photo.quality_score),
+        ai_verified_at: photo.ai_verified_at ?? null
       };
     });
 

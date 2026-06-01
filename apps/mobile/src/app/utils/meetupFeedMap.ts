@@ -49,6 +49,7 @@ export function mapMeetupToFeedItem(meetup: Meetup): Extract<FeedItem, { kind: '
     cover: meetup.cover_url || FALLBACK_COVER,
     destinationEn: title,
     destinationAr: titleAr,
+    startsAt: meetup.starts_at,
     dateEn,
     dateAr,
     vibeEn: meetup.vibe || '',

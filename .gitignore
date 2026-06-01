@@ -4,11 +4,13 @@ dist
 .turbo
 .env
 .env.local
+.env*.local
 coverage
 *.log
 apps/mobile/.expo
 apps/mobile/.env
 apps/api/.env
+apps/wildlife-inference/.env
 apps/mobile/.cxx/
 apps/mobile/.gradle-user-home/
 apps/mobile/android/

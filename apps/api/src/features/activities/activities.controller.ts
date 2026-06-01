@@ -5,6 +5,8 @@ import { env } from "../../config/env";
 import { pool } from "../../db/pool";
 import { HttpError } from "../../lib/httpError";
 import { requireAuth } from "../../middleware/auth";
+import { verifyPhoto } from "../../services/photoVerificationService";
+import { updateUserStats } from "../achievements/achievements.service";
 
 interface StartActivityBody {
   trail_id?: string;
@@ -213,6 +215,22 @@ export async function addActivityMedia(req: Request, res: Response): Promise<voi
       `,
       [req.params.id, auth.sub, isVideo ? "video" : "photo", storagePath, publicUrl, caption, latitude, longitude, capturedAt]
     );
+
+    const mediaId = insertResult.rows[0]?.id;
+    if (!isVideo && mediaId) {
+      try {
+        console.log("[activities.addActivityMedia] verifying uploaded activity photo", { media_id: mediaId });
+        await verifyPhoto(mediaId, "activity_media", file.buffer);
+        console.log("[activities.addActivityMedia] activity photo verification complete", { media_id: mediaId });
+      } catch (verificationError) {
+        console.error("[activities.addActivityMedia] activity photo verification failed but upload will continue", {
+          media_id: mediaId,
+          error: verificationError instanceof Error ? verificationError.message : String(verificationError),
+        });
+      }
+    } else if (isVideo) {
+      console.log("[activities.addActivityMedia] skipping AI photo verification for video media");
+    }
 
     console.log("[activities.addActivityMedia] returning created media", { media_id: insertResult.rows[0]?.id });
     res.status(201).json({ data: insertResult.rows[0] });
@@ -806,6 +824,30 @@ export async function completeActivity(req: Request, res: Response): Promise<voi
       `,
       [req.params.id, ended_at]
     );
+
+    console.log("[activities.completeActivity] updating achievement stats");
+    const achievementStats: Parameters<typeof updateUserStats>[1] = {
+      distance: distance_meters / 1000,
+      trails: updatedActivity.trail_id ? 1 : 0,
+      summit: 1
+    };
+
+    if (updatedActivity.trail_id) {
+      const trailResult = await pool.query<{ region: string | null }>(
+        "SELECT region FROM trails WHERE id = $1::uuid",
+        [updatedActivity.trail_id]
+      );
+      const region = trailResult.rows[0]?.region;
+
+      if (region) {
+        achievementStats.regionTrail = { region };
+        achievementStats.regionVisited = region;
+      }
+    }
+
+    await updateUserStats(auth.sub, {
+      ...achievementStats
+    });
 
     console.log("[activities.completeActivity] returning updated activity", { activity_id: req.params.id });
     res.status(200).json(updatedActivity);

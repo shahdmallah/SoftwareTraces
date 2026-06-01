@@ -70,6 +70,7 @@ export type FeedItem =
       cover: string;
       destinationEn: string;
       destinationAr: string;
+      startsAt?: string;
       dateEn: string;
       dateAr: string;
       vibeEn: string;

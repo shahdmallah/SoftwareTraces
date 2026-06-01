@@ -148,7 +148,7 @@ const translations = {
   tabExplore: { ar: 'استكشاف', en: 'Explore' },
   tabSaved: { ar: 'المحفوظة', en: 'Saved' },
   tabMap: { ar: 'الخريطة', en: 'Map' },
-  tabActivity: { ar: 'النشاط', en: 'Activity' },
+  tabActivity: { ar: 'الخلاصة', en: 'Feed' },
   tabProfile: { ar: 'الملف', en: 'Profile' },
   activitySubtitle: { ar: 'قصتك في المشي ورحلاتك السابقة وتحديثات المجتمع في مكان واحد', en: 'Your hiking story, past trips, and community moments in one place.' },
   detailWeatherTitle: { ar: 'الطقس', en: 'Weather' },

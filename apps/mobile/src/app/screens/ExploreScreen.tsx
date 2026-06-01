@@ -17,9 +17,9 @@ import {
 } from '../api/trailsApi';
 import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
 import { ExploreTrailCard } from '../components/ExploreTrailCard';
+import { TrailRecommendationsSection } from '../components/TrailRecommendationsSection';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
-import { getTrailPhotos } from '../api/mediaApi';
 import { getTrailSafety, type TrailSafety } from '../api/safetyApi';
 import { downloadOfflineMap } from '../api/offlineApi';
 import { RootStackParamList } from '../navigation/types';
@@ -27,6 +27,7 @@ import { getOfflineMapPacks, saveOfflineMapPack } from '../state/offlineMaps';
 import { useOwnedTrails } from '../state/ownedTrails';
 import { theme } from '../theme';
 import { ltrRow, ltrText, rtlRow, rtlText } from '../utils/direction';
+import { getApprovedTrailPhotos, getTrailPhotoUrls } from '../utils/trailPhotos';
 import { exploreScreenStyles as styles } from './ExploreScreen.styles';
 
 const difficultyFilters = [
@@ -103,8 +104,17 @@ function sortTrails(trails: Trail[], sortBy: SortOptionId) {
         return right.reviews - left.reviews;
       });
     case 'bestMatch':
-    default:
-      return sortedTrails;
+      default: {
+        // Prioritize clearly top-rated or very popular trails, then fall back to original order.
+        const highPriority = sortedTrails.filter((t) => t.rating >= 4.5 || t.reviews >= 50);
+        highPriority.sort((a, b) => {
+          if (b.rating === a.rating) return b.reviews - a.reviews;
+          return b.rating - a.rating;
+        });
+
+        const rest = sortedTrails.filter((t) => !(t.rating >= 4.5 || t.reviews >= 50));
+        return [...highPriority, ...rest];
+      }
   }
 }
 
@@ -200,10 +210,8 @@ export function ExploreScreen() {
       const mediaEntries = await Promise.all(
         fetchedTrails.map(async (trail) => {
           try {
-            const photos = await getTrailPhotos(trail.id);
-            const urls = photos
-              .map((photo) => photo.url)
-              .filter((url, index, collection): url is string => Boolean(url) && collection.indexOf(url) === index);
+            const photos = await getApprovedTrailPhotos(trail.id);
+            const urls = getTrailPhotoUrls(photos);
 
             return [trail.id, urls] as const;
           } catch {
@@ -407,10 +415,10 @@ export function ExploreScreen() {
       });
       setDownloadedTrailIds((current) => new Set(current).add(trail.id));
       Alert.alert(
-        isArabic ? '\u0627\u0644\u062e\u0631\u064a\u0637\u0629 \u062c\u0627\u0647\u0632\u0629' : 'Map ready offline',
+        isArabic ? '\u062a\u0645 \u062d\u0641\u0638 \u0628\u062f\u0648\u0646' : 'Saved Offline',
         isArabic
-          ? `\u062a\u0645 \u062a\u062d\u0645\u064a\u0644 \u062e\u0631\u064a\u0637\u0629 ${trail.nameAr || trail.name} \u0644\u0644\u0627\u0633\u062a\u062e\u062f\u0627\u0645 \u0628\u062f\u0648\u0646 \u0627\u062a\u0635\u0627\u0644.`
-          : `${trail.name} is ready for offline use.`,
+          ? `\u062a\u062a\u0627\u062d \u0627\u0644\u0623\u0646\u0635\u0627\u0621 \u0628\u0627\u0644\u062a\u0631\u064a\u0644 \u0648\u0627\u0644\u0633\u0644\u0627\u0645\u0629 \u0627\u0644\u0623\u062e\u064a\u0627\u0631 \u062f\u0648\u0646 \u0627\u0644\u0625\u0646\u063a\u0627\u0621.`
+          : 'Trail and safety context are now available without internet.',
       );
     } catch (error) {
       Alert.alert(
@@ -576,6 +584,14 @@ export function ExploreScreen() {
                   );
                 })}
               </ScrollView>
+            </AnimatedBlock>
+
+            <AnimatedBlock delay={125}>
+              <TrailRecommendationsSection
+                isAuthenticated={isAuthenticated}
+                isArabic={isArabic}
+                onOpenTrail={(trailId) => navigation.navigate('TrailDetail', { trailId })}
+              />
             </AnimatedBlock>
 
             {/* ── Advanced filters panel ── */}

@@ -9,6 +9,7 @@ import { StatCard } from '../components/StatCard';
 import { MapboxTrailMap } from '../components/MapboxTrailMap';
 import { downloadOfflineMap } from '../api/offline';
 import { getAccessToken } from '../api/client';
+import { getMapBubblePhotos, getMapBubbles } from '../api/map';
 import {
   getTrailById,
   getTrailConditions,
@@ -18,6 +19,7 @@ import {
   unsaveTrail,
   type Trail,
   type TrailCondition,
+  type TrailPhoto,
   type TrailReview,
 } from '../api/trails';
 import { cardDifficulty, formatDistance, formatElevation } from '../utils/trailFormat';
@@ -32,12 +34,77 @@ function reviewName(review: TrailReview) {
   return review.user?.full_name || review.profile?.full_name || review.full_name || 'Trail friend';
 }
 
+const WEST_BANK_LAT_MIN = 29;
+const WEST_BANK_LAT_MAX = 33.8;
+const WEST_BANK_LNG_MIN = 34;
+const WEST_BANK_LNG_MAX = 36.8;
+
+function trailPointToLatLng(point: [number, number]): { lat: number; lng: number } | null {
+  const [a, b] = point;
+
+  if (a >= WEST_BANK_LAT_MIN && a <= WEST_BANK_LAT_MAX && b >= WEST_BANK_LNG_MIN && b <= WEST_BANK_LNG_MAX) {
+    return { lat: a, lng: b };
+  }
+
+  if (a >= WEST_BANK_LNG_MIN && a <= WEST_BANK_LNG_MAX && b >= WEST_BANK_LAT_MIN && b <= WEST_BANK_LAT_MAX) {
+    return { lat: b, lng: a };
+  }
+
+  if (Math.abs(a) <= 90 && Math.abs(b) <= 180) {
+    return { lat: a, lng: b };
+  }
+
+  if (Math.abs(b) <= 90 && Math.abs(a) <= 180) {
+    return { lat: b, lng: a };
+  }
+
+  return null;
+}
+
+function getTrailMediaBounds(trail: Trail) {
+  const points = [
+    ...(Array.isArray(trail.routeCoordinates) ? trail.routeCoordinates : []),
+    trail.coordinates,
+  ]
+    .map(trailPointToLatLng)
+    .filter((point): point is { lat: number; lng: number } => Boolean(point));
+
+  if (!points.length) return null;
+
+  const lats = points.map((point) => point.lat);
+  const lngs = points.map((point) => point.lng);
+  const latPadding = Math.max((Math.max(...lats) - Math.min(...lats)) * 0.08, 0.003);
+  const lngPadding = Math.max((Math.max(...lngs) - Math.min(...lngs)) * 0.08, 0.003);
+
+  return {
+    ne_lat: Math.min(90, Math.max(...lats) + latPadding),
+    ne_lng: Math.min(180, Math.max(...lngs) + lngPadding),
+    sw_lat: Math.max(-90, Math.min(...lats) - latPadding),
+    sw_lng: Math.max(-180, Math.min(...lngs) - lngPadding),
+  };
+}
+
+async function getTrailMediaRouteImageUrls(trail: Trail) {
+  const bounds = getTrailMediaBounds(trail);
+  if (!bounds) return [];
+
+  const bubbles = await getMapBubbles({ ...bounds, zoom: 17 });
+  const mediaIds = Array.from(new Set(bubbles.flatMap((bubble) => bubble.media_ids))).slice(0, 100);
+  if (!mediaIds.length) return [];
+
+  const mediaPhotos = await getMapBubblePhotos(mediaIds);
+  return mediaPhotos
+    .map((photo) => photo.url ?? photo.public_url ?? photo.thumbnail_url)
+    .filter((url): url is string => Boolean(url));
+}
+
 export function TrailDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [trail, setTrail] = useState<Trail | null>(null);
   const [reviews, setReviews] = useState<TrailReview[]>([]);
   const [conditions, setConditions] = useState<TrailCondition[]>([]);
-  const [photos, setPhotos] = useState<Array<{ id: string; url: string }>>([]);
+  const [photos, setPhotos] = useState<TrailPhoto[]>([]);
+  const [mediaRouteImages, setMediaRouteImages] = useState<string[]>([]);
   const [saved, setSaved] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [isLoading, setIsLoading] = useState(true);
@@ -50,20 +117,25 @@ export function TrailDetailPage() {
       setIsLoading(true);
       setErrorMessage('');
       try {
-        const [nextTrail, nextReviews, nextConditions, nextPhotos] = await Promise.all([
-          getTrailById(id),
+        const nextTrail = await getTrailById(id);
+        const [nextReviews, nextConditions, nextPhotos, nextMediaRouteImages] = await Promise.all([
           getTrailReviews(id).catch(() => []),
           getTrailConditions(id).catch(() => []),
           getTrailPhotos(id).catch(() => []),
+          getTrailMediaRouteImageUrls(nextTrail).catch(() => []),
         ]);
         if (!cancelled) {
           setTrail(nextTrail);
           setReviews(nextReviews);
           setConditions(nextConditions);
           setPhotos(nextPhotos);
+          setMediaRouteImages(nextMediaRouteImages);
         }
       } catch (error) {
-        if (!cancelled) setErrorMessage(error instanceof Error ? error.message : 'Unable to load trail.');
+        if (!cancelled) {
+          setErrorMessage(error instanceof Error ? error.message : 'Unable to load trail.');
+          setMediaRouteImages([]);
+        }
       } finally {
         if (!cancelled) setIsLoading(false);
       }
@@ -119,7 +191,11 @@ export function TrailDetailPage() {
   }
 
   const difficulty = difficultyConfig[cardDifficulty(trail.difficulty)];
-  const gallery = photos.length ? photos.map((photo) => photo.url) : [trail.image, ...(trail.images ?? [])].filter(Boolean);
+  const gallery = [
+    ...photos.map((photo) => photo.url),
+    ...mediaRouteImages,
+    ...(photos.length || mediaRouteImages.length ? [] : [trail.image, ...(trail.images ?? [])]),
+  ].filter((url, index, collection): url is string => Boolean(url) && collection.indexOf(url) === index);
 
   return (
     <div className="min-h-screen bg-background pb-20 md:pb-8">
@@ -259,6 +335,18 @@ export function TrailDetailPage() {
                       ))}
                     </div>
                     <p className="text-sm text-muted-foreground">{review.content}</p>
+                    {review.photos?.length ? (
+                      <div className="mt-3 grid grid-cols-3 sm:grid-cols-4 gap-2">
+                        {review.photos.filter((photo) => photo.url).slice(0, 4).map((photo) => (
+                          <ImageWithFallback
+                            key={photo.id}
+                            src={photo.url}
+                            alt={`${reviewName(review)} review photo`}
+                            className="aspect-square rounded-lg object-cover"
+                          />
+                        ))}
+                      </div>
+                    ) : null}
                   </div>
                 </div>
               </div>

@@ -20,6 +20,7 @@ import { StackNavigationProp } from '@react-navigation/stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
+import { ActivityIndicator as PaperActivityIndicator, Card, ProgressBar, Text as PaperText } from 'react-native-paper';
 import type { Feature, FeatureCollection, Point } from 'geojson';
 
 import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
@@ -28,6 +29,7 @@ import { useLanguage } from '../contexts/LanguageContext';
 import { addLocalFeedItem } from '../data/localSocial';
 import { createMeetup } from '../api/meetupsApi';
 import { uploadMedia, type ReactNativeFile } from '../api/mediaApi';
+import { identifySpeciesDetails, type SpeciesIdentification, type SpeciesPrediction } from '../api/speciesApi';
 import { getFollowers, getFollowing, type SocialProfile } from '../api/socialApi';
 import { getTrails, type Trail } from '../api/trailsApi';
 import { getWeatherForecast, type WeatherForecast } from '../api/weatherApi';
@@ -41,6 +43,7 @@ type MapboxModule = typeof import('@rnmapbox/maps');
 type LngLat = [number, number];
 type PlanVisibility = 'public' | 'private' | 'friends';
 type DeparturePeriod = 'AM' | 'PM';
+type SpeciesResultTab = 'details' | 'ecology' | 'funfacts';
 
 const MAPBOX_ACCESS_TOKEN = process.env.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN ?? '';
 const MAPBOX_STYLE_URL =
@@ -547,12 +550,13 @@ const calStyles = StyleSheet.create({
 
 type PhotoGridProps = {
   photos: string[];
-  onAdd: () => void;
+  onAddFromCamera: () => void;
+  onAddFromLibrary: () => void;
   onRemove: (uri: string) => void;
   isArabic: boolean;
 };
 
-function PhotoGrid({ photos, onAdd, onRemove, isArabic }: PhotoGridProps) {
+function PhotoGrid({ photos, onAddFromCamera, onAddFromLibrary, onRemove, isArabic }: PhotoGridProps) {
   return (
     <View style={photoStyles.grid}>
       {photos.map((uri) => (
@@ -564,9 +568,15 @@ function PhotoGrid({ photos, onAdd, onRemove, isArabic }: PhotoGridProps) {
         </View>
       ))}
       {photos.length < 6 && (
-        <Pressable style={photoStyles.addBtn} onPress={onAdd}>
-          <Ionicons name="add" size={28} color="#630E13" />
+        <Pressable style={photoStyles.addBtn} onPress={onAddFromLibrary}>
+          <Ionicons name="image-outline" size={22} color="#630E13" />
           <Text style={photoStyles.addText}>{isArabic ? 'إضافة' : 'Add'}</Text>
+        </Pressable>
+      )}
+      {photos.length < 6 && (
+        <Pressable style={photoStyles.addBtn} onPress={onAddFromCamera}>
+          <Ionicons name="camera-outline" size={22} color="#630E13" />
+          <Text style={photoStyles.addText}>{isArabic ? 'ط§ظ„ظƒط§ظ…ظٹط±ط§' : 'Camera'}</Text>
         </Pressable>
       )}
     </View>
@@ -853,6 +863,12 @@ export function ActivityShareComposerScreen() {
   const [trailSearch, setTrailSearch] = useState('');
   const [note, setNote] = useState('');
   const [photos, setPhotos] = useState<string[]>([]);
+  const [speciesResult, setSpeciesResult] = useState<SpeciesIdentification | null>(null);
+  const [speciesPredictions, setSpeciesPredictions] = useState<SpeciesPrediction[]>([]);
+  const [speciesIsFallback, setSpeciesIsFallback] = useState(false);
+  const [speciesResultTab, setSpeciesResultTab] = useState<SpeciesResultTab>('details');
+  const [speciesError, setSpeciesError] = useState<string | null>(null);
+  const [isIdentifyingSpecies, setIsIdentifyingSpecies] = useState(false);
   const [locationLabel, setLocationLabel] = useState('');
   const [mediaCoords, setMediaCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [isLocating, setIsLocating] = useState(false);
@@ -949,6 +965,7 @@ export function ActivityShareComposerScreen() {
     () => trailOptions.find((item) => item.id === selectedTrailId) ?? null,
     [selectedTrailId, trailOptions],
   );
+  const primaryPhotoUri = photos[0] ?? '';
 
   const filteredTrailOptions = useMemo(() => {
     const q = trailSearch.trim().toLowerCase();
@@ -1033,6 +1050,53 @@ export function ActivityShareComposerScreen() {
     setNote([...selectedDescriptionItems, customDescription.trim()].filter(Boolean).join('. '));
   }, [isPlan, selectedDescriptionItems, customDescription]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    if (isPlan || !primaryPhotoUri) {
+      setSpeciesResult(null);
+      setSpeciesPredictions([]);
+      setSpeciesIsFallback(false);
+      setSpeciesError(null);
+      setIsIdentifyingSpecies(false);
+      return;
+    }
+
+    setIsIdentifyingSpecies(true);
+    setSpeciesError(null);
+    setSpeciesResult(null);
+    setSpeciesPredictions([]);
+    setSpeciesIsFallback(false);
+    setSpeciesResultTab('details');
+
+    identifySpeciesDetails(imageUriToFile(primaryPhotoUri), isArabic ? 'ar' : 'en')
+      .then((identification) => {
+        if (!cancelled) {
+          setSpeciesResult(identification.result);
+          setSpeciesPredictions(identification.top5);
+          setSpeciesIsFallback(identification.isFallback);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setSpeciesError(
+            error instanceof Error
+              ? error.message
+              : 'Unable to identify species. Check that the wildlife server is reachable.',
+          );
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsIdentifyingSpecies(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isArabic, isPlan, primaryPhotoUri]);
+
   const toggleSelectedValue = useCallback(
     (value: string, setter: React.Dispatch<React.SetStateAction<string[]>>) => {
       setter(prev => (prev.includes(value) ? prev.filter(item => item !== value) : [...prev, value]));
@@ -1041,12 +1105,41 @@ export function ActivityShareComposerScreen() {
   );
 
   const handlePickPhoto = async () => {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (permission.status !== 'granted') {
+      Alert.alert(
+        isArabic ? 'ط§ظ„طµظˆط± ظ…ط·ظ„ظˆط¨ط©' : 'Photos needed',
+        isArabic ? 'ط§ط³ظ…ط­ ط¨ط§ظ„ظˆطµظˆظ„ ظ„ظ„طµظˆط± ظ„ط§ط®طھظٹط§ط± طµظˆط±ط©.' : 'Allow photo library access to choose an image.',
+      );
+      return;
+    }
+
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsMultipleSelection: true,
       selectionLimit: 6 - photos.length,
       quality: 0.85,
     });
+    if (!result.canceled) {
+      setPhotos(prev => [...prev, ...result.assets.map(a => a.uri)].slice(0, 6));
+    }
+  };
+
+  const handleTakePhoto = async () => {
+    const permission = await ImagePicker.requestCameraPermissionsAsync();
+    if (permission.status !== 'granted') {
+      Alert.alert(
+        isArabic ? 'ط§ظ„ظƒط§ظ…ظٹط±ط§ ظ…ط·ظ„ظˆط¨ط©' : 'Camera needed',
+        isArabic ? 'ط§ط³ظ…ط­ ط¨ط§ط³طھط®ط¯ط§ظ… ط§ظ„ظƒط§ظ…ظٹط±ط§ ظ„ط§ظ„طھظ‚ط§ط· طµظˆط±ط©.' : 'Allow camera access to take a photo.',
+      );
+      return;
+    }
+
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 0.85,
+    });
+
     if (!result.canceled) {
       setPhotos(prev => [...prev, ...result.assets.map(a => a.uri)].slice(0, 6));
     }
@@ -1102,6 +1195,7 @@ export function ActivityShareComposerScreen() {
               latitude: mediaCoords.lat,
               longitude: mediaCoords.lng,
               locationName: locationLabel.trim() || null,
+              tripId: route.params?.trailId ?? selectedTrailId ?? null,
             }),
           ),
         );
@@ -1109,7 +1203,7 @@ export function ActivityShareComposerScreen() {
         addLocalFeedItem({
           id: `local-location-media-${Date.now()}`,
           kind: 'recap',
-          trailId: '0',
+          trailId: route.params?.trailId ?? selectedTrailId ?? '',
           user: user?.full_name || 'You',
           handle: '@you',
           avatar: user?.avatar_url || 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?crop=faces&fit=crop&w=240&h=240',
@@ -1151,6 +1245,7 @@ export function ActivityShareComposerScreen() {
     const headcount = parseInt(maxHeadcount, 10) || 6;
     const joined = Math.max(1, 1 + selectedFriends.length);
     const spotsLeft = Math.max(0, headcount - joined);
+    const startsAtIso = buildStartsAtIso(selectedDateIso, departureHour, departureMinute, departurePeriod);
     if (isPlan) {
       const invitedUserIds = contacts
         .filter((contact) => selectedFriends.includes(contact.full_name))
@@ -1167,6 +1262,7 @@ export function ActivityShareComposerScreen() {
             latitude: meetingCoords?.lat ?? null,
             longitude: meetingCoords?.lng ?? null,
             locationName: meetingPlace || null,
+            tripId: route.params?.trailId ?? selectedTrailId ?? null,
           });
           coverUrl = uploaded.url;
         }
@@ -1180,7 +1276,7 @@ export function ActivityShareComposerScreen() {
           vibe: null,
           vibe_ar: null,
           cover_url: coverUrl,
-          starts_at: buildStartsAtIso(selectedDateIso, departureHour, departureMinute, departurePeriod),
+          starts_at: startsAtIso,
           meeting_place: meetingPlace || null,
           meeting_latitude: meetingCoords?.lat ?? null,
           meeting_longitude: meetingCoords?.lng ?? null,
@@ -1217,6 +1313,7 @@ export function ActivityShareComposerScreen() {
           cover: photos[0] ?? 'https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=1200&q=80',
           destinationEn: trimmedTrail,
           destinationAr: trimmedTrail,
+          startsAt: startsAtIso,
           dateEn: [selectedDateLabel, timeText].filter(Boolean).join(' · ') || 'Soon',
           dateAr: [selectedDateLabel, timeText].filter(Boolean).join(' · ') || 'قريباً',
           vibeEn: '',
@@ -1259,6 +1356,8 @@ export function ActivityShareComposerScreen() {
     );
   };
 
+  const topSpeciesPrediction = speciesPredictions[0] ?? null;
+
   return (
     <AnimatedScreen style={styles.container}>
       <ScrollView
@@ -1292,21 +1391,193 @@ export function ActivityShareComposerScreen() {
           {/* ── Photos ── */}
           <FieldRow icon="images-outline" label={isArabic ? 'الصور' : 'Photos'} isArabic={isArabic}>
             {photos.length === 0 ? (
-              <Pressable style={styles.photoEmptyBtn} onPress={handlePickPhoto}>
+              <View style={[styles.photoEmptyActions, isArabic && styles.photoEmptyActionsRtl]}>
+                <Pressable style={styles.photoEmptyBtn} onPress={handleTakePhoto}>
                 <Ionicons name="camera-outline" size={28} color="#630E13" />
                 <Text style={styles.photoEmptyText}>
                   {isArabic ? 'اضغط لإضافة صور' : 'Tap to add photos'}
                 </Text>
-              </Pressable>
+                </Pressable>
+                <Pressable style={styles.photoEmptyBtn} onPress={handlePickPhoto}>
+                  <Ionicons name="image-outline" size={28} color="#630E13" />
+                  <Text style={styles.photoEmptyText}>
+                    {isArabic ? 'ط±ظپط¹ طµظˆط±ط©' : 'Upload image'}
+                  </Text>
+                </Pressable>
+              </View>
             ) : (
               <PhotoGrid
                 photos={photos}
-                onAdd={handlePickPhoto}
+                onAddFromCamera={handleTakePhoto}
+                onAddFromLibrary={handlePickPhoto}
                 onRemove={uri => setPhotos(p => p.filter(u => u !== uri))}
                 isArabic={isArabic}
               />
             )}
           </FieldRow>
+
+          {!isPlan && primaryPhotoUri ? (
+            <Card mode="contained" style={styles.speciesCard}>
+              <Card.Content>
+                {isIdentifyingSpecies ? (
+                  <View style={styles.speciesLoadingRow}>
+                    <PaperActivityIndicator animating color="#5A5A40" />
+                    <PaperText style={styles.speciesLoadingText}>Identifying species...</PaperText>
+                  </View>
+                ) : speciesError ? (
+                  <View style={styles.speciesErrorRow}>
+                    <Ionicons name="warning-outline" size={18} color="#B42318" />
+                    <PaperText style={styles.speciesErrorText}>{speciesError}</PaperText>
+                  </View>
+                ) : speciesResult ? (
+                  <>
+                    <View style={styles.speciesMetaRow}>
+                      <View style={styles.speciesStatusPill}>
+                        <PaperText style={styles.speciesStatusText}>
+                          {speciesIsFallback ? 'Local Suggestion' : 'Result Identified'}
+                        </PaperText>
+                      </View>
+                      <View style={styles.speciesConfidenceBlock}>
+                        <PaperText style={styles.speciesConfidenceLabel}>Confidence</PaperText>
+                        <PaperText style={styles.speciesConfidenceValue}>
+                          {speciesResult.confidenceLevel}%
+                        </PaperText>
+                      </View>
+                    </View>
+
+                    <View style={styles.speciesNomenclature}>
+                      <PaperText style={styles.speciesTitle}>{speciesResult.commonName}</PaperText>
+                      {speciesResult.scientificName ? (
+                        <PaperText style={styles.speciesScientificName}>
+                          {speciesResult.scientificName}
+                        </PaperText>
+                      ) : null}
+                    </View>
+
+                    <View style={styles.speciesDivider} />
+
+                    <View style={styles.speciesTabs}>
+                      {[
+                        ['details', 'Anatomy'],
+                        ['ecology', 'Ecology'],
+                        ['funfacts', 'Discoveries'],
+                      ].map(([value, label]) => {
+                        const active = speciesResultTab === value;
+                        return (
+                          <Pressable
+                            key={value}
+                            style={[styles.speciesTab, active && styles.speciesTabActive]}
+                            onPress={() => setSpeciesResultTab(value as SpeciesResultTab)}
+                          >
+                            <PaperText style={[styles.speciesTabText, active && styles.speciesTabTextActive]}>
+                              {label}
+                            </PaperText>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+
+                    {speciesResultTab === 'details' ? (
+                      <View style={styles.speciesTabPanel}>
+                        <View style={styles.speciesTaxonomyGrid}>
+                          {[
+                            ['Kingdom', speciesResult.taxonomy.kingdom],
+                            ['Family', speciesResult.taxonomy.family],
+                            ['Order', speciesResult.taxonomy.order],
+                            ['Genus', speciesResult.taxonomy.genus],
+                          ].filter(([, value]) => Boolean(value)).map(([label, value]) => (
+                            <View key={label} style={styles.speciesTaxonomyItem}>
+                              <PaperText style={styles.speciesTaxonomyLabel}>{label}</PaperText>
+                              <PaperText style={styles.speciesTaxonomyValue} numberOfLines={1}>{value}</PaperText>
+                            </View>
+                          ))}
+                        </View>
+
+                        {speciesResult.shortDescription ? (
+                          <View style={styles.speciesDetailsBlock}>
+                            <PaperText style={styles.speciesSectionTitle}>Description</PaperText>
+                            <PaperText style={styles.speciesDescription}>
+                              {speciesResult.shortDescription}
+                            </PaperText>
+                          </View>
+                        ) : null}
+
+                        {speciesResult.notableFeatures.length ? (
+                          <View style={styles.speciesDetailsBlock}>
+                            <PaperText style={styles.speciesSectionTitle}>Distinguishing Features</PaperText>
+                            {speciesResult.notableFeatures.slice(0, 4).map((feature) => (
+                              <View key={feature} style={styles.speciesBulletRow}>
+                                <View style={styles.speciesBulletDot} />
+                                <PaperText style={styles.speciesBulletText}>{feature}</PaperText>
+                              </View>
+                            ))}
+                          </View>
+                        ) : null}
+                      </View>
+                    ) : null}
+
+                    {speciesResultTab === 'ecology' ? (
+                      <View style={styles.speciesTabPanel}>
+                        <View style={styles.speciesEcologyCard}>
+                          <PaperText style={styles.speciesSectionTitle}>Host & Habitat</PaperText>
+                          <PaperText style={styles.speciesFactText}>
+                            {speciesResult.ecologicalRole || 'No specific ecological interactions were listed for this scan.'}
+                          </PaperText>
+                        </View>
+                        <View style={styles.speciesInfoRow}>
+                          <Ionicons name="information-circle-outline" size={16} color="#5A5A40" />
+                          <PaperText style={styles.speciesInfoText}>
+                            Detailed notes come from the Gemini scanner result; verify important identifications in the field.
+                          </PaperText>
+                        </View>
+                      </View>
+                    ) : null}
+
+                    {speciesResultTab === 'funfacts' ? (
+                      <View style={styles.speciesTabPanel}>
+                        <PaperText style={styles.speciesSectionTitle}>Fascinating Discoveries</PaperText>
+                        {(speciesResult.funFacts?.length ? speciesResult.funFacts : ['No discoveries were returned for this scan.']).slice(0, 3).map((fact) => (
+                          <View key={fact} style={styles.speciesDiscoveryCard}>
+                            <Ionicons name="bulb-outline" size={17} color="#5A5A40" />
+                            <PaperText style={styles.speciesFactText}>{fact}</PaperText>
+                          </View>
+                        ))}
+                      </View>
+                    ) : null}
+
+                    {speciesIsFallback && speciesPredictions.length ? (
+                      <View style={styles.speciesFallbackBlock}>
+                        <PaperText style={styles.speciesSectionTitle}>Model Matches</PaperText>
+                        {speciesPredictions.map((prediction) => (
+                          <View key={prediction.label ?? prediction.name} style={styles.speciesRow}>
+                            <View style={styles.speciesRowHeader}>
+                              <PaperText style={styles.speciesName} numberOfLines={1}>
+                                {prediction.scientificName ?? prediction.name}
+                              </PaperText>
+                              <PaperText style={styles.speciesPercent}>
+                                {Math.round(prediction.confidence * 100)}%
+                              </PaperText>
+                            </View>
+                            <ProgressBar
+                              progress={Math.max(0, Math.min(1, prediction.confidence))}
+                              color="#5A5A40"
+                              style={styles.speciesProgress}
+                            />
+                          </View>
+                        ))}
+                      </View>
+                    ) : null}
+
+                    <PaperText style={styles.speciesNote}>
+                      Results are suggestions, not guaranteed identifications
+                    </PaperText>
+                  </>
+                ) : topSpeciesPrediction ? (
+                  <PaperText style={styles.speciesTitle}>{topSpeciesPrediction.name}</PaperText>
+                ) : null}
+              </Card.Content>
+            </Card>
+          ) : null}
 
           {!isLocationMedia ? (
             <FieldRow icon="trail-sign-outline" label={isArabic ? 'المسار' : 'Trail'} isArabic={isArabic}>
@@ -1331,6 +1602,19 @@ export function ActivityShareComposerScreen() {
                 </Text>
               </Pressable>
             </FieldRow>
+          )}
+
+          {isLocationMedia && (
+            <FieldRow icon="trail-sign-outline" label={isArabic ? 'ربط بمسار (اختياري)' : 'Link to trail (optional)'} isArabic={isArabic}>
+              <SelectPill
+                value={trail}
+                placeholder={isLoadingTrails ? (isArabic ? 'جار تحميل المسارات...' : 'Loading trails...') : (isArabic ? 'اختر مساراً (اختياري)' : 'Choose trail (optional)')}
+                isArabic={isArabic}
+                onPress={() => setShowTrailPicker(true)}
+                iconRight="chevron-down-outline"
+              />
+            </FieldRow>
+          )}
           )}
 
           {isPlan && (
@@ -1735,8 +2019,65 @@ const styles = StyleSheet.create({
 
   card: { borderRadius: 24, padding: 16, backgroundColor: '#fff', paddingBottom: 20 },
 
+  speciesCard: {
+    marginTop: 12,
+    borderRadius: 28,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#EEEAE0',
+    shadowColor: '#2C2C2C',
+    shadowOpacity: 0.06,
+    shadowOffset: { width: 0, height: 8 },
+    shadowRadius: 18,
+    elevation: 2,
+  },
+  speciesLoadingRow: { minHeight: 86, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10 },
+  speciesLoadingText: { fontSize: 14, fontWeight: '800', color: '#5A5A40' },
+  speciesErrorRow: { minHeight: 86, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 18, padding: 12, backgroundColor: '#FFF8E7', borderWidth: 1, borderColor: '#F3D69B' },
+  speciesErrorText: { flex: 1, fontSize: 13, fontWeight: '700', color: '#8A5A00', lineHeight: 18 },
+  speciesMetaRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 },
+  speciesStatusPill: { borderRadius: 999, paddingHorizontal: 12, paddingVertical: 6, backgroundColor: '#F0EDE5' },
+  speciesStatusText: { fontSize: 10, fontWeight: '900', color: '#5A5A40', textTransform: 'uppercase', letterSpacing: 1.2 },
+  speciesConfidenceBlock: { alignItems: 'flex-end' },
+  speciesConfidenceLabel: { fontSize: 9, fontWeight: '900', color: '#A19D8F', textTransform: 'uppercase', letterSpacing: 1 },
+  speciesConfidenceValue: { marginTop: 1, fontSize: 28, fontWeight: '300', color: '#5A5A40', fontVariant: ['tabular-nums'] },
+  speciesNomenclature: { marginTop: 16 },
+  speciesTitle: { fontSize: 32, fontWeight: '400', color: '#2C2C2C', lineHeight: 37, fontStyle: 'italic', fontFamily: Platform.select({ ios: 'Georgia', android: 'serif', default: undefined }) },
+  speciesScientificName: { marginTop: 4, fontSize: 14, fontWeight: '700', color: '#8B8574', fontStyle: 'italic', letterSpacing: 0.4 },
+  speciesDivider: { height: 1, backgroundColor: '#EEEAE0', marginVertical: 18 },
+  speciesTabs: { flexDirection: 'row', alignItems: 'flex-end', gap: 14, borderBottomWidth: 1, borderBottomColor: '#EEEAE0' },
+  speciesTab: { paddingBottom: 9 },
+  speciesTabActive: { borderBottomWidth: 2, borderBottomColor: '#5A5A40' },
+  speciesTabText: { fontSize: 11, fontWeight: '900', color: '#A19D8F', textTransform: 'uppercase', letterSpacing: 0.8 },
+  speciesTabTextActive: { color: '#5A5A40' },
+  speciesTabPanel: { marginTop: 16, gap: 14 },
+  speciesTaxonomyGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  speciesTaxonomyItem: { minWidth: '46%', flex: 1, borderRadius: 16, paddingHorizontal: 12, paddingVertical: 11, backgroundColor: '#F9F8F5', borderWidth: 1, borderColor: 'rgba(238,234,224,0.70)' },
+  speciesTaxonomyLabel: { fontSize: 8, fontWeight: '900', color: '#A19D8F', textTransform: 'uppercase', letterSpacing: 0.8 },
+  speciesTaxonomyValue: { marginTop: 3, fontSize: 12, fontWeight: '800', color: '#5A5A40' },
+  speciesDetailsBlock: { gap: 7 },
+  speciesSectionTitle: { fontSize: 10, fontWeight: '900', color: '#A19D8F', textTransform: 'uppercase', letterSpacing: 1.1 },
+  speciesDescription: { fontSize: 13, fontWeight: '400', color: '#555555', lineHeight: 20 },
+  speciesBulletRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 9 },
+  speciesBulletDot: { width: 6, height: 6, borderRadius: 3, marginTop: 7, backgroundColor: '#5A5A40' },
+  speciesBulletText: { flex: 1, fontSize: 12, fontWeight: '400', color: '#555555', lineHeight: 18 },
+  speciesEcologyCard: { borderRadius: 18, padding: 14, gap: 8, backgroundColor: '#F9F8F5', borderWidth: 1, borderColor: 'rgba(238,234,224,0.80)' },
+  speciesInfoRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 9, borderRadius: 16, padding: 12, borderWidth: 1, borderColor: '#EEEAE0' },
+  speciesInfoText: { flex: 1, fontSize: 11, fontWeight: '500', color: '#7C786A', lineHeight: 16 },
+  speciesDiscoveryCard: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, borderRadius: 18, padding: 14, backgroundColor: '#F9F8F5', borderWidth: 1, borderColor: 'rgba(238,234,224,0.70)' },
+  speciesFactText: { flex: 1, fontSize: 12, fontWeight: '400', color: '#555555', lineHeight: 18 },
+  speciesFallbackBlock: { marginTop: 16, gap: 10, borderRadius: 18, padding: 12, backgroundColor: '#F9F8F5', borderWidth: 1, borderColor: '#EEEAE0' },
+  speciesRow: { gap: 6 },
+  speciesRowHeader: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  speciesName: { flex: 1, fontSize: 12, fontWeight: '700', color: '#555555', fontStyle: 'italic' },
+  speciesPercent: { fontSize: 11, fontWeight: '900', color: '#5A5A40', fontVariant: ['tabular-nums'] },
+  speciesProgress: { height: 5, borderRadius: 999, backgroundColor: '#EEEAE0' },
+  speciesNote: { marginTop: 16, fontSize: 11, fontWeight: '600', color: '#A19D8F', lineHeight: 16 },
+
+  photoEmptyActions: { flexDirection: 'row', gap: 10 },
+  photoEmptyActionsRtl: { flexDirection: 'row-reverse' },
   photoEmptyBtn: {
-    height: 130, borderRadius: 18, borderWidth: 1.5, borderColor: '#E7D8C3',
+    flex: 1, height: 130, borderRadius: 18, borderWidth: 1.5, borderColor: '#E7D8C3',
     borderStyle: 'dashed', backgroundColor: '#FFF8F1',
     alignItems: 'center', justifyContent: 'center', gap: 8,
   },

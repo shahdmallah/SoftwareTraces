@@ -73,3 +73,7 @@ export default {
     apiPort,
   },
 };
+plugins: [
+  "expo-secure-store",
+  // ...other plugins
+]

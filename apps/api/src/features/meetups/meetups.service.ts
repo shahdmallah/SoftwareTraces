@@ -1,5 +1,6 @@
 import type { PoolClient } from "pg";
 import { pool } from "../../db/pool";
+import { updateUserStats } from "../achievements/achievements.service";
 import type {
   CreateMeetupInput,
   JoinMeetupResult,
@@ -311,7 +312,9 @@ export async function createMeetup(userId: string, input: CreateMeetupInput): Pr
 
     console.log("[meetups.createMeetup] 7. Fetching created meetup...");
     const meetup = await getMeetup(meetupId, userId);
-    console.log("[meetups.createMeetup] 8. Returning meetup");
+    console.log("[meetups.createMeetup] 8. Updating achievement stats...");
+    await updateUserStats(userId, { meetupsHosted: 1 });
+    console.log("[meetups.createMeetup] 9. Returning meetup");
 
     return meetup;
   } catch (error) {
@@ -441,6 +444,8 @@ export async function createMeetupFull(userId: string, input: CreateMeetupInput)
 
     console.log("[meetups.createMeetupFull] 12. COMMIT transaction");
     await client.query("COMMIT");
+    console.log("[meetups.createMeetupFull] Updating achievement stats");
+    await updateUserStats(userId, { meetupsHosted: 1 });
     console.log("[meetups.createMeetupFull] createMeetupFull complete:", meetupId);
     return meetup;
   } catch (error) {
@@ -606,6 +611,7 @@ export async function joinMeetup(meetupId: string, userId: string, guestCount: n
     );
     const existing = existingResult.rows[0];
     const previousJoinedCount = existing?.status === "joined" ? Number(existing.guest_count) : 0;
+    const shouldUpdateJoinedStats = existing?.status !== "joined" && meetup.host_id !== userId && guestCount > 0;
     const newPeopleJoined = Number(meetup.people_joined) - previousJoinedCount + guestCount;
 
     if (newPeopleJoined > Number(meetup.max_headcount)) {
@@ -639,6 +645,10 @@ export async function joinMeetup(meetupId: string, userId: string, guestCount: n
     );
 
     await client.query("COMMIT");
+    if (shouldUpdateJoinedStats) {
+      await updateUserStats(userId, { meetupsJoined: 1 });
+    }
+
     return {
       meetup_id: meetupId,
       status: "joined",

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { NavigationContainer, createNavigationContainerRef, getFocusedRouteNameFromRoute, useNavigation, useRoute } from '@react-navigation/native';
 import {
   CardStyleInterpolators,
@@ -19,6 +19,7 @@ import { SavedScreen } from '../screens/SavedScreen';
 import { ProfileScreen } from '../screens/ProfileScreen';
 import { PublicProfileScreen } from '../screens/PublicProfileScreen';
 import { TrailDetailScreen } from '../screens/TrailDetailScreen';
+import { TrailAccessScreen } from '../screens/TrailAccessScreen';
 import { AllReviewsScreen } from '../screens/AllReviewsScreen';
 import { TrailMediaScreen } from '../screens/TrailMediaScreen';
 import { RecordingScreen } from '../screens/RecordingScreen';
@@ -39,16 +40,23 @@ import { AdvancedFiltersScreen } from '../screens/AdvancedFiltersScreen';
 import { EditProfileScreen } from '../screens/EditProfileScreen';
 import { TrailDraftsScreen } from '../screens/TrailDraftsScreen';
 import { MyTrailsScreen } from '../screens/MyTrailsScreen';
+import { OfflineDownloadsScreen } from '../screens/OfflineDownloadsScreen';
 import { SupportHelpScreen } from '../screens/SupportHelpScreen';
 import { ReportIssueScreen } from '../screens/ReportIssueScreen';
 import { LegalScreen } from '../screens/LegalScreen';
-import { OfflineDownloadsScreen } from '../screens/OfflineDownloadsScreen';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BlurView } from 'expo-blur';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAuth } from '../contexts/AuthContext';
 import { useTrailTracking } from '../contexts/TrailTrackingContext';
+import {
+  addNotificationResponseListener,
+  getInitialNotificationData,
+  registerDeviceForPushNotifications,
+  type PushNotificationData,
+} from '../services/pushNotifications';
+import { getNotifications } from '../api/notificationsApi';
 
 const Stack = createStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<AppTabParamList>();
@@ -236,6 +244,222 @@ function ActiveRecordingWidget({ routeName }: { routeName: string }) {
   );
 }
 
+function getPushString(data: PushNotificationData, keys: string[]): string | null {
+  for (const key of keys) {
+    const value = data[key];
+    if (typeof value === 'string' && value.trim() !== '') {
+      return value.trim();
+    }
+  }
+
+  return null;
+}
+
+function getPushNumber(data: PushNotificationData, keys: string[]): number | null {
+  for (const key of keys) {
+    const value = data[key];
+    const parsed = typeof value === 'number' ? value : Number(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+
+  return null;
+}
+
+function getPushEntity(data: PushNotificationData): { type: string | null; id: string | null } {
+  const entity = data.entity;
+
+  if (entity && typeof entity === 'object' && !Array.isArray(entity)) {
+    const typedEntity = entity as { type?: unknown; id?: unknown };
+    return {
+      type: typeof typedEntity.type === 'string' ? typedEntity.type : null,
+      id: typeof typedEntity.id === 'string' ? typedEntity.id : null,
+    };
+  }
+
+  return {
+    type: getPushString(data, ['entity_type']),
+    id: getPushString(data, ['entity_id']),
+  };
+}
+
+function openPushNotificationDestination(data: PushNotificationData): void {
+  if (!navigationRef.isReady()) {
+    return;
+  }
+
+  const type = getPushString(data, ['type', 'notification_type']);
+  const entity = getPushEntity(data);
+  const trailId = getPushString(data, ['trail_id']) || (entity.type === 'trail' ? entity.id : null);
+  const activityId = getPushString(data, ['activity_id']) || (entity.type === 'activity' ? entity.id : null);
+
+  if (type === 'danger_alert') {
+    if (trailId && activityId) {
+      navigationRef.navigate('Recording', { trailId, activityId });
+      return;
+    }
+
+    if (trailId) {
+      navigationRef.navigate('TrailDetail', { trailId });
+      return;
+    }
+
+    const latitude = getPushNumber(data, ['latitude', 'lat']);
+    const longitude = getPushNumber(data, ['longitude', 'lng']);
+    if (latitude != null && longitude != null) {
+      navigationRef.navigate('ReportIssue', {
+        latitude,
+        longitude,
+        locationName: getPushString(data, ['title', 'location_name']) ?? 'Danger reported nearby',
+      });
+      return;
+    }
+
+    navigationRef.navigate('AppTabs', { screen: 'Map' });
+    return;
+  }
+
+  if (type === 'follow') {
+    const profileId = getPushString(data, ['user_id', 'profile_id', 'follower_id', 'actor_id']) || (entity.type === 'user' ? entity.id : null);
+    if (profileId) {
+      navigationRef.navigate('PublicProfile', { profileId });
+    }
+    return;
+  }
+
+  if (type === 'review_like' || type === 'review_comment') {
+    if (trailId) {
+      navigationRef.navigate('TrailDetail', { trailId });
+    }
+    return;
+  }
+
+  if (type === 'activity_like' || type === 'activity_comment') {
+    if (trailId && activityId) {
+      navigationRef.navigate('Recording', { trailId, activityId });
+      return;
+    }
+
+    navigationRef.navigate('AppTabs', { screen: 'Activity' });
+    return;
+  }
+
+  if (type === 'meetup_invite' || type === 'meetup_join' || type === 'meetup_update') {
+    navigationRef.navigate('AppTabs', { screen: 'Activity' });
+    return;
+  }
+
+  if (type === 'achievement') {
+    navigationRef.navigate('AppTabs', { screen: 'Profile' });
+  }
+}
+
+function PushNotificationBridge({ enabled }: { enabled: boolean }) {
+  const handledInitialNotification = useRef(false);
+
+  useEffect(() => {
+    if (!enabled) {
+      return undefined;
+    }
+
+    let isMounted = true;
+
+    void registerDeviceForPushNotifications().catch((error) => {
+      console.warn('[pushNotifications] Failed to register push token:', error);
+    });
+
+    const subscription = addNotificationResponseListener((data) => {
+      openPushNotificationDestination(data);
+    });
+
+    if (!handledInitialNotification.current) {
+      handledInitialNotification.current = true;
+      void getInitialNotificationData()
+        .then((data) => {
+          if (isMounted && data) {
+            openPushNotificationDestination(data);
+          }
+        })
+        .catch((error) => {
+          console.warn('[pushNotifications] Failed to read launch notification:', error);
+        });
+    }
+
+    return () => {
+      isMounted = false;
+      subscription.remove();
+    };
+  }, [enabled]);
+
+  return null;
+}
+
+function shouldShowActiveRecordingWidget(routeName: string): boolean {
+  return routeName !== 'Recording' && routeName !== 'TrailReview';
+}
+
+function NotificationShortcut({ enabled, routeName }: { enabled: boolean; routeName: string }) {
+  const insets = useSafeAreaInsets();
+  const [unreadCount, setUnreadCount] = useState(0);
+
+  const visibleRoutes = new Set(['Explore', 'Saved', 'Activity', 'Profile']);
+  const shouldRender = enabled && visibleRoutes.has(routeName);
+
+  useEffect(() => {
+    if (!shouldRender) {
+      return;
+    }
+
+    let isMounted = true;
+
+    void getNotifications({ page: 1, limit: 1 })
+      .then((response) => {
+        if (isMounted) {
+          setUnreadCount(response.unread_count);
+        }
+      })
+      .catch((error) => {
+        console.warn('[notifications] Failed to load unread count:', error);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [routeName, shouldRender]);
+
+  if (!shouldRender) {
+    return null;
+  }
+
+  const badgeLabel = unreadCount > 99 ? '99+' : String(unreadCount);
+
+  return (
+    <Pressable
+      accessibilityLabel={unreadCount > 0 ? `${unreadCount} unread notifications` : 'Notifications'}
+      accessibilityRole="button"
+      onPress={() => {
+        if (navigationRef.isReady()) {
+          navigationRef.navigate('Notifications');
+        }
+      }}
+      style={[
+        styles.notificationShortcut,
+        {
+          bottom: insets.bottom + 88,
+        },
+      ]}
+    >
+      <Ionicons name={unreadCount > 0 ? 'notifications' : 'notifications-outline'} size={22} color="#2C2418" />
+      {unreadCount > 0 ? (
+        <View style={styles.notificationBadge}>
+          <Text style={styles.notificationBadgeText}>{badgeLabel}</Text>
+        </View>
+      ) : null}
+    </Pressable>
+  );
+}
+
 export function AppNavigator() {
   const { isAuthenticated, isLoading } = useAuth();
   const [routeName, setRouteName] = useState('Unknown');
@@ -271,6 +495,7 @@ export function AppNavigator() {
           <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
           <Stack.Screen name="AppTabs" component={AppTabs} />
           <Stack.Screen name="TrailDetail" component={TrailDetailScreen} />
+          <Stack.Screen name="TrailAccess" component={TrailAccessScreen} />
           <Stack.Screen name="AllReviews" component={AllReviewsScreen} />
           <Stack.Screen name="TrailMedia" component={TrailMediaScreen} />
           <Stack.Screen name="ActivityMessages" component={ActivityMessagesScreen} />
@@ -299,6 +524,8 @@ export function AppNavigator() {
         </Stack.Navigator>
 
         <ActiveRecordingWidget routeName={routeName} />
+        <NotificationShortcut enabled={isAuthenticated} routeName={routeName} />
+        <PushNotificationBridge enabled={isAuthenticated} />
       </View>
     </NavigationContainer>
   );
@@ -386,5 +613,42 @@ const styles = StyleSheet.create({
     marginTop: 2,
     color: 'rgba(255,255,255,0.72)',
     fontSize: 11,
+  },
+  notificationShortcut: {
+    position: 'absolute',
+    right: 16,
+    zIndex: 60,
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.92)',
+    borderWidth: 1,
+    borderColor: 'rgba(99,14,19,0.12)',
+    shadowColor: '#2C1A0E',
+    shadowOpacity: 0.14,
+    shadowOffset: { width: 0, height: 10 },
+    shadowRadius: 18,
+    elevation: 9,
+  },
+  notificationBadge: {
+    position: 'absolute',
+    top: -4,
+    right: -4,
+    minWidth: 20,
+    height: 20,
+    borderRadius: 10,
+    paddingHorizontal: 5,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#8B1E1E',
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
+  },
+  notificationBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: '900',
   },
 });
