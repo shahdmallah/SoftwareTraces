@@ -6,6 +6,7 @@ export type AuthStackParamList = {
 export type MainTabParamList = {
   Map: undefined;
   Explore: undefined;
+  Offline: undefined;
   Record: undefined;
   History: undefined;
   Profile: undefined;
@@ -14,6 +15,6 @@ export type MainTabParamList = {
 export type RootStackParamList = {
   Auth: undefined;
   Main: undefined;
-  TrailDetail: { trailId: string };
+  TrailDetail: { trailId: string; offline?: boolean };
   ActivityDetail: { activityId: string };
 };
