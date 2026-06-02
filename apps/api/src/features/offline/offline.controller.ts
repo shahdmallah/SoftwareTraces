@@ -4,11 +4,14 @@ import { pool } from "../../db/pool";
 import { env } from "../../config/env";
 import { HttpError } from "../../lib/httpError";
 import { requireAuth } from "../../middleware/auth";
+import { formatTrailForApp } from "../../utils/formatTrail";
 
 interface ZipEntry {
   name: string;
   data: Buffer;
 }
+
+type QueryResultRow = Record<string, unknown>;
 
 const crcTable = new Uint32Array(256);
 for (let n = 0; n < 256; n += 1) {
@@ -120,6 +123,383 @@ function sendOfflineError(action: string, res: Response, error: unknown): void {
   res.status(500).json({ error: "Internal server error", details: error instanceof Error ? error.message : String(error) });
 }
 
+function toNumber(value: unknown): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function toFiniteNumber(value: unknown): number | null {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function isValidCoordinate(lat: number, lng: number): boolean {
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return false;
+  }
+
+  if (lat === 0 && lng === 0) {
+    return false;
+  }
+
+  return lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180;
+}
+
+function parseCoordinatePair(value: unknown, preferredOrder: "latlng" | "lnglat" = "latlng"): { lat: number; lng: number } | null {
+  if (!Array.isArray(value) || value.length < 2) {
+    return null;
+  }
+
+  const first = toFiniteNumber(value[0]);
+  const second = toFiniteNumber(value[1]);
+  if (first === null || second === null) {
+    return null;
+  }
+
+  const primary = preferredOrder === "lnglat"
+    ? { lng: first, lat: second }
+    : { lat: first, lng: second };
+  if (isValidCoordinate(primary.lat, primary.lng)) {
+    return primary;
+  }
+
+  const swapped = preferredOrder === "lnglat"
+    ? { lat: first, lng: second }
+    : { lng: first, lat: second };
+  return isValidCoordinate(swapped.lat, swapped.lng) ? swapped : null;
+}
+
+function getFirstValidCoordinate(value: unknown, preferredOrder: "latlng" | "lnglat" = "latlng"): { lat: number; lng: number } | null {
+  const direct = parseCoordinatePair(value, preferredOrder);
+  if (direct) {
+    return direct;
+  }
+
+  if (value && typeof value === "object" && "coordinates" in value) {
+    return getFirstValidCoordinate((value as { coordinates?: unknown }).coordinates, "lnglat");
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const coordinate = getFirstValidCoordinate(item, preferredOrder);
+      if (coordinate) {
+        return coordinate;
+      }
+    }
+  }
+
+  return null;
+}
+
+function getValidLatLng(latValue: unknown, lngValue: unknown): { lat: number; lng: number } | null {
+  const lat = toFiniteNumber(latValue);
+  const lng = toFiniteNumber(lngValue);
+  return lat !== null && lng !== null && isValidCoordinate(lat, lng) ? { lat, lng } : null;
+}
+
+function toIsoString(value: unknown): string | null {
+  if (!value) {
+    return null;
+  }
+
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+
+  const parsed = new Date(String(value));
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
+function hoursSince(value: string | null): number | null {
+  if (!value) {
+    return null;
+  }
+
+  const timestamp = new Date(value).getTime();
+  if (Number.isNaN(timestamp)) {
+    return null;
+  }
+
+  return (Date.now() - timestamp) / (60 * 60 * 1000);
+}
+
+async function optionalQuery<T extends QueryResultRow>(query: string, params: unknown[] = []): Promise<T[]> {
+  try {
+    const result = await pool.query<T>(query, params);
+    return result.rows;
+  } catch (error) {
+    console.warn("[offline.bundle] Optional query failed:", error instanceof Error ? error.message : String(error));
+    return [];
+  }
+}
+
+function getTrailSelectFields(): string {
+  return `
+    id,
+    slug,
+    name,
+    name_ar,
+    description,
+    description_ar,
+    region,
+    region_ar,
+    length_meters,
+    elevation_gain_meters,
+    elevation_min,
+    elevation_max,
+    estimated_duration_minutes,
+    difficulty,
+    average_rating,
+    total_reviews,
+    rating,
+    reviews,
+    image,
+    images,
+    features,
+    features_ar,
+    has_checkpoint,
+    checkpoint_note,
+    tags,
+    created_at,
+    updated_at,
+    ST_AsText(start_point::geometry) AS start_point_text,
+    ST_X(ST_StartPoint(geometry::geometry)) AS start_lng,
+    ST_Y(ST_StartPoint(geometry::geometry)) AS start_lat,
+    ST_AsText(geometry::geometry) AS geometry_text,
+    ST_AsGeoJSON(geometry::geometry)::json AS geometry_geojson
+  `;
+}
+
+async function getOfflineTrailAccess(trailId: string, trail: QueryResultRow) {
+  const accessRows = await optionalQuery(
+    `SELECT id, trail_id, trailhead_latitude, trailhead_longitude, trailhead_name, trailhead_name_ar,
+            trailhead_parking_notes, trailhead_parking_notes_ar, trailhead_access_notes,
+            trailhead_access_notes_ar, updated_at
+     FROM access_routes
+     WHERE trail_id = $1::uuid
+     LIMIT 1`,
+    [trailId]
+  );
+  const access = accessRows[0];
+
+  if (access) {
+    const configuredCoordinate = getValidLatLng(access.trailhead_latitude, access.trailhead_longitude);
+    if (!configuredCoordinate) {
+      console.warn("[offline.getOfflineTrailAccess] Ignoring invalid configured access coordinates", {
+        trailId,
+        latitude: access.trailhead_latitude,
+        longitude: access.trailhead_longitude,
+      });
+    } else {
+      return {
+        available: true,
+        trailhead: {
+          latitude: configuredCoordinate.lat,
+          longitude: configuredCoordinate.lng,
+          name: access.trailhead_name,
+          name_ar: access.trailhead_name_ar,
+          parking_notes: access.trailhead_parking_notes,
+          parking_notes_ar: access.trailhead_parking_notes_ar,
+          access_notes: access.trailhead_access_notes,
+          access_notes_ar: access.trailhead_access_notes_ar,
+        },
+        driving_route: null,
+        source: "access_routes",
+        updated_at: toIsoString(access.updated_at),
+      };
+    }
+  }
+
+  const fallbackCoordinate = getFirstValidCoordinate(trail.geometry_geojson, "lnglat")
+    ?? getValidLatLng(trail.start_lat, trail.start_lng);
+
+  if (!fallbackCoordinate) {
+    return {
+      available: false,
+      warning: "No valid trail access coordinates available.",
+      trailhead: null,
+      driving_route: null,
+      source: "unavailable",
+      updated_at: toIsoString(trail.updated_at),
+    };
+  }
+
+  return {
+    available: true,
+    trailhead: {
+      latitude: fallbackCoordinate.lat,
+      longitude: fallbackCoordinate.lng,
+      name: trail.name ? `${String(trail.name)} trailhead` : "Trailhead",
+      name_ar: trail.name_ar ?? trail.name ?? "Trailhead",
+      parking_notes: null,
+      parking_notes_ar: null,
+      access_notes: "Using the trail start point because no access route has been configured yet.",
+      access_notes_ar: null,
+    },
+    driving_route: null,
+    source: "trails.start_point",
+    updated_at: toIsoString(trail.updated_at),
+  };
+}
+
+async function getOfflineSafetyMarkers(trailId: string) {
+  const rows = await optionalQuery(
+    `WITH trail AS (
+       SELECT geometry::geography AS geog
+       FROM trails
+       WHERE id = $1::uuid
+       LIMIT 1
+     )
+     SELECT dl.id, dl.name, dl.name_ar, dl.location_type, dl.latitude, dl.longitude,
+            dl.danger_radius_meters, dl.risk_level, dl.description, dl.is_active,
+            ST_Distance(ST_SetSRID(ST_MakePoint(dl.longitude, dl.latitude), 4326)::geography, trail.geog) AS distance_meters,
+            latest.status AS checkpoint_status,
+            latest.wait_minutes,
+            latest.notes AS report_notes,
+            latest.created_at AS report_created_at,
+            latest.expires_at AS report_expires_at,
+            COALESCE(report_stats.report_count, 0) AS report_count,
+            report_stats.latest_report_at,
+            dominant_status.status AS dominant_status,
+            COALESCE(dominant_status.status_count, 0) AS dominant_status_count
+     FROM dangerous_locations dl
+     CROSS JOIN trail
+     LEFT JOIN LATERAL (
+       SELECT status, wait_minutes, notes, created_at, expires_at
+       FROM checkpoint_reports cr
+       WHERE cr.checkpoint_id = dl.id
+         AND cr.expires_at > NOW()
+       ORDER BY cr.created_at DESC
+       LIMIT 1
+     ) latest ON TRUE
+     LEFT JOIN LATERAL (
+       SELECT COUNT(*)::int AS report_count, MAX(created_at) AS latest_report_at
+       FROM checkpoint_reports cr
+       WHERE cr.checkpoint_id = dl.id
+         AND cr.created_at > NOW() - INTERVAL '24 hours'
+     ) report_stats ON TRUE
+     LEFT JOIN LATERAL (
+       SELECT status, COUNT(*)::int AS status_count
+       FROM checkpoint_reports cr
+       WHERE cr.checkpoint_id = dl.id
+         AND cr.created_at > NOW() - INTERVAL '24 hours'
+       GROUP BY status
+       ORDER BY COUNT(*) DESC, MAX(created_at) DESC
+       LIMIT 1
+     ) dominant_status ON TRUE
+     WHERE dl.is_active = true
+       AND ST_DWithin(
+         ST_SetSRID(ST_MakePoint(dl.longitude, dl.latitude), 4326)::geography,
+         trail.geog,
+         GREATEST(1000, COALESCE(dl.danger_radius_meters, 0))
+       )
+     ORDER BY distance_meters ASC
+     LIMIT 40`,
+    [trailId]
+  );
+
+  return rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    name_ar: row.name_ar,
+    location_type: row.location_type,
+    latitude: toNumber(row.latitude),
+    longitude: toNumber(row.longitude),
+    danger_radius_meters: toNumber(row.danger_radius_meters),
+    risk_level: row.risk_level,
+    description: row.description,
+    distance_meters: Math.round(toNumber(row.distance_meters)),
+    latest_report: row.checkpoint_status
+      ? {
+          status: row.checkpoint_status,
+          wait_minutes: toNumber(row.wait_minutes),
+          notes: row.report_notes,
+          created_at: toIsoString(row.report_created_at),
+          expires_at: toIsoString(row.report_expires_at),
+        }
+      : null,
+    report_count: toNumber(row.report_count),
+    latest_report_at: toIsoString(row.latest_report_at),
+    dominant_status: row.dominant_status,
+    dominant_status_count: toNumber(row.dominant_status_count),
+  }));
+}
+
+function buildSafetySnapshot(safetyMarkers: Array<Record<string, any>>) {
+  const generatedAt = new Date().toISOString();
+  const reportCount = safetyMarkers.reduce((total, marker) => total + toNumber(marker.report_count), 0);
+  const latestReportAt = safetyMarkers
+    .map((marker) => marker.latest_report_at)
+    .filter((value): value is string => typeof value === "string")
+    .sort((left, right) => new Date(right).getTime() - new Date(left).getTime())[0] ?? null;
+  const latestReportAgeHours = hoursSince(latestReportAt);
+  const markersWithAgreement = safetyMarkers.filter((marker) => toNumber(marker.report_count) > 0);
+  const agreementRatios = markersWithAgreement.map((marker) => {
+    const count = toNumber(marker.report_count);
+    return count > 0 ? toNumber(marker.dominant_status_count) / count : 0;
+  });
+  const averageAgreement = agreementRatios.length > 0
+    ? agreementRatios.reduce((total, ratio) => total + ratio, 0) / agreementRatios.length
+    : 0;
+
+  let freshness: "fresh" | "recent" | "stale" | "unknown" = "unknown";
+  if (latestReportAgeHours !== null && latestReportAgeHours <= 6) {
+    freshness = "fresh";
+  } else if (latestReportAgeHours !== null && latestReportAgeHours <= 24) {
+    freshness = "recent";
+  } else if (latestReportAgeHours !== null) {
+    freshness = "stale";
+  }
+
+  let confidence: "high" | "medium" | "low" = "low";
+  if (reportCount >= 5 && latestReportAgeHours !== null && latestReportAgeHours <= 6 && averageAgreement >= 0.6) {
+    confidence = "high";
+  } else if (reportCount >= 2 && latestReportAgeHours !== null && latestReportAgeHours <= 24) {
+    confidence = "medium";
+  }
+
+  const latestCheckpoint = safetyMarkers.find((marker) => marker.latest_report)?.latest_report;
+  const summary = latestCheckpoint
+    ? `Checkpoint recently reported as ${latestCheckpoint.status}`
+    : reportCount > 0
+      ? "Recent safety reports are available for this trail"
+      : "No recent checkpoint reports in the last 24h";
+
+  return {
+    generated_at: generatedAt,
+    confidence,
+    freshness,
+    report_count: reportCount,
+    latest_report_at: latestReportAt,
+    average_agreement: Number(averageAgreement.toFixed(2)),
+    summary,
+  };
+}
+
+async function getOfflineElevationProfile(trailId: string) {
+  const rows = await optionalQuery(
+    `WITH samples AS (
+       SELECT generate_series(0, 49) AS idx
+     )
+     SELECT
+       idx,
+       ST_Length(ST_LineSubstring(t.geometry::geometry, 0, idx / 49.0)::geography) AS distance_meters,
+       ST_Y(ST_LineInterpolatePoint(t.geometry::geometry, idx / 49.0)) AS latitude,
+       ST_X(ST_LineInterpolatePoint(t.geometry::geometry, idx / 49.0)) AS longitude
+     FROM trails t
+     CROSS JOIN samples
+     WHERE t.id = $1::uuid
+     ORDER BY idx ASC`,
+    [trailId]
+  );
+
+  return rows.map((row) => ({
+    distance_meters: Math.round(toNumber(row.distance_meters)),
+    latitude: toNumber(row.latitude),
+    longitude: toNumber(row.longitude),
+  }));
+}
+
 export async function getPendingSync(req: Request, res: Response): Promise<void> {
   const auth = requireAuth(req);
   const since = req.query.since ?? "1970-01-01T00:00:00.000Z";
@@ -187,6 +567,55 @@ export async function syncOfflineActivities(req: Request, res: Response): Promis
   }
 
   res.json({ data: { uploaded, conflicts } });
+}
+
+export async function getOfflineTrailBundle(req: Request, res: Response): Promise<void> {
+  try {
+    requireAuth(req);
+    const trailId = Array.isArray(req.params.trailId) ? req.params.trailId[0] : req.params.trailId;
+    if (!trailId) {
+      throw new HttpError(400, "Trail id is required");
+    }
+    const trailResult = await pool.query(
+      `SELECT ${getTrailSelectFields()}
+       FROM trails
+       WHERE id = $1::uuid
+         AND deleted_at IS NULL
+       LIMIT 1`,
+      [trailId]
+    );
+    const trail = trailResult.rows[0];
+
+    if (!trail) {
+      throw new HttpError(404, "Trail not found");
+    }
+
+    const [elevationProfile, safetyMarkers, accessRoute] = await Promise.all([
+      getOfflineElevationProfile(trailId),
+      getOfflineSafetyMarkers(trailId),
+      getOfflineTrailAccess(trailId, trail),
+    ]);
+    const checkpointReports = safetyMarkers
+      .filter((marker) => marker.latest_report)
+      .map((marker) => ({ checkpoint_id: marker.id, ...marker.latest_report }));
+    const safetySnapshot = buildSafetySnapshot(safetyMarkers);
+
+    res.json({
+      data: {
+        trail: formatTrailForApp(trail),
+        geometry: trail.geometry_text,
+        elevation_profile: elevationProfile,
+        safety_markers: safetyMarkers,
+        checkpoint_reports: checkpointReports,
+        access_route: accessRoute,
+        safety_snapshot: safetySnapshot,
+        safety_snapshot_generated_at: safetySnapshot.generated_at,
+        generated_at: safetySnapshot.generated_at,
+      },
+    });
+  } catch (error) {
+    sendOfflineError("getOfflineTrailBundle", res, error);
+  }
 }
 
 export async function downloadOfflineMap(req: Request, res: Response): Promise<void> {

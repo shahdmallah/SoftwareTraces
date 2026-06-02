@@ -8,6 +8,7 @@ import LoginScreen from "../features/auth/screens/LoginScreen";
 import SignUpScreen from "../features/auth/screens/SignUpScreen";
 import MapScreen from "../features/trails/screens/MapScreen";
 import ExploreScreen from "../features/trails/screens/ExploreScreen";
+import OfflineMapsScreen from "../features/trails/screens/OfflineMapsScreen";
 import RecordingScreen from "../features/recording/screens/RecordingScreen";
 import HistoryScreen from "../features/activities/screens/HistoryScreen";
 import ProfileScreen from "../features/profile/screens/ProfileScreen";
@@ -40,6 +41,7 @@ function MainTabs(): JSX.Element {
     >
       <Tab.Screen name="Map" component={MapScreen} />
       <Tab.Screen name="Explore" component={ExploreScreen} />
+      <Tab.Screen name="Offline" component={OfflineMapsScreen} />
       <Tab.Screen name="Record" component={RecordingScreen} />
       <Tab.Screen name="History" component={HistoryScreen} />
       <Tab.Screen name="Profile" component={ProfileScreen} />
