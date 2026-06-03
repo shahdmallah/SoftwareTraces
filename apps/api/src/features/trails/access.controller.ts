@@ -3,6 +3,7 @@ import fetch from "node-fetch";
 import { z, ZodError } from "zod";
 import { pool } from "../../db/pool";
 import { requireAuth } from "../../middleware/auth";
+import { HttpError } from "../../lib/httpError";
 
 type AccessRiskLevel = "clear" | "attention" | "caution" | "dangerous";
 
@@ -88,6 +89,7 @@ interface TrailStartPointRow {
   start_lng: string | number;
   name: string | null;
   name_ar: string | null;
+  geometry_geojson: unknown;
 }
 
 interface MapboxRoute {
@@ -104,21 +106,50 @@ interface MapboxDirectionsResponse {
 }
 
 const accessBodySchema = z.object({
-  trailhead_latitude: z.number().min(31.0).max(33.0),
-  trailhead_longitude: z.number().min(34.5).max(36.0),
-  trailhead_name: z.string().min(1),
-  trailhead_name_ar: z.string().min(1),
-  trailhead_parking_notes: z.string().optional(),
-  trailhead_parking_notes_ar: z.string().optional(),
-  trailhead_access_notes: z.string().optional(),
-  trailhead_access_notes_ar: z.string().optional(),
+  latitude: z.coerce.number().optional(),
+  longitude: z.coerce.number().optional(),
+  trailhead_lat: z.coerce.number().optional(),
+  trailhead_lng: z.coerce.number().optional(),
+  trailhead_latitude: z.coerce.number().optional(),
+  trailhead_longitude: z.coerce.number().optional(),
+  name: z.string().trim().min(1).optional(),
+  name_ar: z.string().trim().min(1).optional(),
+  trailhead_name: z.string().trim().min(1).optional(),
+  trailhead_name_ar: z.string().trim().min(1).optional(),
+  notes: z.string().trim().optional(),
+  parking_notes: z.string().trim().optional(),
+  parking_notes_ar: z.string().trim().optional(),
+  access_notes: z.string().trim().optional(),
+  access_notes_ar: z.string().trim().optional(),
+  trailhead_parking_notes: z.string().trim().optional(),
+  trailhead_parking_notes_ar: z.string().trim().optional(),
+  trailhead_access_notes: z.string().trim().optional(),
+  trailhead_access_notes_ar: z.string().trim().optional(),
 });
+
+type NormalizedAccessBody = {
+  trailhead_latitude: number;
+  trailhead_longitude: number;
+  trailhead_name: string;
+  trailhead_name_ar: string;
+  trailhead_parking_notes: string | null;
+  trailhead_parking_notes_ar: string | null;
+  trailhead_access_notes: string | null;
+  trailhead_access_notes_ar: string | null;
+};
 
 const checkpointReportSchema = z.object({
   status: z.enum(["open", "closed", "slow"]),
-  wait_minutes: z.number().min(0).max(300),
-  notes: z.string().optional(),
-});
+  wait_minutes: z.coerce.number().min(0).max(300).optional(),
+  wait_time_minutes: z.coerce.number().min(0).max(300).optional(),
+  expires_in_minutes: z.coerce.number().int().min(1).max(24 * 60).optional(),
+  notes: z.string().trim().optional(),
+}).transform((body) => ({
+  status: body.status,
+  wait_minutes: body.wait_time_minutes ?? body.wait_minutes ?? 0,
+  expires_in_minutes: body.expires_in_minutes ?? 180,
+  notes: body.notes,
+}));
 
 const routeSuggestionSchema = z.object({
   from_lat: z.number().min(31.0).max(33.0),
@@ -138,6 +169,117 @@ function getRequestId(value: string | string[] | undefined): string {
 function toNumber(value: unknown): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function toFiniteNumber(value: unknown): number | null {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function isValidCoordinate(lat: number, lng: number): boolean {
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return false;
+  }
+
+  if (lat === 0 && lng === 0) {
+    return false;
+  }
+
+  return lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180;
+}
+
+function parseCoordinatePair(value: unknown, preferredOrder: "latlng" | "lnglat" = "latlng"): { lat: number; lng: number } | null {
+  if (!Array.isArray(value) || value.length < 2) {
+    return null;
+  }
+
+  const first = toFiniteNumber(value[0]);
+  const second = toFiniteNumber(value[1]);
+  if (first === null || second === null) {
+    return null;
+  }
+
+  const primary = preferredOrder === "lnglat"
+    ? { lng: first, lat: second }
+    : { lat: first, lng: second };
+  if (isValidCoordinate(primary.lat, primary.lng)) {
+    return primary;
+  }
+
+  const swapped = preferredOrder === "lnglat"
+    ? { lat: first, lng: second }
+    : { lng: first, lat: second };
+  return isValidCoordinate(swapped.lat, swapped.lng) ? swapped : null;
+}
+
+function getFirstValidCoordinate(value: unknown, preferredOrder: "latlng" | "lnglat" = "latlng"): { lat: number; lng: number } | null {
+  const direct = parseCoordinatePair(value, preferredOrder);
+  if (direct) {
+    return direct;
+  }
+
+  if (value && typeof value === "object" && "coordinates" in value) {
+    return getFirstValidCoordinate((value as { coordinates?: unknown }).coordinates, "lnglat");
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const coordinate = getFirstValidCoordinate(item, preferredOrder);
+      if (coordinate) {
+        return coordinate;
+      }
+    }
+  }
+
+  return null;
+}
+
+function getValidLatLng(latValue: unknown, lngValue: unknown): { lat: number; lng: number } | null {
+  const lat = toFiniteNumber(latValue);
+  const lng = toFiniteNumber(lngValue);
+  return lat !== null && lng !== null && isValidCoordinate(lat, lng) ? { lat, lng } : null;
+}
+
+function normalizeAccessBody(rawBody: unknown): { data?: NormalizedAccessBody; error?: unknown } {
+  const parsed = accessBodySchema.safeParse(rawBody ?? {});
+  if (!parsed.success) {
+    return { error: parsed.error.flatten() };
+  }
+
+  const body = parsed.data;
+  const latitude = body.latitude ?? body.trailhead_lat ?? body.trailhead_latitude;
+  const longitude = body.longitude ?? body.trailhead_lng ?? body.trailhead_longitude;
+  const coordinate = getValidLatLng(latitude, longitude);
+  if (!coordinate || !isWestBankCoordinate(coordinate.lat, coordinate.lng)) {
+    return {
+      error: {
+        fieldErrors: {
+          latitude: ["latitude, trailhead_lat, or trailhead_latitude must be a valid West Bank latitude."],
+          longitude: ["longitude, trailhead_lng, or trailhead_longitude must be a valid West Bank longitude."],
+        },
+        formErrors: [],
+      },
+    };
+  }
+
+  const name = body.name ?? body.trailhead_name ?? "Main trailhead";
+  const nameAr = body.name_ar ?? body.trailhead_name_ar ?? name;
+  return {
+    data: {
+      trailhead_latitude: coordinate.lat,
+      trailhead_longitude: coordinate.lng,
+      trailhead_name: name,
+      trailhead_name_ar: nameAr,
+      trailhead_parking_notes: body.parking_notes ?? body.trailhead_parking_notes ?? body.notes ?? null,
+      trailhead_parking_notes_ar: body.parking_notes_ar ?? body.trailhead_parking_notes_ar ?? null,
+      trailhead_access_notes: body.access_notes ?? body.trailhead_access_notes ?? null,
+      trailhead_access_notes_ar: body.access_notes_ar ?? body.trailhead_access_notes_ar ?? null,
+    },
+  };
+}
+
+function isDbConstraintError(error: unknown): error is { code?: string; constraint?: string; detail?: string; message?: string } {
+  return typeof error === "object" && error !== null && "code" in error;
 }
 
 function toIsoString(value: string | Date | null | undefined): string | null {
@@ -168,6 +310,18 @@ function handleAccessError(scope: string, res: Response, error: unknown): void {
     error: "Internal server error",
     details: error instanceof Error ? error.message : String(error),
   });
+}
+
+async function getProfileIdForAuthUser(userId: string): Promise<string | null> {
+  const result = await pool.query<{ id: string }>(
+    `SELECT id
+     FROM profiles
+     WHERE id = $1::uuid OR user_id = $1::uuid
+     LIMIT 1`,
+    [userId]
+  );
+
+  return result.rows[0]?.id ?? null;
 }
 
 export function haversineMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
@@ -392,8 +546,6 @@ export async function detectCheckpointsOnRoute(
       name: location.name,
       name_ar: location.name_ar,
       location_type: location.location_type,
-      latitude: locationLat,
-      longitude: locationLng,
       risk_level: location.risk_level,
       distance_from_start_km: Number((distanceFromStartMeters / 1000).toFixed(1)),
       distance_from_route_meters: Math.round(minDistance),
@@ -497,11 +649,12 @@ async function ensureCheckpointExists(checkpointId: string): Promise<boolean> {
 }
 
 function formatTrailhead(row: AccessRouteRow) {
+  const coordinate = getValidLatLng(row.trailhead_latitude, row.trailhead_longitude);
   return {
     id: row.id,
     trail_id: row.trail_id,
-    latitude: toNumber(row.trailhead_latitude),
-    longitude: toNumber(row.trailhead_longitude),
+    latitude: coordinate?.lat ?? null,
+    longitude: coordinate?.lng ?? null,
     name: row.trailhead_name,
     name_ar: row.trailhead_name_ar,
     parking_notes: row.trailhead_parking_notes,
@@ -553,17 +706,28 @@ async function getAccessRouteByTrailId(trailId: string): Promise<AccessRouteRow 
     [trailId]
   );
 
-  if (result.rows[0]) {
-    return result.rows[0];
+  const configuredAccess = result.rows[0];
+  if (configuredAccess) {
+    const configuredCoordinate = getValidLatLng(configuredAccess.trailhead_latitude, configuredAccess.trailhead_longitude);
+    if (configuredCoordinate) {
+      return configuredAccess;
+    }
+
+    console.warn("[access.getAccessRouteByTrailId] Ignoring invalid configured access coordinates", {
+      trailId,
+      latitude: configuredAccess.trailhead_latitude,
+      longitude: configuredAccess.trailhead_longitude,
+    });
   }
 
-  console.log("[access.getAccessRouteByTrailId] No access route found; falling back to trails.start_point");
+  console.log("[access.getAccessRouteByTrailId] No valid access route found; falling back to first trail coordinate");
   const trailResult = await pool.query<TrailStartPointRow>(
     `SELECT id,
             ST_Y(start_point::geometry) AS start_lat,
             ST_X(start_point::geometry) AS start_lng,
             name,
-            name_ar
+            name_ar,
+            ST_AsGeoJSON(geometry::geometry)::json AS geometry_geojson
      FROM trails
      WHERE id = $1::uuid
        AND deleted_at IS NULL
@@ -576,11 +740,19 @@ async function getAccessRouteByTrailId(trailId: string): Promise<AccessRouteRow 
     return null;
   }
 
+  const fallbackCoordinate = getFirstValidCoordinate(trail.geometry_geojson, "lnglat")
+    ?? getValidLatLng(trail.start_lat, trail.start_lng);
+
+  if (!fallbackCoordinate) {
+    console.warn("[access.getAccessRouteByTrailId] No valid fallback coordinate found", { trailId });
+    return null;
+  }
+
   return {
     id: `trail-start:${trail.id}`,
     trail_id: trail.id,
-    trailhead_latitude: trail.start_lat,
-    trailhead_longitude: trail.start_lng,
+    trailhead_latitude: fallbackCoordinate.lat,
+    trailhead_longitude: fallbackCoordinate.lng,
     trailhead_name: trail.name ? `${trail.name} trailhead` : "Trailhead",
     trailhead_name_ar: trail.name_ar ?? trail.name ?? "Trailhead",
     trailhead_parking_notes: null,
@@ -617,12 +789,44 @@ export async function getTrailAccess(req: Request, res: Response): Promise<void>
   try {
     const accessRoute = await getAccessRouteByTrailId(trailId);
     if (!accessRoute) {
-      res.status(404).json({ error: "Trail access route not found" });
+      res.json({
+        data: {
+          available: false,
+          warning: "No valid trail access coordinates available.",
+          trailhead: null,
+          driving_route: {
+            available: false,
+            warning: "No valid trail access coordinates available.",
+          },
+          danger_zones: [],
+          access_risk_level: "clear",
+          safety_tips: buildSafetyTips([]),
+        },
+      });
       return;
     }
 
-    const trailheadLat = toNumber(accessRoute.trailhead_latitude);
-    const trailheadLng = toNumber(accessRoute.trailhead_longitude);
+    const trailheadCoordinate = getValidLatLng(accessRoute.trailhead_latitude, accessRoute.trailhead_longitude);
+    if (!trailheadCoordinate) {
+      res.json({
+        data: {
+          available: false,
+          warning: "No valid trail access coordinates available.",
+          trailhead: null,
+          driving_route: {
+            available: false,
+            warning: "No valid trail access coordinates available.",
+          },
+          danger_zones: [],
+          access_risk_level: "clear",
+          safety_tips: buildSafetyTips([]),
+        },
+      });
+      return;
+    }
+
+    const trailheadLat = trailheadCoordinate.lat;
+    const trailheadLng = trailheadCoordinate.lng;
     const mapboxRoute = await fetchMapboxRoute([[fromLng, fromLat], [trailheadLng, trailheadLat]]);
     const coordinates = mapboxRoute?.geometry.coordinates ?? [[fromLng, fromLat], [trailheadLng, trailheadLat]];
     const sampledPoints = sampleRoutePoints(coordinates, mapboxRoute ? 500 : 1000);
@@ -659,7 +863,22 @@ export async function setTrailAccess(req: Request, res: Response): Promise<void>
   try {
     const auth = requireAuth(req);
     const trailId = getRequestId(req.params.id);
-    const body = accessBodySchema.parse(req.body);
+    const normalized = normalizeAccessBody(req.body);
+    if (!normalized.data) {
+      res.status(400).json({
+        error: "Validation failed",
+        details: normalized.error,
+        accepted_shape: {
+          latitude: 31.7767,
+          longitude: 35.2345,
+          name: "Main trailhead",
+          parking_notes: "Parking or access notes.",
+          access_notes: "Use this point as the driving destination.",
+        },
+      });
+      return;
+    }
+    const body = normalized.data;
     console.log("[access.setTrailAccess] Params:", { userId: auth.sub, trailId });
 
     if (!isUuid(trailId)) {
@@ -693,50 +912,72 @@ export async function setTrailAccess(req: Request, res: Response): Promise<void>
       return;
     }
 
-    console.log("[access.setTrailAccess] Upserting access route");
-    const result = await pool.query<AccessRouteRow>(
-      `INSERT INTO access_routes (
-         trail_id,
-         trailhead_latitude,
-         trailhead_longitude,
-         trailhead_name,
-         trailhead_name_ar,
-         trailhead_parking_notes,
-         trailhead_parking_notes_ar,
-         trailhead_access_notes,
-         trailhead_access_notes_ar,
-         updated_at
-       )
-       VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
-       ON CONFLICT (trail_id)
-       DO UPDATE SET
-         trailhead_latitude = EXCLUDED.trailhead_latitude,
-         trailhead_longitude = EXCLUDED.trailhead_longitude,
-         trailhead_name = EXCLUDED.trailhead_name,
-         trailhead_name_ar = EXCLUDED.trailhead_name_ar,
-         trailhead_parking_notes = EXCLUDED.trailhead_parking_notes,
-         trailhead_parking_notes_ar = EXCLUDED.trailhead_parking_notes_ar,
-         trailhead_access_notes = EXCLUDED.trailhead_access_notes,
-         trailhead_access_notes_ar = EXCLUDED.trailhead_access_notes_ar,
-         updated_at = NOW()
+    console.log("[access.setTrailAccess] Saving access route");
+    const values = [
+      body.trailhead_latitude,
+      body.trailhead_longitude,
+      body.trailhead_name,
+      body.trailhead_name_ar,
+      body.trailhead_parking_notes,
+      body.trailhead_parking_notes_ar,
+      body.trailhead_access_notes,
+      body.trailhead_access_notes_ar,
+      trailId,
+    ];
+    let result = await pool.query<AccessRouteRow>(
+      `UPDATE access_routes
+       SET trailhead_latitude = $1,
+           trailhead_longitude = $2,
+           trailhead_name = $3,
+           trailhead_name_ar = $4,
+           trailhead_parking_notes = $5,
+           trailhead_parking_notes_ar = $6,
+           trailhead_access_notes = $7,
+           trailhead_access_notes_ar = $8,
+           updated_at = NOW()
+       WHERE trail_id = $9::uuid
        RETURNING id, trail_id, trailhead_latitude, trailhead_longitude, trailhead_name,
                  trailhead_name_ar, trailhead_parking_notes, trailhead_parking_notes_ar,
                  trailhead_access_notes, trailhead_access_notes_ar, created_at, updated_at`,
-      [
-        trailId,
-        body.trailhead_latitude,
-        body.trailhead_longitude,
-        body.trailhead_name,
-        body.trailhead_name_ar,
-        body.trailhead_parking_notes ?? null,
-        body.trailhead_parking_notes_ar ?? null,
-        body.trailhead_access_notes ?? null,
-        body.trailhead_access_notes_ar ?? null,
-      ]
+      values
     );
 
-    res.status(201).json({ data: formatTrailhead(result.rows[0]) });
+    let statusCode = 200;
+    if (!result.rows[0]) {
+      result = await pool.query<AccessRouteRow>(
+        `INSERT INTO access_routes (
+           trail_id,
+           trailhead_latitude,
+           trailhead_longitude,
+           trailhead_name,
+           trailhead_name_ar,
+           trailhead_parking_notes,
+           trailhead_parking_notes_ar,
+           trailhead_access_notes,
+           trailhead_access_notes_ar,
+           updated_at
+         )
+         VALUES ($9::uuid, $1, $2, $3, $4, $5, $6, $7, $8, NOW())
+         RETURNING id, trail_id, trailhead_latitude, trailhead_longitude, trailhead_name,
+                   trailhead_name_ar, trailhead_parking_notes, trailhead_parking_notes_ar,
+                   trailhead_access_notes, trailhead_access_notes_ar, created_at, updated_at`,
+        values
+      );
+      statusCode = 201;
+    }
+
+    res.status(statusCode).json({ data: formatTrailhead(result.rows[0]) });
   } catch (error) {
+    if (isDbConstraintError(error) && ["23502", "23503", "23505", "42P10", "42703", "42P01"].includes(error.code ?? "")) {
+      console.error("[access.setTrailAccess] Database constraint/schema error:", error);
+      res.status(400).json({
+        error: "Could not save trail access point",
+        details: "The request is valid, but the database rejected it. Check access_routes columns, foreign keys, and trail_id uniqueness if using conflict upserts.",
+        code: error.code,
+      });
+      return;
+    }
+
     handleAccessError("setTrailAccess", res, error);
   }
 }
@@ -853,8 +1094,8 @@ export async function reportCheckpointWait(req: Request, res: Response): Promise
 
   try {
     const auth = requireAuth(req);
-    const checkpointId = getRequestId(req.params.id);
-    const body = checkpointReportSchema.parse(req.body);
+    const checkpointId = getRequestId(req.params.checkpointId ?? req.params.id);
+    const parsedBody = checkpointReportSchema.safeParse(req.body);
     console.log("[access.reportCheckpointWait] Params:", { checkpointId, userId: auth.sub });
 
     if (!isUuid(checkpointId)) {
@@ -862,21 +1103,37 @@ export async function reportCheckpointWait(req: Request, res: Response): Promise
       return;
     }
 
-    const checkpointResult = await pool.query<{ id: string }>(
-      `SELECT id
+    if (!parsedBody.success) {
+      res.status(400).json({ error: "Validation failed", details: parsedBody.error.flatten() });
+      return;
+    }
+
+    const checkpointResult = await pool.query<{ id: string; location_type: string; is_active: boolean }>(
+      `SELECT id, location_type, is_active
        FROM dangerous_locations
        WHERE id = $1::uuid
-         AND is_active = true
-         AND location_type IN ('military_checkpoint', 'flying_checkpoint')
        LIMIT 1`,
       [checkpointId]
     );
+    const checkpoint = checkpointResult.rows[0];
 
-    if (!checkpointResult.rows[0]) {
+    if (!checkpoint) {
       res.status(404).json({ error: "Checkpoint not found" });
       return;
     }
 
+    if (!checkpoint.is_active || !["military_checkpoint", "flying_checkpoint"].includes(checkpoint.location_type)) {
+      res.status(400).json({ error: "Location exists but is not reportable as a checkpoint" });
+      return;
+    }
+
+    const reporterProfileId = await getProfileIdForAuthUser(auth.sub);
+    if (!reporterProfileId) {
+      res.status(400).json({ error: "Authenticated user profile not found" });
+      return;
+    }
+
+    const body = parsedBody.data;
     console.log("[access.reportCheckpointWait] Inserting checkpoint report");
     const result = await pool.query<CheckpointReportRow>(
       `INSERT INTO checkpoint_reports (
@@ -887,20 +1144,33 @@ export async function reportCheckpointWait(req: Request, res: Response): Promise
          notes,
          expires_at
        )
-       VALUES ($1::uuid, $2::uuid, $3, $4, $5, NOW() + INTERVAL '2 hours')
+       VALUES ($1::uuid, $2::uuid, $3, $4, $5, NOW() + ($6::int * INTERVAL '1 minute'))
        RETURNING id, checkpoint_id, reporter_id, status, wait_minutes, notes, created_at, expires_at`,
       [
         checkpointId,
-        auth.sub,
+        reporterProfileId,
         body.status,
         body.wait_minutes,
         body.notes ?? null,
+        body.expires_in_minutes,
       ]
     );
 
     res.status(201).json({ data: formatCheckpointReport(result.rows[0]) });
   } catch (error) {
-    handleAccessError("reportCheckpointWait", res, error);
+    console.error("[access.reportCheckpointWait] Database/unexpected error:", error);
+
+    if (error instanceof HttpError) {
+      res.status(error.statusCode).json({ error: error.message });
+      return;
+    }
+
+    if (error instanceof ZodError) {
+      res.status(400).json({ error: "Validation failed", details: error.flatten() });
+      return;
+    }
+
+    res.status(500).json({ error: "Failed to create checkpoint report" });
   }
 }
 

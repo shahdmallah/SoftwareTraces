@@ -57,7 +57,7 @@ interface SafetyIncidentRow {
 
 const router = Router();
 
-router.post("/checkpoints/:id/report", authenticate, asyncHandler(reportCheckpointWait));
+router.post("/checkpoints/:checkpointId/report", authenticate, asyncHandler(reportCheckpointWait));
 router.get("/checkpoints/:id/status", asyncHandler(getCheckpointStatus));
 router.post("/checkpoints/:id/suggest-route", authenticate, asyncHandler(suggestCheckpointRoute));
 router.get("/checkpoints/:id/suggested-routes", asyncHandler(getSuggestedCheckpointRoutes));

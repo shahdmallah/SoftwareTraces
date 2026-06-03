@@ -18,6 +18,7 @@ import { generateTrailFromDescription } from "../../services/trailGenerationServ
 import { searchTrailsByCriteria } from "../../services/trailSearchService";
 import { verifyPhoto } from "../../services/photoVerificationService";
 import { updateUserStats } from "../achievements/achievements.service";
+import { findSimilarPublicTrails } from "./duplicateTrail.service";
 
 const calculateTrailStatsBodySchema = z.object({
   coordinates: z.array(z.tuple([z.number(), z.number()])).min(2),
@@ -50,6 +51,8 @@ const createTrailBodySchema = z.object({
   features_ar: z.array(z.string().trim().min(1)).optional(),
   tags: z.array(z.string().trim().min(1)).optional().default([]),
   status: z.enum(["draft", "published"]).optional().default("draft"),
+  visibility: z.enum(["public", "private"]).optional(),
+  confirm_duplicate: z.boolean().optional(),
   coordinates: z.array(z.tuple([z.number(), z.number()])).min(2),
   stats: z.object({
     length_meters: z.number().nonnegative(),
@@ -57,6 +60,13 @@ const createTrailBodySchema = z.object({
     estimated_duration_minutes: z.number().nonnegative(),
     difficulty: z.enum(["easy", "moderate", "hard", "expert"]),
   }),
+});
+
+const checkDuplicateTrailBodySchema = z.object({
+  name: z.string().trim().optional(),
+  coordinates: z.array(z.tuple([z.number(), z.number()])).min(2),
+  distance: z.number().nonnegative().optional(),
+  visibility: z.enum(["public", "private"]).optional().default("public"),
 });
 
 const createTrailReviewBodySchema = z.object({
@@ -833,6 +843,24 @@ export async function searchOrGenerateTrail(req: Request, res: Response): Promis
   }
 }
 
+export async function checkDuplicateTrail(req: Request, res: Response): Promise<void> {
+  try {
+    const input = checkDuplicateTrailBodySchema.parse(req.body);
+    const duplicateWarning = await findSimilarPublicTrails(input);
+
+    res.json(duplicateWarning);
+  } catch (error) {
+    console.error("[checkDuplicateTrail] error:", error);
+
+    if (error instanceof ZodError) {
+      res.status(400).json({ error: "Validation failed", details: error.flatten() });
+      return;
+    }
+
+    res.status(500).json({ error: "Internal server error" });
+  }
+}
+
 export async function createTrail(req: Request, res: Response): Promise<void> {
   try {
     const auth = requireAuth(req);
@@ -856,6 +884,7 @@ export async function createTrail(req: Request, res: Response): Promise<void> {
       features_ar,
       tags,
       status,
+      visibility,
       coordinates,
       stats,
     } = createTrailBodySchema.parse(req.body);
@@ -902,6 +931,13 @@ export async function createTrail(req: Request, res: Response): Promise<void> {
     const trailFeaturesAr = featuresAr ?? features_ar ?? [];
     const linestring = `LINESTRING(${coordinates.map(([lng, lat]) => `${lng} ${lat}`).join(", ")})`;
     const [startLng, startLat] = coordinates[0];
+    const [endLng, endLat] = coordinates[coordinates.length - 1];
+    const duplicateWarning = await findSimilarPublicTrails({
+      name,
+      coordinates,
+      distance: stats.length_meters,
+      visibility,
+    });
 
     const insertQuery = `INSERT INTO trails (
       slug,
@@ -915,22 +951,26 @@ export async function createTrail(req: Request, res: Response): Promise<void> {
       features_ar,
       tags,
       difficulty,
+      length_km,
       length_meters,
+      estimated_duration_min,
       elevation_gain_meters,
       estimated_duration_minutes,
       start_point,
+      end_point,
       geometry,
       user_id,
       is_active,
       status
     ) VALUES (
       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-      $11, $12, $13, $14,
-      ST_GeomFromText($15, 4326),
-      ST_GeogFromText($16),
-      $17,
-      $18,
-      $19
+      $11, $12, $13, $14, $15, $16,
+      ST_GeomFromText($17, 4326),
+      ST_GeomFromText($18, 4326),
+      ST_GeogFromText($19),
+      $20,
+      $21,
+      $22
     ) RETURNING id`;
 
     const queryValues = [
@@ -945,10 +985,13 @@ export async function createTrail(req: Request, res: Response): Promise<void> {
       trailFeaturesAr,
       tags,
       stats.difficulty,
+      Number((stats.length_meters / 1000).toFixed(3)),
       Math.round(stats.length_meters),
+      Math.round(stats.estimated_duration_minutes),
       stats.elevation_gain_meters,
       Math.round(stats.estimated_duration_minutes),
       `POINT(${startLng} ${startLat})`,
+      `POINT(${endLng} ${endLat})`,
       linestring,
       userId,
       true,
@@ -968,7 +1011,7 @@ export async function createTrail(req: Request, res: Response): Promise<void> {
     );
     const formattedTrail = formatTrailForApp(createdTrail.rows[0]);
 
-    res.status(201).json({ data: formattedTrail });
+    res.status(201).json({ data: formattedTrail, duplicate_warning: duplicateWarning });
   } catch (error) {
     console.error("[createTrail] error message:", error instanceof Error ? error.message : error);
     console.error("[createTrail] error stack:", error instanceof Error ? error.stack : undefined);

@@ -202,6 +202,25 @@ export type TrailSearchOrGenerateResult = {
   generated_trail: GeneratedTrailSuggestion | null;
 };
 
+export type DuplicateTrailMatch = {
+  trail_id: string;
+  name: string;
+  similarity_score: number;
+  reason: string;
+  reasons: string[];
+  start_distance_meters: number | null;
+  end_distance_meters: number | null;
+  length_difference_percent: number | null;
+  bounding_box_overlap_percent: number | null;
+  name_similarity: number | null;
+};
+
+export type DuplicateTrailWarning = {
+  has_similar_trails: boolean;
+  message: string | null;
+  matches: DuplicateTrailMatch[];
+};
+
 export type TrailBookmark = {
   saved_id: string;
   trailId: string;
@@ -233,6 +252,10 @@ type SavedStatusResponse = {
   list_type: BookmarkType;
   notes: string | null;
 };
+
+function createClientRequestId() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
 
 function normalizeDifficulty(value: string | null | undefined): TrailDifficulty {
   switch ((value ?? '').toLowerCase()) {
@@ -311,6 +334,8 @@ export async function createTrail(payload: {
   featuresAr?: string[];
   tags?: string[];
   status?: 'draft' | 'published';
+  visibility?: 'public' | 'private';
+  confirm_duplicate?: boolean;
   coordinates: [number, number][];
   stats: TrailStatsResponse;
 }) {
@@ -318,6 +343,23 @@ export async function createTrail(payload: {
     method: 'POST',
     body: JSON.stringify(payload),
   });
+}
+
+export async function checkDuplicateTrail(payload: {
+  name?: string;
+  coordinates: [number, number][];
+  distance?: number;
+  visibility?: 'public' | 'private';
+}) {
+  const response = await apiRequest<DuplicateTrailWarning>('/api/trails/check-duplicate', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+
+  return {
+    ...response,
+    matches: Array.isArray(response.matches) ? response.matches : [],
+  };
 }
 
 export async function uploadTrailPhoto(trailId: string, uri: string) {
@@ -392,8 +434,12 @@ export async function getTrailStats(payload: { coordinates: [number, number][] }
 export async function analyzeTrailRoute(payload: { coordinates: [number, number][] }) {
   const response = await apiRequest<Envelope<TrailAnalysisResponse>>('/api/trails/analyze-route', {
     method: 'POST',
+    cache: 'no-store',
+    headers: {
+      'Cache-Control': 'no-store',
+    },
     body: JSON.stringify(payload),
-  });
+  }, { _request_id: createClientRequestId() });
   return {
     ...response.data,
     ai_labels: Array.isArray(response.data.ai_labels) ? response.data.ai_labels : [],
@@ -418,8 +464,12 @@ export async function searchTrails(params: {
 export async function searchOrGenerateTrail(description: string) {
   const response = await apiRequest<Envelope<TrailSearchOrGenerateResult>>('/api/trails/search-or-generate', {
     method: 'POST',
-    body: JSON.stringify({ description }),
-  });
+    cache: 'no-store',
+    headers: {
+      'Cache-Control': 'no-store',
+    },
+    body: JSON.stringify({ description: description.trim() }),
+  }, { _request_id: createClientRequestId() });
   return {
     ...response.data,
     existing_trails: Array.isArray(response.data.existing_trails) ? response.data.existing_trails : [],
@@ -452,13 +502,13 @@ export async function addTrailReview(id: string, payload: { rating: number; cont
       formData.append('photos', photo as unknown as Blob);
     });
 
-    return apiRequest<Envelope<{ id: string; photos?: TrailReview['photos'] }>>(`/api/trails/${id}/reviews`, {
+    return apiRequest<Envelope<TrailReview>>(`/api/trails/${id}/reviews`, {
       method: 'POST',
       body: formData,
     });
   }
 
-  return apiRequest<Envelope<{ id: string }>>(`/api/trails/${id}/reviews`, {
+  return apiRequest<Envelope<TrailReview>>(`/api/trails/${id}/reviews`, {
     method: 'POST',
     body: JSON.stringify({
       rating: payload.rating,

@@ -4,6 +4,7 @@
  */
 export type TrailCompletionDraft = {
   activityId?: string;
+  activityPostId?: string;
   publisherId?: string;
   publisherName?: string;
   publisherHandle?: string;
@@ -16,7 +17,10 @@ export type TrailCompletionDraft = {
   regionAr?: string;
   rating: number;
   review: string;
+  reviewId?: string;
+  reviewSkipped?: boolean;
   reviewPhotoUris?: string[];
+  postSkipped?: boolean;
   postCaption?: string;
   postPhotoUris?: string[];
   activityPhotoTags?: Array<{

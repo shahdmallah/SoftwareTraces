@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { deleteOfflineMap, downloadOfflineMap, getPendingSync, getUserOfflineMaps, syncOfflineActivities } from "./offline.controller";
+import { deleteOfflineMap, downloadOfflineMap, getOfflineTrailBundle, getPendingSync, getUserOfflineMaps, syncOfflineActivities } from "./offline.controller";
 import { asyncHandler } from "../../lib/asyncHandler";
 import { authenticate } from "../../middleware/auth";
 import { validate } from "../../middleware/validate";
@@ -25,6 +25,7 @@ const offlineActivitySchema = z.object({
 router.use(authenticate);
 router.get("/sync", asyncHandler(getPendingSync));
 router.post("/sync", validate(z.object({ activities: z.array(offlineActivitySchema) })), asyncHandler(syncOfflineActivities));
+router.get("/trails/:trailId/bundle", asyncHandler(getOfflineTrailBundle));
 router.post("/maps/:trailId", asyncHandler(downloadOfflineMap));
 router.get("/maps", asyncHandler(getUserOfflineMaps));
 router.delete("/maps/:id", asyncHandler(deleteOfflineMap));

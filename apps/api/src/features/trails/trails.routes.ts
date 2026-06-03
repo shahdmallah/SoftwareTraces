@@ -4,6 +4,7 @@ import multer from "multer";
 import {
   analyzeRoute,
   calculateTrailStats,
+  checkDuplicateTrail,
   checkSavedStatus,
   createTrail,
   createTrailCondition,
@@ -50,6 +51,7 @@ router.post("/calculate", asyncHandler(calculateTrailStats));
 router.post("/analyze-route", asyncHandler(analyzeRoute));
 router.post("/parse-description", asyncHandler(parseTrailDescription));
 router.post("/search-or-generate", asyncHandler(searchOrGenerateTrail));
+router.post("/check-duplicate", authenticate, asyncHandler(checkDuplicateTrail));
 router.post("/", authenticate, asyncHandler(createTrail));
 router.get("/", asyncHandler(getAllTrails));
 router.get("/nearby", validate(z.object({ lat: z.coerce.number(), lng: z.coerce.number(), radius: z.coerce.number().optional() }), "query"), asyncHandler(getNearbyTrails));

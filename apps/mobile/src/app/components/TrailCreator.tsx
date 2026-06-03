@@ -9,12 +9,12 @@ import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   analyzeTrailRoute,
+  checkDuplicateTrail,
   createTrail,
-  getNearbyTrails,
   uploadTrailPhoto,
   publishTrail,
   type GeneratedTrailSuggestion,
-  type Trail,
+  type DuplicateTrailWarning,
   type TrailAnalysisResponse,
   type TrailStatsResponse,
 } from '../api/trailsApi';
@@ -35,6 +35,8 @@ type SaveTrailBody = {
   featuresAr?: string[];
   tags?: string[];
   status?: 'draft' | 'published';
+  visibility?: 'public' | 'private';
+  confirm_duplicate?: boolean;
   coordinates: LngLat[];
   stats: TrailStatsResponse;
 };
@@ -58,10 +60,6 @@ export type TrailCreatorProps = {
 };
 
 const MAPBOX_ACCESS_TOKEN = process.env.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN ?? '';
-const DUPLICATE_LOOKUP_RADIUS_METERS = 160;
-const DUPLICATE_ENDPOINT_THRESHOLD_METERS = 45;
-const DUPLICATE_LENGTH_TOLERANCE_METERS = 120;
-const DUPLICATE_LENGTH_TOLERANCE_RATIO = 0.04;
 
 function formatDuration(minutes: number) {
   if (!Number.isFinite(minutes) || minutes <= 0) return '--';
@@ -263,69 +261,15 @@ function getPathDistanceMeters(points: LngLat[]) {
   }, 0);
 }
 
-function normalizeTrailName(value: string) {
-  return value.trim().toLowerCase().replace(/\s+/g, ' ');
-}
+function confirmDuplicateTrail(warning: DuplicateTrailWarning) {
+  const strongestMatch = warning.matches[0];
+  const matchName = strongestMatch?.name ?? 'an existing public trail';
+  const reasons = strongestMatch?.reasons?.length ? `\n\n${strongestMatch.reasons.slice(0, 3).join('\n')}` : '';
 
-function isSimilarLength(leftMeters: number, rightMeters: number) {
-  const tolerance = Math.max(DUPLICATE_LENGTH_TOLERANCE_METERS, Math.max(leftMeters, rightMeters) * DUPLICATE_LENGTH_TOLERANCE_RATIO);
-  return Math.abs(leftMeters - rightMeters) <= tolerance;
-}
-
-function hasSimilarEndpoints(candidate: LngLat[], existing: LngLat[]) {
-  const candidateStart = candidate[0];
-  const candidateEnd = candidate[candidate.length - 1];
-  const existingStart = existing[0];
-  const existingEnd = existing[existing.length - 1];
-
-  if (!candidateStart || !candidateEnd || !existingStart || !existingEnd) {
-    return false;
-  }
-
-  const sameDirection =
-    getDistanceMeters(candidateStart, existingStart) <= DUPLICATE_ENDPOINT_THRESHOLD_METERS &&
-    getDistanceMeters(candidateEnd, existingEnd) <= DUPLICATE_ENDPOINT_THRESHOLD_METERS;
-  const reverseDirection =
-    getDistanceMeters(candidateStart, existingEnd) <= DUPLICATE_ENDPOINT_THRESHOLD_METERS &&
-    getDistanceMeters(candidateEnd, existingStart) <= DUPLICATE_ENDPOINT_THRESHOLD_METERS;
-
-  return sameDirection || reverseDirection;
-}
-
-function isPotentialDuplicateTrail(candidateName: string, candidateRoute: LngLat[], candidateStats: TrailStatsResponse, existingTrail: Trail) {
-  const existingRoute = existingTrail.routeCoordinates;
-  if (!existingRoute || existingRoute.length < 2 || candidateRoute.length < 2) {
-    return false;
-  }
-
-  const sameName = normalizeTrailName(candidateName) === normalizeTrailName(existingTrail.name);
-  const similarEndpoints = hasSimilarEndpoints(candidateRoute, existingRoute);
-  const existingLengthMeters = existingTrail.distance > 0 ? existingTrail.distance * 1000 : getPathDistanceMeters(existingRoute);
-  const similarLength = isSimilarLength(candidateStats.length_meters, existingLengthMeters);
-
-  return similarEndpoints && (sameName || similarLength);
-}
-
-async function findPotentialDuplicateTrail(candidateName: string, routeCoordinates: LngLat[], stats: TrailStatsResponse) {
-  const start = routeCoordinates[0];
-  if (!start) {
-    return null;
-  }
-
-  const nearbyTrails = await getNearbyTrails({
-    lat: start[1],
-    lng: start[0],
-    radius: DUPLICATE_LOOKUP_RADIUS_METERS,
-  });
-
-  return nearbyTrails.find((trail) => isPotentialDuplicateTrail(candidateName, routeCoordinates, stats, trail)) ?? null;
-}
-
-function confirmDuplicateTrail(existingTrail: Trail) {
   return new Promise<boolean>((resolve) => {
     Alert.alert(
       'Possible duplicate trail',
-      `"${existingTrail.name}" already starts near this route and looks very similar. Open the existing trail instead of creating another copy, unless this is intentionally different.`,
+      `"${matchName}" looks similar to this route. Open the existing trail instead of creating another copy, unless this is intentionally different.${reasons}`,
       [
         { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
         { text: 'Create anyway', style: 'destructive', onPress: () => resolve(true) },
@@ -370,6 +314,9 @@ export function TrailCreator({
   const { height: windowHeight } = useWindowDimensions();
   const cameraRef = useRef<Mapbox.Camera>(null);
   const locationSubscriptionRef = useRef<Location.LocationSubscription | null>(null);
+  const lastAiNameRef = useRef('');
+  const lastAiDescriptionRef = useRef('');
+  const lastAiRegionRef = useRef('');
 
   const [isDrawing, setIsDrawing] = useState(false);
   const [isRecordingTrail, setIsRecordingTrail] = useState(false);
@@ -393,7 +340,15 @@ export function TrailCreator({
       setIsRegionLoading(true);
       const fetchedRegion = await reverseGeocodeRegion(startCoordinate);
       setIsRegionLoading(false);
-      setRegion((current) => current.trim() || fetchedRegion || '');
+      setRegion((current) => {
+        const trimmedCurrent = current.trim();
+        if (!fetchedRegion || (trimmedCurrent && trimmedCurrent !== lastAiRegionRef.current)) {
+          return current;
+        }
+
+        lastAiRegionRef.current = fetchedRegion;
+        return fetchedRegion;
+      });
     };
 
     void fetchRegion();
@@ -406,6 +361,7 @@ export function TrailCreator({
   const [region, setRegion] = useState('');
   const [isRegionLoading, setIsRegionLoading] = useState(false);
   const [features, setFeatures] = useState<string[]>([]);
+  const [featureDraft, setFeatureDraft] = useState('');
   const [trailImage, setTrailImage] = useState<string | null>(null);
   const [isPickingImage, setIsPickingImage] = useState(false);
   const [savingMode, setSavingMode] = useState<'draft' | 'published' | null>(null);
@@ -413,6 +369,7 @@ export function TrailCreator({
   const [saveSuccess, setSaveSuccess] = useState<string | null>(null);
   const [recordingStartedAt, setRecordingStartedAt] = useState<number | null>(null);
   const [isMapReady, setIsMapReady] = useState(false);
+  const [isTrailInfoCollapsed, setIsTrailInfoCollapsed] = useState(false);
 
   const [zoomLevel, setZoomLevel] = useState(initialZoom);
   const [pitch, setPitch] = useState(0); // 0 for 2D, 45 for 3D
@@ -435,18 +392,59 @@ export function TrailCreator({
     const suggestedLabels = Array.isArray(analysis.ai_labels) ? analysis.ai_labels.filter(Boolean) : [];
 
     if (suggestedName) {
-      setName((current) => current.trim() ? current : suggestedName);
+      setName((current) => {
+        const trimmedCurrent = current.trim();
+        if (trimmedCurrent && trimmedCurrent !== lastAiNameRef.current) {
+          return current;
+        }
+
+        lastAiNameRef.current = suggestedName;
+        return suggestedName;
+      });
     }
 
     if (suggestedDescription) {
-      setDescription((current) => current.trim() ? current : suggestedDescription);
+      setDescription((current) => {
+        const trimmedCurrent = current.trim();
+        if (trimmedCurrent && trimmedCurrent !== lastAiDescriptionRef.current) {
+          return current;
+        }
+
+        lastAiDescriptionRef.current = suggestedDescription;
+        return suggestedDescription;
+      });
     }
 
     if (suggestedRegion) {
-      setRegion((current) => current.trim() ? current : suggestedRegion);
+      setRegion((current) => {
+        const trimmedCurrent = current.trim();
+        if (trimmedCurrent && trimmedCurrent !== lastAiRegionRef.current) {
+          return current;
+        }
+
+        lastAiRegionRef.current = suggestedRegion;
+        return suggestedRegion;
+      });
     }
 
     setFeatures(Array.from(new Set(suggestedLabels)));
+  };
+
+  const addFeature = () => {
+    const nextFeature = featureDraft.trim();
+    if (!nextFeature) {
+      return;
+    }
+
+    setFeatures((current) => {
+      const alreadyExists = current.some((feature) => feature.trim().toLowerCase() === nextFeature.toLowerCase());
+      return alreadyExists ? current : [...current, nextFeature];
+    });
+    setFeatureDraft('');
+  };
+
+  const removeFeature = (featureToRemove: string) => {
+    setFeatures((current) => current.filter((feature) => feature !== featureToRemove));
   };
 
   const routeGeojson = useMemo(() => toLineFeature(routeCoordinates), [routeCoordinates]);
@@ -484,9 +482,13 @@ export function TrailCreator({
     setSaveSuccess('AI route ready. Review the details, then save or publish it.');
     setSaveError(null);
     setCalcError(null);
+    lastAiNameRef.current = initialGeneratedTrail.name_suggestion?.trim() || 'Suggested Trail';
+    lastAiDescriptionRef.current = initialGeneratedTrail.description_suggestion?.trim() || '';
+    lastAiRegionRef.current = '';
     setName(initialGeneratedTrail.name_suggestion?.trim() || 'Suggested Trail');
     setDescription(initialGeneratedTrail.description_suggestion?.trim() || '');
     setFeatures(Array.from(new Set((initialGeneratedTrail.labels ?? []).filter(Boolean))));
+    setFeatureDraft('');
     setStartCoordinate(firstCoordinate);
     setMiddleCoordinates(coordinates.slice(1, -1));
     setEndCoordinate(lastCoordinate);
@@ -503,6 +505,7 @@ export function TrailCreator({
     setIsRecordingTrail(false);
     setIsFinished(true);
     setRecordingStartedAt(null);
+    setIsTrailInfoCollapsed(false);
 
     if (firstCoordinate) {
       cameraRef.current?.setCamera({
@@ -532,11 +535,15 @@ export function TrailCreator({
     setSaveSuccess(null);
     setSaveError(null);
     setCalcError(null);
+    lastAiNameRef.current = '';
+    lastAiDescriptionRef.current = '';
+    lastAiRegionRef.current = '';
     setStats(null);
     setName('');
     setDescription('');
     setRegion('');
     setFeatures([]);
+    setFeatureDraft('');
     setStartCoordinate(null);
     setMiddleCoordinates([]);
     setEndCoordinate(null);
@@ -547,6 +554,7 @@ export function TrailCreator({
     setIsRecordingTrail(false);
     setIsFinished(false);
     setRecordingStartedAt(null);
+    setIsTrailInfoCollapsed(false);
   };
 
   const beginRecordingTrail = async () => {
@@ -555,11 +563,15 @@ export function TrailCreator({
     setSaveSuccess(null);
     setSaveError(null);
     setCalcError(null);
+    lastAiNameRef.current = '';
+    lastAiDescriptionRef.current = '';
+    lastAiRegionRef.current = '';
     setStats(null);
     setName('');
     setDescription('');
     setRegion('');
     setFeatures([]);
+    setFeatureDraft('');
     setStartCoordinate(null);
     setMiddleCoordinates([]);
     setEndCoordinate(null);
@@ -570,6 +582,7 @@ export function TrailCreator({
     setIsFinished(false);
     setIsRecordingTrail(false);
     setRecordingStartedAt(null);
+    setIsTrailInfoCollapsed(false);
 
     try {
       const permission = await Location.requestForegroundPermissionsAsync();
@@ -629,6 +642,7 @@ export function TrailCreator({
     setDescription('');
     setRegion('');
     setFeatures([]);
+    setFeatureDraft('');
     setStartCoordinate(null);
     setMiddleCoordinates([]);
     setEndCoordinate(null);
@@ -643,6 +657,7 @@ export function TrailCreator({
     setSaveError(null);
     setSaveSuccess(null);
     setRecordingStartedAt(null);
+    setIsTrailInfoCollapsed(false);
   };
 
   const finishRecordedTrail = async () => {
@@ -782,12 +797,21 @@ export function TrailCreator({
     setSaveError(null);
     setSaveSuccess(null);
     try {
-      const potentialDuplicate = await findPotentialDuplicateTrail(name.trim(), routeCoordinates, stats);
-      if (potentialDuplicate) {
-        const shouldCreateAnyway = await confirmDuplicateTrail(potentialDuplicate);
+      let confirmedDuplicate = false;
+      const duplicateWarning = await checkDuplicateTrail({
+        name: name.trim(),
+        coordinates: routeCoordinates,
+        distance: stats.length_meters,
+        visibility: 'public',
+      });
+
+      if (duplicateWarning.has_similar_trails) {
+        const shouldCreateAnyway = await confirmDuplicateTrail(duplicateWarning);
         if (!shouldCreateAnyway) {
           return;
         }
+
+        confirmedDuplicate = true;
       }
 
       const translatedTrail = await translateTrailContentToArabic({
@@ -807,6 +831,8 @@ export function TrailCreator({
         featuresAr: translatedTrail.featuresAr,
         tags: features,
         status: 'draft',
+        visibility: status === 'published' ? 'public' : 'private',
+        confirm_duplicate: confirmedDuplicate,
         coordinates: routeCoordinates,
         stats,
       };
@@ -879,6 +905,13 @@ export function TrailCreator({
         endCoordinate ? 'End set' : 'Choose an end',
         isLoop ? 'Loop on' : 'Loop off',
       ].join(' | ');
+  const shouldShowTrailInfoPanel = isDrawing || isRecordingTrail || isFinished;
+  const panelBottomPadding = Math.max(12, insets.bottom + 10);
+  const mapControlsBottom = !shouldShowTrailInfoPanel
+    ? Math.max(22, insets.bottom + 22)
+    : isTrailInfoCollapsed
+    ? Math.max(92, insets.bottom + 82)
+    : 120;
 
   return (
     <View style={styles.root}>
@@ -953,7 +986,7 @@ export function TrailCreator({
         </Mapbox.ShapeSource>
       </Mapbox.MapView>
 
-      <View style={styles.mapControls}>
+      <View style={[styles.mapControls, { bottom: mapControlsBottom }]}>
         <Pressable style={styles.controlButton} onPress={zoomIn}>
           <Ionicons name="add" size={24} color="#2C2418" />
         </Pressable>
@@ -1042,22 +1075,34 @@ export function TrailCreator({
         </View>
       </View>
 
-      {(isDrawing || isRecordingTrail || isFinished) && (
-        <View style={[styles.bottomPanelWrap, { paddingBottom: Math.max(12, insets.bottom + 10) }]}>
-          <View style={[styles.bottomPanel, { maxHeight: Math.max(260, windowHeight * 0.72) }]}>
-            <ScrollView
-              showsVerticalScrollIndicator={false}
-              keyboardShouldPersistTaps="handled"
-              contentContainerStyle={styles.bottomPanelScrollContent}
+      {shouldShowTrailInfoPanel && (
+        <View style={[styles.bottomPanelWrap, { paddingBottom: panelBottomPadding }]}>
+          <View style={[styles.bottomPanel, isTrailInfoCollapsed ? styles.bottomPanelCollapsed : { maxHeight: Math.max(260, windowHeight * 0.72) }]}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={isTrailInfoCollapsed ? 'Expand trail info panel' : 'Collapse trail info panel'}
+              style={styles.panelHeaderButton}
+              onPress={() => setIsTrailInfoCollapsed((current) => !current)}
             >
+              <View style={styles.panelHandle} />
               <View style={styles.panelHeaderRow}>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.panelTitle}>{isDrawing || isRecordingTrail ? stageTitle : 'Trail details'}</Text>
                   <Text style={styles.panelSubtitle}>{stageSummary}</Text>
                 </View>
                 {isCalculating ? <ActivityIndicator /> : null}
+                <View style={styles.collapseButton}>
+                  <Ionicons name={isTrailInfoCollapsed ? 'chevron-up' : 'chevron-down'} size={20} color="#2C2418" />
+                </View>
               </View>
+            </Pressable>
 
+            {!isTrailInfoCollapsed ? (
+              <ScrollView
+                showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+                contentContainerStyle={styles.bottomPanelScrollContent}
+              >
               {calcError ? <Text style={styles.errorText}>{calcError}</Text> : null}
 
               {isRecordingTrail ? (
@@ -1146,24 +1191,46 @@ export function TrailCreator({
                   </View>
                   <View style={styles.formRow}>
                     <Text style={styles.inputLabel}>Features</Text>
+                    <View style={styles.featureInputRow}>
+                      <TextInput
+                        value={featureDraft}
+                        onChangeText={setFeatureDraft}
+                        onSubmitEditing={addFeature}
+                        placeholder="Add a feature, e.g. spring, ruins, viewpoint"
+                        placeholderTextColor="#9E8E80"
+                        returnKeyType="done"
+                        style={[styles.input, styles.featureInput]}
+                      />
+                      <Pressable
+                        accessibilityLabel="Add feature"
+                        disabled={!featureDraft.trim()}
+                        onPress={addFeature}
+                        style={[styles.featureAddButton, !featureDraft.trim() && styles.featureAddButtonDisabled]}
+                      >
+                        <Ionicons name="add" size={22} color="#fff" />
+                      </Pressable>
+                    </View>
                     <View style={styles.featuresContainer}>
                       {features.length ? (
                         features.map((feature) => (
-                          <View
+                          <Pressable
                             key={feature}
                             style={[styles.featureChip, styles.featureChipSelected]}
+                            onPress={() => removeFeature(feature)}
+                            accessibilityLabel={`Remove ${feature}`}
                           >
                             <Text style={[styles.featureChipText, styles.featureChipTextSelected]}>
                               {feature}
                             </Text>
-                          </View>
+                            <Ionicons name="close" size={14} color="#fff" />
+                          </Pressable>
                         ))
                       ) : (
                         <View style={styles.emptyFeaturesBox}>
                           <Text
                             style={styles.emptyFeaturesText}
                           >
-                            AI-generated features will appear here after route analysis.
+                            Add features manually, or keep the AI-generated labels after route analysis.
                           </Text>
                         </View>
                       )}
@@ -1245,7 +1312,8 @@ export function TrailCreator({
                     : 'Tap once to place the start, add as many middle waypoints as you need, switch to end mode, then tap the ending point. Turn on loop to close the route back to the start.'}
                 </Text>
               )}
-            </ScrollView>
+              </ScrollView>
+            ) : null}
           </View>
         </View>
       )}
@@ -1259,7 +1327,6 @@ const styles = StyleSheet.create({
   mapControls: {
     position: 'absolute',
     right: 12,
-    bottom: 120, // Above the bottom panel
     flexDirection: 'column',
     gap: 8,
   },
@@ -1369,11 +1436,36 @@ const styles = StyleSheet.create({
     elevation: 14,
   },
   bottomPanelScrollContent: {
+    paddingTop: 4,
     paddingBottom: 4,
   },
-  panelHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10 },
+  bottomPanelCollapsed: {
+    paddingTop: 10,
+    paddingBottom: 10,
+  },
+  panelHeaderButton: {
+    gap: 8,
+  },
+  panelHandle: {
+    alignSelf: 'center',
+    width: 44,
+    height: 4,
+    borderRadius: 999,
+    backgroundColor: 'rgba(44,36,24,0.18)',
+  },
+  panelHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   panelTitle: { fontSize: 14, fontWeight: '900', color: '#2C2418' },
   panelSubtitle: { marginTop: 3, fontSize: 11, color: '#8A7A6A', fontWeight: '700' },
+  collapseButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#F7F3E7',
+    borderWidth: 1,
+    borderColor: 'rgba(44,36,24,0.08)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   drawingActionsRow: { marginBottom: 10 },
   secondaryActionButton: {
     flexDirection: 'row',
@@ -1441,8 +1533,33 @@ const styles = StyleSheet.create({
   },
   textarea: { minHeight: 86, textAlignVertical: 'top' },
 
+  featureInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 8,
+  },
+  featureInput: {
+    flex: 1,
+    minWidth: 0,
+  },
+  featureAddButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#0F5A38',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  featureAddButtonDisabled: {
+    opacity: 0.45,
+  },
   featuresContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   featureChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    maxWidth: '100%',
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 20,

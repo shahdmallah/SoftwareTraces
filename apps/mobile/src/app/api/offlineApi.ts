@@ -1,5 +1,7 @@
 import { apiRequest } from './client';
 import { getAccessToken, getApiBaseUrl } from '../lib/auth';
+import { normalizeTrail, type Trail } from './trailsApi';
+import type { NearbySafetyAlert, SafetySeverity } from './safetyApi';
 
 type Envelope<T> = {
   data: T;
@@ -29,6 +31,30 @@ export type OfflineActivityPayload = {
   }>;
 };
 
+type OfflineSafetyMarker = {
+  id: string;
+  name?: string | null;
+  name_ar?: string | null;
+  location_type?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  danger_radius_meters?: number | null;
+  distance_meters?: number | null;
+  risk_level?: string | null;
+};
+
+export type OfflineTrailBundle = {
+  trail: Trail;
+  geometry?: string | null;
+  elevation_profile?: unknown[];
+  safety_markers?: OfflineSafetyMarker[];
+  checkpoint_reports?: unknown[];
+  access_route?: unknown;
+  safety_snapshot?: unknown;
+  safety_snapshot_generated_at?: string | null;
+  generated_at?: string | null;
+};
+
 type OfflineRoutePayload = {
   trailId: string;
   trailName?: string;
@@ -40,6 +66,14 @@ type OfflineRoutePayload = {
   route?: [number, number][];
   tileRegion: string;
   tileUrlTemplate: string;
+  trail?: Trail;
+  safetyAlerts?: NearbySafetyAlert[];
+  safetyMarkers?: OfflineSafetyMarker[];
+  checkpointReports?: unknown[];
+  accessRoute?: unknown;
+  elevationProfile?: unknown[];
+  safetySnapshot?: unknown;
+  generatedAt?: string;
 };
 
 export type OfflineMapRecord = {
@@ -88,6 +122,45 @@ function normalizeRouteCoordinates(routeCoordinates?: [number, number][]) {
   return routeCoordinates.map(normalizeRoutePoint);
 }
 
+function normalizeSafetySeverity(value: unknown): SafetySeverity {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  if (normalized === 'critical' || normalized === 'high' || normalized === 'medium' || normalized === 'low') {
+    return normalized;
+  }
+
+  if (normalized === 'dangerous' || normalized === 'avoid') {
+    return 'high';
+  }
+
+  if (normalized === 'attention' || normalized === 'caution') {
+    return 'medium';
+  }
+
+  return 'low';
+}
+
+function safetyMarkerToAlert(marker: OfflineSafetyMarker): NearbySafetyAlert | null {
+  const latitude = Number(marker.latitude);
+  const longitude = Number(marker.longitude);
+
+  if (!marker.id || !Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+    return null;
+  }
+
+  return {
+    id: marker.id,
+    kind: 'location',
+    name: marker.name ?? 'Safety marker',
+    name_ar: marker.name_ar,
+    location_type: marker.location_type ?? 'safety_marker',
+    latitude,
+    longitude,
+    danger_radius_meters: Number(marker.danger_radius_meters ?? 0),
+    distance_meters: Number(marker.distance_meters ?? 0),
+    risk_level: normalizeSafetySeverity(marker.risk_level),
+  };
+}
+
 async function requestOfflineArchive(trailId: string) {
   const token = await getAccessToken();
   const headers = new Headers();
@@ -116,6 +189,23 @@ async function requestOfflineArchive(trailId: string) {
   await response.arrayBuffer().catch(() => undefined);
 }
 
+export async function getOfflineTrailBundle(trailId: string) {
+  const response = await apiRequest<Envelope<OfflineTrailBundle>>(`/api/offline/trails/${trailId}/bundle`);
+  const trail = normalizeTrail(response.data.trail);
+  const safetyMarkers = Array.isArray(response.data.safety_markers) ? response.data.safety_markers : [];
+
+  return {
+    ...response.data,
+    trail,
+    safety_markers: safetyMarkers,
+    checkpoint_reports: Array.isArray(response.data.checkpoint_reports) ? response.data.checkpoint_reports : [],
+    elevation_profile: Array.isArray(response.data.elevation_profile) ? response.data.elevation_profile : [],
+    safetyAlerts: safetyMarkers
+      .map(safetyMarkerToAlert)
+      .filter((alert): alert is NearbySafetyAlert => alert !== null),
+  };
+}
+
 export async function getPendingSync(params: { since?: string } = {}) {
   const response = await apiRequest<Envelope<Record<string, unknown>[]>>('/api/offline/sync', {}, params);
   return response.data;
@@ -138,18 +228,30 @@ export async function deleteOfflineMap(id: string) {
   await apiRequest<void>(`/api/offline/maps/${id}`, { method: 'DELETE' });
 }
 
-export async function downloadOfflineMap(trailId: string) {
-  await requestOfflineArchive(trailId);
+export async function downloadOfflineMap(trailId: string): Promise<OfflineRoutePayload> {
+  const [bundle] = await Promise.all([
+    getOfflineTrailBundle(trailId),
+    requestOfflineArchive(trailId),
+  ]);
+  const trail = bundle.trail;
 
   return {
     trailId,
-    trailName: undefined,
-    trailNameAr: undefined,
-    region: undefined,
-    regionAr: undefined,
-    coordinates: undefined,
+    trailName: trail.name,
+    trailNameAr: trail.nameAr,
+    region: trail.region,
+    regionAr: trail.regionAr,
+    coordinates: trail.coordinates,
     tileRegion: `trail-${trailId}`,
     tileUrlTemplate: '',
-    routeCoordinates: normalizeRouteCoordinates(undefined),
+    routeCoordinates: normalizeRouteCoordinates(trail.routeCoordinates),
+    trail,
+    safetyAlerts: bundle.safetyAlerts,
+    safetyMarkers: bundle.safety_markers,
+    checkpointReports: bundle.checkpoint_reports,
+    accessRoute: bundle.access_route,
+    elevationProfile: bundle.elevation_profile,
+    safetySnapshot: bundle.safety_snapshot,
+    generatedAt: bundle.generated_at ?? bundle.safety_snapshot_generated_at ?? undefined,
   };
 }

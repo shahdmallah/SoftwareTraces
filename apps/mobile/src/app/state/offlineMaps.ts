@@ -1,4 +1,6 @@
 import * as SecureStore from 'expo-secure-store';
+import type { NearbySafetyAlert } from '../api/safetyApi';
+import type { Trail } from '../api/trailsApi';
 
 export type OfflineMapPack = {
   trailId: string;
@@ -11,6 +13,14 @@ export type OfflineMapPack = {
   tileRegion: string;
   tileUrlTemplate: string;
   downloadedAt: string;
+  trail?: Trail;
+  safetyAlerts?: NearbySafetyAlert[];
+  safetyMarkers?: unknown[];
+  checkpointReports?: unknown[];
+  accessRoute?: unknown;
+  elevationProfile?: unknown[];
+  safetySnapshot?: unknown;
+  generatedAt?: string;
 };
 
 const OFFLINE_MAPS_KEY = 'traces.offline.maps';
@@ -35,6 +45,13 @@ export async function getOfflineMapPacks() {
 export async function saveOfflineMapPack(pack: OfflineMapPack) {
   const current = await getOfflineMapPacks();
   const next = [pack, ...current.filter((item) => item.trailId !== pack.trailId)];
+  await SecureStore.setItemAsync(OFFLINE_MAPS_KEY, JSON.stringify(next));
+  return next;
+}
+
+export async function removeOfflineMapPack(trailId: string) {
+  const current = await getOfflineMapPacks();
+  const next = current.filter((item) => item.trailId !== trailId);
   await SecureStore.setItemAsync(OFFLINE_MAPS_KEY, JSON.stringify(next));
   return next;
 }

@@ -11,7 +11,7 @@ const W = Dimensions.get('window').width - 32;
 type Props = {
   trailName: string;
   heroUri: string;
-  rating: number;
+  rating?: number;
   reviewExcerpt: string;
   durationMs: number;
   isArabic: boolean;
@@ -20,18 +20,30 @@ type Props = {
 
 export function SharePreviewCard({ trailName, heroUri, rating, reviewExcerpt, durationMs, isArabic, delay = 340 }: Props) {
   const excerpt = useMemo(() => {
-    const t = reviewExcerpt.trim();
-    if (!t) return isArabic ? 'رحلة مكتملة على Traces' : 'A finished hike on Traces';
-    return t.length > 120 ? `${t.slice(0, 120)}…` : t;
+    const text = reviewExcerpt.trim();
+    if (!text) return isArabic ? 'رحلة مكتملة على Traces' : 'A finished hike on Traces';
+    return text.length > 120 ? `${text.slice(0, 120)}...` : text;
   }, [reviewExcerpt, isArabic]);
-  const dur = formatCompletionDuration(durationMs, isArabic);
+  const duration = formatCompletionDuration(durationMs, isArabic);
+  const metaText = rating && rating > 0 ? `${rating}/5 - ${duration}` : duration;
+
+  const cardContent = (
+    <View style={styles.cardInner}>
+      <Text style={styles.tracesWordmark}>Traces</Text>
+      <Text style={styles.cardTitle} numberOfLines={2}>
+        {trailName}
+      </Text>
+      <View style={styles.cardMeta}>
+        <Text style={styles.metaText}>{metaText}</Text>
+      </View>
+      <Text style={styles.excerpt} numberOfLines={3}>
+        {excerpt}
+      </Text>
+    </View>
+  );
 
   return (
-    <AnimatedEntrance
-      fromScale={0.97}
-      delay={delay}
-      style={[styles.wrap, completionShadow.lifted]}
-    >
+    <AnimatedEntrance fromScale={0.97} delay={delay} style={[styles.wrap, completionShadow.lifted]}>
       <Text style={[styles.eyebrow, isArabic ? rtlText : ltrText]}>
         {isArabic ? 'معاينة المشاركة' : 'Share preview'}
       </Text>
@@ -43,38 +55,12 @@ export function SharePreviewCard({ trailName, heroUri, rating, reviewExcerpt, du
         {heroUri ? (
           <ImageBackground source={{ uri: heroUri }} style={styles.image} resizeMode="cover">
             <LinearGradient colors={['transparent', 'rgba(8,5,4,0.2)', 'rgba(8,5,4,0.92)']} style={StyleSheet.absoluteFill} />
-            <View style={styles.cardInner}>
-              <Text style={styles.tracesWordmark}>Traces</Text>
-              <Text style={styles.cardTitle} numberOfLines={2}>
-                {trailName}
-              </Text>
-              <View style={styles.cardMeta}>
-                <Text style={styles.metaText}>
-                  {rating}★ · {dur}
-                </Text>
-              </View>
-              <Text style={styles.excerpt} numberOfLines={3}>
-                {excerpt}
-              </Text>
-            </View>
+            {cardContent}
           </ImageBackground>
         ) : (
           <View style={[styles.image, styles.imageFallback]}>
             <LinearGradient colors={['#5C4F42', '#2C2418']} style={StyleSheet.absoluteFill} />
-            <View style={styles.cardInner}>
-              <Text style={styles.tracesWordmark}>Traces</Text>
-              <Text style={styles.cardTitle} numberOfLines={2}>
-                {trailName}
-              </Text>
-              <View style={styles.cardMeta}>
-                <Text style={styles.metaText}>
-                  {rating}★ · {dur}
-                </Text>
-              </View>
-              <Text style={styles.excerpt} numberOfLines={3}>
-                {excerpt}
-              </Text>
-            </View>
+            {cardContent}
           </View>
         )}
       </View>

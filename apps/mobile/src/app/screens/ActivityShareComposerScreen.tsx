@@ -1615,7 +1615,6 @@ export function ActivityShareComposerScreen() {
               />
             </FieldRow>
           )}
-          )}
 
           {isPlan && (
             <>

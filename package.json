@@ -11,6 +11,7 @@
     "build:api": "npm run build --workspace @traces/api",
     "build:mobile": "npm run build --workspace mobile",
     "dev:api": "npm run dev --workspace @traces/api",
+    "dev:api:watch": "node scripts/api-health-watchdog.mjs",
     "dev:mobile": "npm run dev --workspace mobile",
     "db:migrate": "npm run db:migrate --workspace @traces/api",
     "db:seed": "npm run db:seed --workspace @traces/api",

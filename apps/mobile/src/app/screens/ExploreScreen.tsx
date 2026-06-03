@@ -412,6 +412,14 @@ export function ExploreScreen() {
         tileRegion: map.tileRegion,
         tileUrlTemplate: map.tileUrlTemplate,
         downloadedAt: new Date().toISOString(),
+        trail: map.trail,
+        safetyAlerts: map.safetyAlerts,
+        safetyMarkers: map.safetyMarkers,
+        checkpointReports: map.checkpointReports,
+        accessRoute: map.accessRoute,
+        elevationProfile: map.elevationProfile,
+        safetySnapshot: map.safetySnapshot,
+        generatedAt: map.generatedAt,
       });
       setDownloadedTrailIds((current) => new Set(current).add(trail.id));
       Alert.alert(

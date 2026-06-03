@@ -1,6 +1,6 @@
 ﻿// Updated to restore the previous trail detail layout while loading trail data from the API and syncing saved state through backend bookmarks.
 import React, { useEffect, useMemo, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Pressable, useWindowDimensions, Alert } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Pressable, useWindowDimensions, Alert, Modal } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
@@ -34,11 +34,13 @@ import { CommunityPostsSection } from '../components/CommunityPostsSection';
 import { useTrailTracking } from '../contexts/TrailTrackingContext';
 import { getMyActivities, type Activity } from '../api/activitiesApi';
 import { getSocialFeed } from '../api/socialApi';
+import { downloadOfflineMap } from '../api/offlineApi';
 import { getProfile, type Profile } from '../api/profilesApi';
 import { formatSafetyDistance, getSafetyBand, getTrailSafety, type TrailSafety } from '../api/safetyApi';
 import { type FeedItem } from '../data/activitySocial';
 import { mapSocialFeedItemToFeedItem } from '../utils/socialFeedMap';
 import { getApprovedTrailPhotos, getTrailPhotoUrls } from '../utils/trailPhotos';
+import { getOfflineMapPacks, saveOfflineMapPack, type OfflineMapPack } from '../state/offlineMaps';
 
 type TrailDetailScreenRouteProp = RouteProp<RootStackParamList, 'TrailDetail'>;
 type TrailDetailNavigationProp = StackNavigationProp<RootStackParamList>;
@@ -76,6 +78,92 @@ function formatConditionDate(value?: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return 'Recently';
   return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(date);
+}
+
+type OfflineSafetySnapshot = {
+  generated_at?: string | null;
+  confidence?: string | null;
+  freshness?: string | null;
+  report_count?: number | null;
+  latest_report_at?: string | null;
+  summary?: string | null;
+};
+
+function buildOfflineTrail(pack: OfflineMapPack): Trail {
+  if (pack.trail) {
+    return {
+      ...pack.trail,
+      coordinates: pack.coordinates ?? pack.trail.coordinates,
+      routeCoordinates: pack.routeCoordinates?.length ? pack.routeCoordinates : pack.trail.routeCoordinates,
+    };
+  }
+
+  return {
+    id: pack.trailId,
+    name: pack.trailName,
+    nameAr: pack.trailNameAr || pack.trailName,
+    region: pack.region ?? '',
+    regionAr: pack.regionAr ?? pack.region ?? '',
+    description: '',
+    descriptionAr: '',
+    distance: 0,
+    duration: '',
+    elevationGain: 0,
+    elevationMin: 0,
+    elevationMax: 0,
+    difficulty: 'Easy',
+    rating: 0,
+    reviews: 0,
+    image: '',
+    images: [],
+    features: [],
+    featuresAr: [],
+    hasCheckpoint: false,
+    coordinates: pack.coordinates ?? [31.78, 35.24],
+    routeCoordinates: pack.routeCoordinates,
+    mapX: 0,
+    mapY: 0,
+    tags: [],
+  };
+}
+
+function getOfflineSnapshot(pack?: OfflineMapPack | null): OfflineSafetySnapshot | null {
+  if (!pack?.safetySnapshot || typeof pack.safetySnapshot !== 'object') {
+    return null;
+  }
+
+  return pack.safetySnapshot as OfflineSafetySnapshot;
+}
+
+function formatRelativeUpdate(value?: string | null) {
+  if (!value) return 'Unknown';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Unknown';
+  const diffMinutes = Math.max(0, Math.round((Date.now() - date.getTime()) / 60000));
+  if (diffMinutes < 2) return 'Updated just now';
+  if (diffMinutes < 60) return `Updated ${diffMinutes} minutes ago`;
+  const diffHours = Math.round(diffMinutes / 60);
+  if (diffHours < 24) return `Updated ${diffHours} hour${diffHours === 1 ? '' : 's'} ago`;
+  const diffDays = Math.round(diffHours / 24);
+  if (diffDays === 1) return 'Updated yesterday';
+  if (diffDays < 7) return `Updated ${diffDays} days ago`;
+  return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(date);
+}
+
+function formatLocalTime(value?: string | null) {
+  if (!value) return 'Unknown';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Unknown';
+  return new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(date);
+}
+
+function countOfflineArray(value: unknown) {
+  return Array.isArray(value) ? value.length : 0;
 }
 
 async function hydrateReviewProfiles(reviews: TrailReview[]): Promise<TrailReview[]> {
@@ -142,6 +230,9 @@ export function TrailDetailScreen() {
   const [trailSafety, setTrailSafety] = useState<TrailSafety | null>(null);
   const [trailConditions, setTrailConditions] = useState<TrailCondition[]>([]);
   const [ongoingTrailActivity, setOngoingTrailActivity] = useState<Activity | null>(null);
+  const [offlinePack, setOfflinePack] = useState<OfflineMapPack | null>(null);
+  const [isOfflineModalVisible, setIsOfflineModalVisible] = useState(false);
+  const [isDownloadingOffline, setIsDownloadingOffline] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -152,6 +243,8 @@ export function TrailDetailScreen() {
 
       try {
         const nextTrail = await getTrailById(trailId);
+        const localPacks = await getOfflineMapPacks().catch(() => [] as OfflineMapPack[]);
+        const nextOfflinePack = localPacks.find((pack) => pack.trailId === trailId) ?? null;
         const [rawReviews, nextPhotos, nextConditions] = await Promise.all([
           getTrailReviews(trailId).catch(() => []),
           getApprovedTrailPhotos(trailId, nextTrail).catch(() => []),
@@ -162,6 +255,7 @@ export function TrailDetailScreen() {
 
         if (!cancelled) {
           setTrail(nextTrail);
+          setOfflinePack(nextOfflinePack);
           setTrailSafety(nextSafety);
           setReviews(nextReviews);
           setTrailConditions(nextConditions);
@@ -189,8 +283,23 @@ export function TrailDetailScreen() {
           setIsCompleted(false);
         }
       } catch (error) {
+        const localPack = (await getOfflineMapPacks().catch(() => [] as OfflineMapPack[])).find((pack) => pack.trailId === trailId);
+
         if (!cancelled) {
+          if (localPack) {
+            const offlineTrail = buildOfflineTrail(localPack);
+            setTrail(offlineTrail);
+            setOfflinePack(localPack);
+            setLoadError(null);
+            setReviews([]);
+            setTrailMediaImages(offlineTrail.image ? [offlineTrail.image] : []);
+            setTrailConditions([]);
+            setTrailSafety(null);
+            return;
+          }
+
           setLoadError(error instanceof Error ? error.message : 'Unable to load trail details.');
+          setOfflinePack(null);
           setReviews([]);
           setTrailMediaImages([]);
           setTrailConditions([]);
@@ -284,6 +393,13 @@ export function TrailDetailScreen() {
     const [lat, lng] = trail.coordinates;
     return buildMapImageUri(lng, lat);
   }, [trail]);
+  const offlineSnapshot = useMemo(() => getOfflineSnapshot(offlinePack), [offlinePack]);
+  const offlineUpdatedAt = offlineSnapshot?.generated_at ?? offlinePack?.generatedAt ?? offlinePack?.downloadedAt ?? null;
+  const offlineCheckpointCount = countOfflineArray(offlinePack?.checkpointReports);
+  const offlineDangerZoneCount = countOfflineArray(offlinePack?.safetyMarkers ?? offlinePack?.safetyAlerts);
+  const offlineConfidence = offlineSnapshot?.confidence
+    ? offlineSnapshot.confidence.charAt(0).toUpperCase() + offlineSnapshot.confidence.slice(1)
+    : 'Unknown';
 
   useEffect(() => {
     setActiveImageIndex(0);
@@ -319,6 +435,56 @@ export function TrailDetailScreen() {
       screen: 'Map',
       params: { selectedTrailId: trail!.id },
     });
+  };
+
+  const handleDownloadOfflinePackage = async () => {
+    if (!isAuthenticated) {
+      setIsOfflineModalVisible(false);
+      navigation.navigate('Auth', { mode: 'signin' });
+      return;
+    }
+
+    if (!trail || isDownloadingOffline) {
+      return;
+    }
+
+    setIsDownloadingOffline(true);
+
+    try {
+      const map = await downloadOfflineMap(trail.id);
+      const nextPack: OfflineMapPack = {
+        trailId: map.trailId,
+        trailName: map.trailName ?? trail.name,
+        trailNameAr: map.trailNameAr ?? trail.nameAr,
+        region: map.region ?? trail.region,
+        regionAr: map.regionAr ?? trail.regionAr,
+        coordinates: map.coordinates ?? trail.coordinates,
+        routeCoordinates: map.routeCoordinates?.length ? map.routeCoordinates : trail.routeCoordinates,
+        tileRegion: map.tileRegion,
+        tileUrlTemplate: map.tileUrlTemplate,
+        downloadedAt: new Date().toISOString(),
+        trail: map.trail ?? trail,
+        safetyAlerts: map.safetyAlerts,
+        safetyMarkers: map.safetyMarkers,
+        checkpointReports: map.checkpointReports,
+        accessRoute: map.accessRoute,
+        elevationProfile: map.elevationProfile,
+        safetySnapshot: map.safetySnapshot,
+        generatedAt: map.generatedAt,
+      };
+
+      await saveOfflineMapPack(nextPack);
+      setOfflinePack(nextPack);
+      setIsOfflineModalVisible(false);
+      Alert.alert('Saved Offline', 'Trail and safety context are now available without internet.');
+    } catch (error) {
+      Alert.alert(
+        isArabic ? '\u062a\u0639\u0630\u0631 \u0627\u0644\u062a\u062d\u0645\u064a\u0644' : 'Unable to download',
+        error instanceof Error ? error.message : isArabic ? '\u062d\u0627\u0648\u0644 \u0645\u0631\u0629 \u0623\u062e\u0631\u0649.' : 'Please try again.',
+      );
+    } finally {
+      setIsDownloadingOffline(false);
+    }
   };
 
   const openMediaGallery = () => {
@@ -489,6 +655,63 @@ export function TrailDetailScreen() {
         <View style={styles.content}>
           <AnimatedBlock delay={110}>
             <TrailSummaryCard trail={trail} isArabic={isArabic} />
+          </AnimatedBlock>
+
+          <AnimatedBlock delay={130}>
+            <View style={[styles.offlineSafetyCard, offlinePack && styles.offlineSafetyCardReady]}>
+              <View style={[styles.offlineSafetyHeader, isArabic ? { flexDirection: 'row-reverse' } : null]}>
+                <View style={[styles.offlineSafetyIcon, offlinePack && styles.offlineSafetyIconReady]}>
+                  <Ionicons name={offlinePack ? 'cloud-done-outline' : 'shield-checkmark-outline'} size={21} color={offlinePack ? '#1E7A46' : '#630E13'} />
+                </View>
+                <View style={styles.offlineSafetyCopy}>
+                  <Text style={[styles.offlineSafetyTitle, isArabic ? { textAlign: 'right' } : null]}>
+                    {offlinePack ? 'Available Offline' : 'Download Offline Safety Map'}
+                  </Text>
+                  <Text style={[styles.offlineSafetySub, isArabic ? { textAlign: 'right' } : null]}>
+                    {offlinePack
+                      ? `Safety Snapshot: ${formatRelativeUpdate(offlineUpdatedAt)}`
+                      : 'Preserve trail access and safety context for weak connectivity areas.'}
+                  </Text>
+                  {offlinePack ? (
+                    <Text style={[styles.offlineSafetyMeta, isArabic ? { textAlign: 'right' } : null]}>
+                      Confidence: {offlineConfidence}
+                    </Text>
+                  ) : null}
+                </View>
+              </View>
+
+              {offlinePack ? (
+                <View style={styles.offlineSnapshotGrid}>
+                  <View style={styles.offlineSnapshotItem}>
+                    <Text style={styles.offlineSnapshotValue}>{offlineCheckpointCount}</Text>
+                    <Text style={styles.offlineSnapshotLabel}>Checkpoints</Text>
+                  </View>
+                  <View style={styles.offlineSnapshotItem}>
+                    <Text style={styles.offlineSnapshotValue}>{offlineDangerZoneCount}</Text>
+                    <Text style={styles.offlineSnapshotLabel}>Danger zones</Text>
+                  </View>
+                </View>
+              ) : null}
+
+              <Pressable
+                style={[styles.offlineDownloadButton, isDownloadingOffline && styles.offlineDownloadButtonDisabled]}
+                onPress={() => setIsOfflineModalVisible(true)}
+                disabled={isDownloadingOffline}
+              >
+                {isDownloadingOffline ? (
+                  <ActivityIndicator color="#fff" size="small" />
+                ) : (
+                  <Ionicons name={offlinePack ? 'refresh-outline' : 'download-outline'} size={17} color="#fff" />
+                )}
+                <Text style={styles.offlineDownloadButtonText}>
+                  {isDownloadingOffline
+                    ? 'Saving trail and safety data...'
+                    : offlinePack
+                    ? 'Update Offline Snapshot'
+                    : 'Download Offline Safety Map'}
+                </Text>
+              </Pressable>
+            </View>
           </AnimatedBlock>
 
           {trailSafety && safetyBand ? (
@@ -759,8 +982,93 @@ export function TrailDetailScreen() {
             />
           </AnimatedBlock>
 
+          {offlinePack ? (
+            <AnimatedBlock delay={390}>
+              <View style={styles.emergencyOfflineCard}>
+                <View style={styles.emergencyHeader}>
+                  <View style={styles.emergencyIcon}>
+                    <Ionicons name="medical-outline" size={20} color="#fff" />
+                  </View>
+                  <Text style={[styles.emergencyTitle, isArabic ? { textAlign: 'right' } : null]}>
+                    Emergency Information
+                  </Text>
+                </View>
+
+                <View style={styles.emergencyRows}>
+                  <View style={styles.emergencyRow}>
+                    <Text style={styles.emergencyLabel}>Trailhead Coordinates</Text>
+                    <Text style={styles.emergencyValue}>{trail.coordinates[0].toFixed(4)}, {trail.coordinates[1].toFixed(4)}</Text>
+                  </View>
+                  <View style={styles.emergencyRow}>
+                    <Text style={styles.emergencyLabel}>Nearest Access Road</Text>
+                    <Text style={styles.emergencyValue}>{offlinePack.accessRoute ? 'Saved offline' : 'Trailhead saved offline'}</Text>
+                  </View>
+                  <View style={styles.emergencyRow}>
+                    <Text style={styles.emergencyLabel}>Last Safety Update</Text>
+                    <Text style={styles.emergencyValue}>{formatLocalTime(offlineUpdatedAt)}</Text>
+                  </View>
+                </View>
+
+                <View style={styles.emergencyFooter}>
+                  <Ionicons name="lock-closed-outline" size={14} color="#1E7A46" />
+                  <Text style={styles.emergencyFooterText}>Offline safety data stored locally</Text>
+                </View>
+              </View>
+            </AnimatedBlock>
+          ) : null}
+
         </View>
       </ScrollView>
+      <Modal
+        visible={isOfflineModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setIsOfflineModalVisible(false)}
+      >
+        <View style={styles.offlineModalBackdrop}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => !isDownloadingOffline && setIsOfflineModalVisible(false)} />
+          <View style={styles.offlineModalCard}>
+            <View style={styles.offlineModalHandle} />
+            <View style={styles.offlineModalIcon}>
+              <Ionicons name="shield-checkmark-outline" size={24} color="#630E13" />
+            </View>
+            <Text style={styles.offlineModalTitle}>Offline Package Includes</Text>
+            <View style={styles.offlineModalList}>
+              {[
+                'Trail geometry',
+                'Elevation profile',
+                'Safety checkpoints',
+                'Danger zones nearby',
+                'Access route snapshot',
+                'Safety status snapshot',
+              ].map((item) => (
+                <View key={item} style={styles.offlineModalListItem}>
+                  <Ionicons name="checkmark-circle" size={17} color="#1E7A46" />
+                  <Text style={styles.offlineModalListText}>{item}</Text>
+                </View>
+              ))}
+            </View>
+            <Text style={styles.offlineModalEstimate}>Estimated size: 3.2 MB</Text>
+            <Pressable
+              style={[styles.offlineModalButton, isDownloadingOffline && styles.offlineDownloadButtonDisabled]}
+              onPress={handleDownloadOfflinePackage}
+              disabled={isDownloadingOffline}
+            >
+              {isDownloadingOffline ? (
+                <ActivityIndicator color="#fff" size="small" />
+              ) : (
+                <Ionicons name="download-outline" size={18} color="#fff" />
+              )}
+              <Text style={styles.offlineModalButtonText}>
+                {isDownloadingOffline ? 'Saving trail and safety data...' : 'Download Package'}
+              </Text>
+            </Pressable>
+            <Pressable style={styles.offlineModalCancel} onPress={() => setIsOfflineModalVisible(false)} disabled={isDownloadingOffline}>
+              <Text style={styles.offlineModalCancelText}>Not now</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
       <View style={[styles.stickyPlanTripWrap, { paddingBottom: Math.max(insets.bottom + 10, 18) }]}>
         {planTripButton}
       </View>
@@ -830,6 +1138,229 @@ const styles = StyleSheet.create({
   notFound: {
     padding: 16,
     color: '#2C2418',
+  },
+  offlineSafetyCard: {
+    borderRadius: 22,
+    padding: 15,
+    backgroundColor: '#FFF8F1',
+    borderWidth: 1,
+    borderColor: '#E8D9C7',
+    gap: 14,
+  },
+  offlineSafetyCardReady: {
+    backgroundColor: '#F2FAF3',
+    borderColor: '#B9DFC1',
+  },
+  offlineSafetyHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  offlineSafetyIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 16,
+    backgroundColor: '#F7EBE8',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  offlineSafetyIconReady: {
+    backgroundColor: '#E4F4E7',
+  },
+  offlineSafetyCopy: {
+    flex: 1,
+  },
+  offlineSafetyTitle: {
+    color: '#2C2418',
+    fontSize: 17,
+    fontWeight: '900',
+  },
+  offlineSafetySub: {
+    marginTop: 4,
+    color: '#6B5D4E',
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: '700',
+  },
+  offlineSafetyMeta: {
+    marginTop: 5,
+    color: '#1E7A46',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  offlineSnapshotGrid: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  offlineSnapshotItem: {
+    flex: 1,
+    borderRadius: 14,
+    padding: 11,
+    backgroundColor: 'rgba(255,255,255,0.75)',
+  },
+  offlineSnapshotValue: {
+    color: '#2C2418',
+    fontSize: 18,
+    fontWeight: '900',
+  },
+  offlineSnapshotLabel: {
+    marginTop: 3,
+    color: '#6B5D4E',
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  offlineDownloadButton: {
+    minHeight: 46,
+    borderRadius: 16,
+    backgroundColor: '#630E13',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  offlineDownloadButtonDisabled: {
+    opacity: 0.72,
+  },
+  offlineDownloadButtonText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  offlineModalBackdrop: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(18,4,8,0.46)',
+  },
+  offlineModalCard: {
+    margin: 16,
+    borderRadius: 26,
+    padding: 18,
+    backgroundColor: '#FFFEF9',
+  },
+  offlineModalHandle: {
+    alignSelf: 'center',
+    width: 42,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#E2D7C8',
+    marginBottom: 16,
+  },
+  offlineModalIcon: {
+    width: 50,
+    height: 50,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F7EBE8',
+  },
+  offlineModalTitle: {
+    marginTop: 14,
+    color: '#2C2418',
+    fontSize: 20,
+    fontWeight: '900',
+  },
+  offlineModalList: {
+    marginTop: 15,
+    gap: 10,
+  },
+  offlineModalListItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 9,
+  },
+  offlineModalListText: {
+    color: '#4A4131',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  offlineModalEstimate: {
+    marginTop: 18,
+    color: '#6B5D4E',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  offlineModalButton: {
+    marginTop: 14,
+    minHeight: 50,
+    borderRadius: 17,
+    backgroundColor: '#630E13',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  offlineModalButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  offlineModalCancel: {
+    minHeight: 42,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  offlineModalCancelText: {
+    color: '#6B5D4E',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  emergencyOfflineCard: {
+    borderRadius: 24,
+    padding: 16,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#D8E8D9',
+  },
+  emergencyHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 14,
+  },
+  emergencyIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#1E7A46',
+  },
+  emergencyTitle: {
+    flex: 1,
+    color: '#2C2418',
+    fontSize: 18,
+    fontWeight: '900',
+  },
+  emergencyRows: {
+    gap: 10,
+  },
+  emergencyRow: {
+    borderRadius: 15,
+    padding: 12,
+    backgroundColor: '#F5FAF6',
+  },
+  emergencyLabel: {
+    color: '#6B5D4E',
+    fontSize: 11,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
+  emergencyValue: {
+    marginTop: 5,
+    color: '#2C2418',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  emergencyFooter: {
+    marginTop: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+  },
+  emergencyFooterText: {
+    color: '#1E7A46',
+    fontSize: 12,
+    fontWeight: '900',
   },
   safetyCard: {
     borderRadius: 22,

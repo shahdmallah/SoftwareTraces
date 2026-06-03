@@ -12,7 +12,8 @@ type Envelope<T> = {
   };
 };
 
-export type ConversationContextType = 'direct' | 'meetup' | 'trail' | 'activity' | 'profile' | 'photo' | 'review';
+export type ConversationType = 'direct' | 'meetup' | 'trail' | 'activity' | 'safety';
+export type ConversationContextType = ConversationType | 'profile' | 'photo' | 'review';
 
 export type ConversationParticipant = {
   id: string;
@@ -39,7 +40,7 @@ export type Message = {
 
 export type Conversation = {
   id: string;
-  type: ConversationContextType;
+  type: ConversationType;
   title?: string | null;
   context?: ConversationContext | null;
   participants: ConversationParticipant[];
@@ -66,9 +67,10 @@ export type MessagesSocketHandlers = {
 
 function normalizeArrayResponse<T>(response: Envelope<T[]> | T[] | { conversations?: T[]; messages?: T[]; data?: T[] }) {
   if (Array.isArray(response)) return response;
-  if (Array.isArray(response.data)) return response.data;
-  if (Array.isArray(response.conversations)) return response.conversations;
-  if (Array.isArray(response.messages)) return response.messages;
+  const objectResponse = response as { conversations?: T[]; messages?: T[]; data?: T[] };
+  if (Array.isArray(objectResponse.data)) return objectResponse.data;
+  if (Array.isArray(objectResponse.conversations)) return objectResponse.conversations;
+  if (Array.isArray(objectResponse.messages)) return objectResponse.messages;
   return [];
 }
 
@@ -84,10 +86,51 @@ function normalizeMessage<T extends Record<string, unknown>>(payload: T): Messag
   };
 }
 
+function isConversationType(value: unknown): value is ConversationType {
+  return value === 'direct' || value === 'meetup' || value === 'trail' || value === 'activity' || value === 'safety';
+}
+
+function normalizeParticipant<T extends Record<string, unknown>>(payload: T): ConversationParticipant {
+  return {
+    id: String(payload.id ?? payload.user_id ?? ''),
+    full_name: String(payload.full_name ?? ''),
+    avatar_url: (payload.avatar_url ?? null) as string | null,
+  };
+}
+
 function normalizeConversation<T extends Record<string, unknown>>(payload: T): Conversation {
-  const normalized = { ...payload } as Conversation;
-  if (payload.latest_message && typeof payload.latest_message === 'object') {
-    normalized.latest_message = normalizeMessage(payload.latest_message as Record<string, unknown>);
+  const latestMessage = payload.latest_message ?? payload.last_message;
+  const sourceContext = payload.context && typeof payload.context === 'object' ? (payload.context as ConversationContext) : null;
+  const contextType = payload.context_type ?? sourceContext?.type;
+
+  const normalized = {
+    ...payload,
+    id: String(payload.id ?? ''),
+    type: isConversationType(payload.type) ? payload.type : 'direct',
+    title: (payload.title ?? null) as string | null,
+    participants: Array.isArray(payload.participants)
+      ? payload.participants.map((participant) => normalizeParticipant(participant as Record<string, unknown>))
+      : [],
+    latest_message: latestMessage && typeof latestMessage === 'object'
+      ? normalizeMessage(latestMessage as Record<string, unknown>)
+      : null,
+    latest_message_at: String(payload.latest_message_at ?? payload.updated_at ?? ''),
+    unread_count: Number(payload.unread_count ?? 0),
+    context: contextType
+      ? {
+          type: String(contextType) as ConversationContextType,
+          id: (payload.context_id ?? null) as string | null,
+          title: (payload.title ?? null) as string | null,
+          subtitle: null,
+        }
+      : null,
+  } as Conversation;
+
+  if (sourceContext) {
+    normalized.context = {
+      ...(normalized.context ?? {}),
+      ...sourceContext,
+    };
   }
   return normalized;
 }
@@ -111,12 +154,16 @@ export async function listConversations(params: { page?: number; limit?: number 
 
 export async function startConversation(input: StartConversationInput) {
   const participantIds = input.participant_ids ?? (input.recipient_id ? [input.recipient_id] : []);
+  const type = isConversationType(input.type) ? input.type : 'direct';
+  const contextType = input.context?.type ?? (input.type && !isConversationType(input.type) ? input.type : undefined);
   const response = await apiRequest<Envelope<Conversation> | Conversation>('/api/messages/conversations', {
     method: 'POST',
     body: JSON.stringify({
-      ...input,
+      type,
       participant_ids: participantIds,
-      recipient_id: input.recipient_id ?? participantIds[0],
+      context_type: contextType,
+      context_id: input.context?.id,
+      title: input.context?.title,
     }),
   });
   return normalizeConversation(normalizeObjectResponse(response) as Record<string, unknown>);

@@ -129,12 +129,13 @@ export function ActivityShareScreen() {
     if (!draft) return;
 
     try {
-      const note = draft.postCaption?.trim() || draft.review.trim() || 'Private hike post';
+      const note = draft.postCaption?.trim() || (draft.reviewSkipped ? '' : draft.review.trim()) || 'Private hike post';
 
       if (draft.activityId) {
         await shareActivityPost(draft.activityId, {
           visibility: 'private',
           caption: note,
+          reviewId: draft.reviewId,
         });
       } else {
         saveJournalEntry({
@@ -142,7 +143,7 @@ export function ActivityShareScreen() {
           trail: draft.trailName,
           note,
           date: draft.completedAtIso,
-          photoUris: draft.postPhotoUris ?? draft.photoUris,
+          photoUris: draft.postPhotoUris?.length ? draft.postPhotoUris : draft.photoUris,
         });
       }
     } catch (error) {
@@ -166,9 +167,11 @@ export function ActivityShareScreen() {
   };
 
   if (draft) {
-    const reviewPhotos = draft.reviewPhotoUris ?? draft.photoUris;
-    const postPhotos = draft.postPhotoUris ?? draft.photoUris;
-    const postCaption = draft.postCaption?.trim() || draft.review;
+    const reviewSkipped = draft.reviewSkipped || draft.rating <= 0;
+    const postSkipped = draft.postSkipped === true;
+    const reviewPhotos = reviewSkipped ? [] : draft.reviewPhotoUris ?? draft.photoUris;
+    const postPhotos = postSkipped ? [] : draft.postPhotoUris?.length ? draft.postPhotoUris : draft.photoUris;
+    const postCaption = draft.postCaption?.trim() || (reviewSkipped ? '' : draft.review);
     const heroPhoto = postPhotos[0] ?? reviewPhotos[0] ?? '';
     const region = isArabic ? draft.regionAr ?? draft.region : draft.region;
     const completedLabel = formatCompletionDate(draft.completedAtIso, isArabic);
@@ -213,26 +216,28 @@ export function ActivityShareScreen() {
             />
           ) : null}
 
-          <ReviewSummary
-            rating={draft.rating}
-            reviewText={draft.review}
-            isArabic={isArabic}
-            isOwner={isOwnDraft}
-            ownerName={publisherName}
-          />
+          {reviewSkipped ? null : (
+            <ReviewSummary
+              rating={draft.rating}
+              reviewText={draft.review}
+              isArabic={isArabic}
+              isOwner={isOwnDraft}
+              ownerName={publisherName}
+            />
+          )}
 
           <PhotoGalleryStrip
-            photoUris={reviewPhotos}
+            photoUris={reviewPhotos.length ? reviewPhotos : postPhotos}
             isArabic={isArabic}
             isOwner={isOwnDraft}
             ownerName={publisherName}
           />
 
-          {isOwnDraft ? (
+          {isOwnDraft && !postSkipped ? (
             <SharePreviewCard
               trailName={isArabic ? draft.trailNameAr ?? draft.trailName : draft.trailName}
               heroUri={heroPhoto || draft.trailImage || ''}
-              rating={draft.rating}
+              rating={reviewSkipped ? undefined : draft.rating}
               reviewExcerpt={postCaption}
               durationMs={draft.durationMs}
               isArabic={isArabic}

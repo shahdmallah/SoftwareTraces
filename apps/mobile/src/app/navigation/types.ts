@@ -20,7 +20,7 @@ export type RootStackParamList = {
     participantId?: string;
     participantName?: string;
     participantAvatar?: string | null;
-    contextType?: 'direct' | 'meetup' | 'trail' | 'activity' | 'profile' | 'photo' | 'review';
+    contextType?: 'direct' | 'meetup' | 'trail' | 'activity' | 'safety' | 'profile' | 'photo' | 'review';
     contextId?: string;
     contextTitle?: string;
     contextSubtitle?: string;
@@ -58,7 +58,7 @@ export type RootStackParamList = {
 export type AppTabParamList = {
   Explore: undefined;
   Saved: undefined;
-  Map: { selectedTrailId?: string } | undefined;
+  Map: { selectedTrailId?: string; mode?: 'singleTrail' } | undefined;
   Activity: undefined;
   Profile: undefined;
 };

@@ -89,6 +89,14 @@ function toLineFeature(coordinates: [number, number][] | null): FeatureCollectio
 }
 
 function buildOfflineTrail(map: OfflineMapPack): Trail {
+  if (map.trail) {
+    return {
+      ...map.trail,
+      coordinates: map.coordinates ?? map.trail.coordinates,
+      routeCoordinates: map.routeCoordinates?.length ? map.routeCoordinates : map.trail.routeCoordinates,
+    };
+  }
+
   return {
     id: map.trailId,
     name: map.trailName,
@@ -243,9 +251,13 @@ export function MapScreen() {
   const insets = useSafeAreaInsets();
   const { t, language } = useLanguage();
   const isArabic = language === 'ar';
+  const isSingleTrailMode = route.params?.mode === 'singleTrail';
 
   const canRenderMapbox = Boolean(Mapbox && !mapboxLoadError);
-  const trailCountLabel = useMemo(() => `${nearbyTrails.length} trails`, [nearbyTrails.length]);
+  const trailCountLabel = useMemo(
+    () => (isSingleTrailMode ? 'Offline map' : `${nearbyTrails.length} trails`),
+    [isSingleTrailMode, nearbyTrails.length],
+  );
   const selectedTrailRoute = useMemo(() => {
     if (!selectedTrail) {
       return null;
@@ -404,6 +416,10 @@ export function MapScreen() {
   }, [fetchSafetyAlertsNear, userLocation]);
 
   const scheduleBubbleFetch = useCallback(() => {
+    if (isSingleTrailMode) {
+      return;
+    }
+
     if (!canRenderMapbox) {
       return;
     }
@@ -415,9 +431,13 @@ export function MapScreen() {
     bubbleFetchTimerRef.current = setTimeout(() => {
       void fetchBubblesForViewport();
     }, BUBBLE_FETCH_DEBOUNCE_MS);
-  }, [canRenderMapbox, fetchBubblesForViewport]);
+  }, [canRenderMapbox, fetchBubblesForViewport, isSingleTrailMode]);
 
   const scheduleSafetyFetch = useCallback(() => {
+    if (isOfflineMode) {
+      return;
+    }
+
     if (!canRenderMapbox && !userLocation) {
       return;
     }
@@ -429,7 +449,7 @@ export function MapScreen() {
     safetyFetchTimerRef.current = setTimeout(() => {
       void fetchSafetyAlertsForViewport();
     }, SAFETY_FETCH_DEBOUNCE_MS);
-  }, [canRenderMapbox, fetchSafetyAlertsForViewport, userLocation]);
+  }, [canRenderMapbox, fetchSafetyAlertsForViewport, isOfflineMode, userLocation]);
 
   const openBubbleGallery = useCallback(async (bubble: MapBubble) => {
     if (bubble.media_ids.length === 0 && !bubble.photos?.length) {
@@ -464,6 +484,37 @@ export function MapScreen() {
       setLocationMessage(null);
 
       try {
+        if (isSingleTrailMode && route.params?.selectedTrailId) {
+          const offlinePack = (await getOfflineMapPacks()).find((pack) => pack.trailId === route.params?.selectedTrailId);
+
+          if (offlinePack) {
+            const trail = buildOfflineTrail(offlinePack);
+            const offlineSafetyAlerts = offlinePack.safetyAlerts ?? [];
+            if (!cancelled) {
+              setUserLocation(null);
+              setNearbyTrails([trail]);
+              setSelectedTrail(trail);
+              setSafetyAlerts(offlineSafetyAlerts);
+              setSelectedSafetyAlert(offlineSafetyAlerts[0] ?? null);
+              setSafetyError(null);
+              setIsOfflineMode(true);
+            }
+            return;
+          }
+
+          const trail = await getTrailById(route.params.selectedTrailId);
+          if (!cancelled) {
+            setUserLocation(null);
+            setNearbyTrails([trail]);
+            setSelectedTrail(trail);
+            setSafetyAlerts([]);
+            setSelectedSafetyAlert(null);
+            setSafetyError(null);
+            setIsOfflineMode(false);
+          }
+          return;
+        }
+
         const permission = await Location.requestForegroundPermissionsAsync();
 
         if (permission.status !== 'granted') {
@@ -502,7 +553,7 @@ export function MapScreen() {
     return () => {
       cancelled = true;
     };
-  }, [fetchSafetyAlertsNear]);
+  }, [fetchSafetyAlertsNear, isSingleTrailMode, route.params?.selectedTrailId]);
 
   useEffect(() => {
     if (!canRenderMapbox) {
@@ -598,8 +649,16 @@ export function MapScreen() {
 
         if (!cancelled && offlinePack) {
           const trail = buildOfflineTrail(offlinePack);
+          const offlineSafetyAlerts = offlinePack.safetyAlerts ?? [];
+          if (safetyFetchTimerRef.current) {
+            clearTimeout(safetyFetchTimerRef.current);
+            safetyFetchTimerRef.current = null;
+          }
           setSelectedTrail(trail);
           setNearbyTrails((current) => (current.some((item) => item.id === trail.id) ? current : [trail, ...current]));
+          setSafetyAlerts(offlineSafetyAlerts);
+          setSelectedSafetyAlert(offlineSafetyAlerts[0] ?? null);
+          setSafetyError(null);
           setFetchError(null);
           setIsOfflineMode(true);
         }
@@ -720,7 +779,7 @@ export function MapScreen() {
             </Mapbox.ShapeSource>
           ) : null}
 
-          {mapBubbles.filter((bubble) => Number.isFinite(bubble.lat) && Number.isFinite(bubble.lng)).map((bubble, index) => {
+          {!isSingleTrailMode && mapBubbles.filter((bubble) => Number.isFinite(bubble.lat) && Number.isFinite(bubble.lng)).map((bubble, index) => {
             const size = bubbleMarkerSize(bubble.count);
             const outlineColor = bubbleOutlineColor(bubble.count);
             const previewUri = bubblePreviewUri(bubble);
@@ -841,8 +900,9 @@ export function MapScreen() {
             <Ionicons name="warning-outline" size={30} color="#D4A843" />
             <Text style={styles.fallbackTitle}>Mapbox native build required</Text>
             <Text style={styles.fallbackText}>
-              This screen is loading the JS code, but the installed app binary does not include the
-              native Mapbox module yet.
+              {isOfflineMode
+                ? 'Base map may require internet. Trail and safety data are still available offline.'
+                : 'This screen is loading the JS code, but the installed app binary does not include the native Mapbox module yet.'}
             </Text>
             <Text style={styles.fallbackCode}>
               {mapboxLoadError ?? 'Mapbox native code not available.'}
@@ -874,7 +934,9 @@ export function MapScreen() {
           <View style={styles.tokenWarning}>
             <Ionicons name="alert-circle-outline" size={16} color="#D4A843" />
             <Text style={[styles.tokenWarningText, isArabic ? rtlText : ltrText]}>
-              Add `EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN` to load your Mapbox tiles.
+              {isOfflineMode
+                ? 'Base map may require internet. Trail and safety data are still available offline.'
+                : 'Add `EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN` to load your Mapbox tiles.'}
             </Text>
           </View>
         ) : null}
@@ -912,9 +974,18 @@ export function MapScreen() {
               <Ionicons name="warning-outline" size={17} color="#fff" />
             </View>
             <View style={styles.safetyBannerCopy}>
-              <Text style={styles.safetyBannerTitle}>Safety alert</Text>
+              <Text style={styles.safetyBannerTitle}>
+                {selectedSafetyAlert.kind === 'location' && selectedSafetyAlert.location_type.includes('checkpoint') ? 'Checkpoint Status: Open' : 'Safety alert'}
+              </Text>
               <Text style={[styles.safetyBannerText, isArabic ? rtlText : ltrText]} numberOfLines={2}>
                 {safetyAlertWarning(selectedSafetyAlert)}
+              </Text>
+              <Text style={[styles.safetyBannerMeta, isArabic ? rtlText : ltrText]}>
+                {isOfflineMode
+                  ? 'Confidence: High · Based on saved offline safety data'
+                  : selectedSafetyAlert.kind === 'incident'
+                  ? 'Confidence: Low · No recent community agreement yet'
+                  : 'Confidence: Medium · Review recent community reports'}
               </Text>
             </View>
             <Text style={styles.safetyBannerDistance}>{formatSafetyDistance(selectedSafetyAlert.distance_meters)}</Text>
@@ -940,7 +1011,55 @@ export function MapScreen() {
       </AnimatedBlock>
 
       <AnimatedBlock delay={140} style={[styles.bottomOverlay, { paddingBottom: Math.max(insets.bottom + 14, 24) }]}>
-        {isLoading ? (
+        {isSingleTrailMode ? (
+          selectedTrail ? (
+            <View style={styles.singleTrailPanel}>
+              <View style={[styles.singleTrailHeader, isArabic ? rtlRow : ltrRow]}>
+                <View style={styles.singleTrailTitleBlock}>
+                  <Text style={[styles.singleTrailEyebrow, isArabic ? rtlText : ltrText]}>Offline Safety Map</Text>
+                  <Text style={[styles.singleTrailName, isArabic ? rtlText : ltrText]}>{isArabic ? selectedTrail.nameAr || selectedTrail.name : selectedTrail.name}</Text>
+                  {selectedTrail.region ? (
+                    <Text style={[styles.singleTrailRegion, isArabic ? rtlText : ltrText]}>{isArabic ? selectedTrail.regionAr || selectedTrail.region : selectedTrail.region}</Text>
+                  ) : null}
+                </View>
+                <View style={styles.singleTrailBadge}>
+                  <Ionicons name="cloud-done-outline" size={15} color="#1E7A46" />
+                  <Text style={styles.singleTrailBadgeText}>Offline</Text>
+                </View>
+              </View>
+
+              <View style={styles.singleTrailStats}>
+                <View style={styles.statPill}>
+                  <Ionicons name="resize-outline" size={14} color="#D4A843" />
+                  <Text style={styles.statPillText}>{selectedTrail.distance.toFixed(1)} km</Text>
+                </View>
+                <View style={styles.statPill}>
+                  <Ionicons name="time-outline" size={14} color="#7DB3CC" />
+                  <Text style={styles.statPillText}>{selectedTrail.duration || 'Saved route'}</Text>
+                </View>
+                <View style={styles.statPill}>
+                  <Ionicons name="shield-checkmark-outline" size={14} color="#1E7A46" />
+                  <Text style={styles.statPillText}>{isOfflineMode ? 'Safety saved' : 'Trail loaded'}</Text>
+                </View>
+              </View>
+
+              <View style={[styles.cardActions, isArabic ? rtlRow : ltrRow]}>
+                <Pressable style={styles.secondaryButton} onPress={handleCenterMap}>
+                  <Ionicons name="locate-outline" size={16} color="#2C2418" />
+                  <Text style={styles.secondaryButtonText}>Center</Text>
+                </Pressable>
+                <Pressable style={styles.detailButton} onPress={handleTrailDetail}>
+                  <Ionicons name="information-circle-outline" size={16} color="#fff" />
+                  <Text style={styles.detailButtonText}>{t('viewDetails')}</Text>
+                </Pressable>
+              </View>
+            </View>
+          ) : (
+            <View style={styles.stateCard}>
+              <Text style={styles.stateTitle}>Loading offline map...</Text>
+            </View>
+          )
+        ) : isLoading ? (
           <View style={styles.stateCard}>
             <Text style={styles.stateTitle}>Finding trails near you...</Text>
           </View>
@@ -1372,6 +1491,13 @@ const styles = StyleSheet.create({
     lineHeight: 17,
     fontWeight: '700',
   },
+  safetyBannerMeta: {
+    marginTop: 4,
+    color: '#1E7A46',
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: '900',
+  },
   safetyBannerDistance: {
     color: '#630E13',
     fontSize: 12,
@@ -1509,6 +1635,64 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 8 },
     shadowRadius: 18,
     elevation: 8,
+  },
+  singleTrailPanel: {
+    padding: 16,
+    borderRadius: 24,
+    backgroundColor: 'rgba(234,226,204,0.97)',
+    shadowColor: '#000',
+    shadowOpacity: 0.18,
+    shadowOffset: { width: 0, height: 8 },
+    shadowRadius: 18,
+    elevation: 8,
+  },
+  singleTrailHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  singleTrailTitleBlock: {
+    flex: 1,
+  },
+  singleTrailEyebrow: {
+    color: '#1E7A46',
+    fontSize: 11,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
+  singleTrailName: {
+    marginTop: 4,
+    color: '#2C2418',
+    fontSize: 20,
+    lineHeight: 25,
+    fontWeight: '900',
+  },
+  singleTrailRegion: {
+    marginTop: 4,
+    color: '#6B5D4E',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  singleTrailBadge: {
+    minHeight: 34,
+    borderRadius: 17,
+    paddingHorizontal: 11,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#FFFFFF',
+  },
+  singleTrailBadgeText: {
+    color: '#1E7A46',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  singleTrailStats: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 14,
   },
   trailCardHeader: {
     flexDirection: 'row',

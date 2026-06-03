@@ -57,7 +57,7 @@ function capturedAtForPhoto(draft: TrailCompletionDraft, uri: string) {
 }
 
 async function uploadRecapPhotosToActivity(draft: TrailCompletionDraft, caption: string) {
-  if (!draft.activityId || draft.postVisibility === 'private') {
+  if (!draft.activityId || draft.postVisibility === 'private' || draft.postSkipped) {
     return;
   }
 
@@ -88,6 +88,7 @@ async function uploadRecapPhotosToActivity(draft: TrailCompletionDraft, caption:
 
 export function ShareActions({ draft, isArabic, navigation, isOwner = true, ownerName, delay = 400, onSaveJournal }: Props) {
   const displayName = ownerName?.trim() || draft.publisherName?.trim() || 'Trail friend';
+  const canShareRecap = isOwner && !draft.postSkipped;
   const saveJournal =
     onSaveJournal ??
     (() => {
@@ -98,17 +99,20 @@ export function ShareActions({ draft, isArabic, navigation, isOwner = true, owne
       );
     });
   const shareRecap = async () => {
-    if (!isOwner) {
+    if (!canShareRecap) {
       return;
     }
 
     const dur = formatCompletionDuration(draft.durationMs, isArabic);
-    const postCaption = draft.postCaption?.trim() || draft.review.trim();
+    const postCaption = draft.postCaption?.trim() || (draft.reviewSkipped ? '' : draft.review.trim());
     const postPhotos = draft.postPhotoUris?.length ? draft.postPhotoUris : draft.photoUris;
     const postVisibility = draft.postVisibility ?? 'public';
+    const captionLine = postCaption ? `\n${postCaption.slice(0, 280)}` : '';
     const message = isArabic
       ? `أكملتُ «${draft.trailName}» على Traces — ${dur}\n${postCaption.slice(0, 280)}`
       : `Finished "${draft.trailName}" on Traces — ${dur}\n${postCaption.slice(0, 280)}`;
+
+    const normalizedMessage = captionLine ? message : message.trim();
 
     const item = {
       id: `local-recap-${Date.now()}`,
@@ -124,8 +128,8 @@ export function ShareActions({ draft, isArabic, navigation, isOwner = true, owne
       trailNameAr: draft.trailName,
       regionEn: isArabic ? 'Your trail' : 'Your route',
       regionAr: isArabic ? 'رحلتك' : 'Your route',
-      captionEn: postCaption || message,
-      captionAr: postCaption || message,
+      captionEn: postCaption || normalizedMessage,
+      captionAr: postCaption || normalizedMessage,
       timeEn: 'Just now',
       timeAr: 'الآن',
       likes: 1,
@@ -135,11 +139,14 @@ export function ShareActions({ draft, isArabic, navigation, isOwner = true, owne
 
     if (draft.activityId) {
       try {
-        await uploadRecapPhotosToActivity(draft, postCaption || message);
-        await shareActivityPost(draft.activityId, {
-          visibility: postVisibility,
-          caption: postCaption || message,
-        });
+        await uploadRecapPhotosToActivity(draft, postCaption || normalizedMessage);
+        if (!draft.activityPostId) {
+          await shareActivityPost(draft.activityId, {
+            visibility: postVisibility,
+            caption: postCaption || normalizedMessage,
+            reviewId: draft.reviewId,
+          });
+        }
       } catch (error) {
         Alert.alert(
           isArabic ? 'طھط¹ط°ط± ط§ظ„ظ†ط´ط± ط¹ظ„ظ‰ ط§ظ„ط®ط§ط¯ظ…' : 'Backend post failed',
@@ -155,7 +162,7 @@ export function ShareActions({ draft, isArabic, navigation, isOwner = true, owne
     addLocalFeedItem(item);
 
     try {
-      await Share.share({ message, title: draft.trailName });
+      await Share.share({ message: normalizedMessage, title: draft.trailName });
     } catch {
       /* user cancelled */
     }
@@ -182,12 +189,14 @@ export function ShareActions({ draft, isArabic, navigation, isOwner = true, owne
       <View style={styles.grid}>
         {isOwner ? (
           <>
-            <ActionChip
-              icon="share-outline"
-              label={isArabic ? 'مشاركة الملخص' : 'Share recap'}
-              onPress={shareRecap}
-              isArabic={isArabic}
-            />
+            {canShareRecap ? (
+              <ActionChip
+                icon="share-outline"
+                label={isArabic ? 'مشاركة الملخص' : 'Share recap'}
+                onPress={shareRecap}
+                isArabic={isArabic}
+              />
+            ) : null}
             <ActionChip
               icon="people-outline"
               label={isArabic ? 'ادعُ أصدقاءك لاحقاً' : 'Invite friends next time'}

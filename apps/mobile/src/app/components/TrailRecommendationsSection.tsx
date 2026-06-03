@@ -1,5 +1,6 @@
 import React from 'react';
 import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 
 import { getTrailRecommendations, type TrailRecommendation } from '../api/recommendationsApi';
@@ -129,43 +130,45 @@ export function TrailRecommendationsSection({
   const [isLoading, setIsLoading] = React.useState(false);
   const [failed, setFailed] = React.useState(false);
 
-  React.useEffect(() => {
-    if (!isAuthenticated) {
-      setRecommendations([]);
-      setIsLoading(false);
-      setFailed(false);
-      return;
-    }
-
-    let cancelled = false;
-
-    const loadRecommendations = async () => {
-      setIsLoading(true);
-      setFailed(false);
-
-      try {
-        const nextRecommendations = await getTrailRecommendations();
-        if (!cancelled) {
-          setRecommendations(nextRecommendations);
-        }
-      } catch {
-        if (!cancelled) {
-          setRecommendations([]);
-          setFailed(true);
-        }
-      } finally {
-        if (!cancelled) {
-          setIsLoading(false);
-        }
+  useFocusEffect(
+    React.useCallback(() => {
+      if (!isAuthenticated) {
+        setRecommendations([]);
+        setIsLoading(false);
+        setFailed(false);
+        return undefined;
       }
-    };
 
-    void loadRecommendations();
+      let cancelled = false;
 
-    return () => {
-      cancelled = true;
-    };
-  }, [isAuthenticated]);
+      const loadRecommendations = async () => {
+        setIsLoading(true);
+        setFailed(false);
+
+        try {
+          const nextRecommendations = await getTrailRecommendations();
+          if (!cancelled) {
+            setRecommendations(nextRecommendations);
+          }
+        } catch {
+          if (!cancelled) {
+            setRecommendations([]);
+            setFailed(true);
+          }
+        } finally {
+          if (!cancelled) {
+            setIsLoading(false);
+          }
+        }
+      };
+
+      void loadRecommendations();
+
+      return () => {
+        cancelled = true;
+      };
+    }, [isAuthenticated]),
+  );
 
   const visibleRecommendations = React.useMemo(() => recommendations.slice(0, 8), [recommendations]);
 

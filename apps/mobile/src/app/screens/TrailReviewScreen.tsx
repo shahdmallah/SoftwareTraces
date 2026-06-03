@@ -75,6 +75,7 @@ export function TrailReviewScreen() {
   const [conditionSeverity, setConditionSeverity] = useState<ConditionSeverity>('low');
   const [conditionDescription, setConditionDescription] = useState('');
   const [step, setStep] = useState<FinishStep>('post');
+  const [postSkipped, setPostSkipped] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
 
@@ -159,7 +160,19 @@ export function TrailReviewScreen() {
     navigation.goBack();
   };
 
-  const handleSubmit = async () => {
+  const handleSkipPost = () => {
+    setPostSkipped(true);
+    setPostCaption('');
+    setPostPhotoUris([]);
+    setStep('review');
+  };
+
+  const handleContinueToReview = () => {
+    setPostSkipped(false);
+    setStep('review');
+  };
+
+  const handleSubmit = async ({ skipReview = false }: { skipReview?: boolean } = {}) => {
     if (!finishedSession?.trailId) {
       navigation.navigate('AppTabs', { screen: 'Explore' });
       return;
@@ -169,13 +182,15 @@ export function TrailReviewScreen() {
 
     try {
       await saveBookmark({ trailId: finishedSession.trailId, type: 'completed' });
+      let reviewId: string | undefined;
 
-      if (rating > 0) {
-        await addTrailReview(finishedSession.trailId, {
+      if (!skipReview && rating > 0) {
+        const reviewResponse = await addTrailReview(finishedSession.trailId, {
           rating,
           content: review.trim() || 'Completed this trail and shared a quick review from the hike.',
           photos: reviewPhotoUris.map(toReactNativeFile),
         });
+        reviewId = reviewResponse.data.id;
       }
 
       if (shouldReportCondition) {
@@ -188,6 +203,10 @@ export function TrailReviewScreen() {
 
       const trimmedReview = review.trim();
       const trimmedPostCaption = postCaption.trim();
+      const savedReview = skipReview ? '' : trimmedReview;
+      const savedPostCaption = postSkipped ? '' : trimmedPostCaption;
+      const savedPostPhotos = postSkipped ? [] : postPhotoUris;
+      const savedReviewPhotos = skipReview ? [] : reviewPhotoUris;
       const draft: TrailCompletionDraft = {
         activityId: finishedSession.activityId,
         trailId: finishedSession.trailId,
@@ -196,18 +215,21 @@ export function TrailReviewScreen() {
         trailImage: finishedSession.trail?.image,
         region: finishedSession.trail?.region,
         regionAr: finishedSession.trail?.regionAr,
-        rating,
-        review: trimmedReview,
-        reviewPhotoUris,
-        postCaption: trimmedPostCaption,
-        postPhotoUris,
+        rating: skipReview ? 0 : rating,
+        review: savedReview,
+        reviewId,
+        reviewSkipped: skipReview,
+        reviewPhotoUris: savedReviewPhotos,
+        postSkipped,
+        postCaption: savedPostCaption,
+        postPhotoUris: savedPostPhotos,
         activityPhotoTags: finishedSession.sessionPhotos.map((photo) => ({
           uri: photo.uri,
           coordinate: photo.coordinate,
           capturedAt: photo.capturedAt,
         })),
         postVisibility: visibility,
-        photoUris: postPhotoUris,
+        photoUris: savedPostPhotos.length ? savedPostPhotos : savedReviewPhotos,
         completedAtIso: new Date().toISOString(),
         durationMs: finishedSession.elapsedMs,
         stepCount: finishedSession.stepCount,
@@ -217,22 +239,49 @@ export function TrailReviewScreen() {
         trailCoordinates: finishedSession.trail?.coordinates,
       };
 
-      if (visibility !== 'private') {
+      if (postSkipped) {
         clearFinishedSession();
-        navigation.replace('ActivityShare', { draft });
+        navigation.replace('TrailDetail', { trailId: finishedSession.trailId });
+        Alert.alert(
+          'Hike saved',
+          skipReview
+            ? 'Your completed hike was saved without creating a post or review.'
+            : 'Your review was saved without creating an Activity post.',
+        );
+        return;
+      }
+
+      if (visibility !== 'private') {
+        let nextDraft = draft;
+
+        if (draft.activityId) {
+          const postResponse = await shareActivityPost(draft.activityId, {
+            visibility,
+            caption: savedPostCaption || savedReview || 'Completed this hike',
+            reviewId: draft.reviewId,
+          });
+          nextDraft = {
+            ...draft,
+            activityPostId: postResponse.data.post_id,
+          };
+        }
+
+        clearFinishedSession();
+        navigation.replace('ActivityShare', { draft: nextDraft });
       } else {
         if (draft.activityId) {
           await shareActivityPost(draft.activityId, {
             visibility: 'private',
-            caption: trimmedPostCaption || trimmedReview || 'Private hike post',
+            caption: savedPostCaption || savedReview || 'Private hike post',
+            reviewId: draft.reviewId,
           });
         } else {
           saveJournalEntry({
             type: 'journal',
             trail: trailName,
-            note: trimmedPostCaption || trimmedReview || 'Private hike post',
+            note: savedPostCaption || savedReview || 'Private hike post',
             date: draft.completedAtIso,
-            photoUris: postPhotoUris,
+            photoUris: savedPostPhotos,
           });
         }
         clearFinishedSession();
@@ -387,8 +436,12 @@ export function TrailReviewScreen() {
               />
             </View>
 
-            <Pressable style={styles.submitButton} onPress={() => setStep('review')}>
+            <Pressable style={styles.submitButton} onPress={handleContinueToReview}>
               <Text style={styles.submitButtonText}>Continue to review</Text>
+            </Pressable>
+            <Pressable style={styles.secondaryButton} onPress={handleSkipPost}>
+              <Ionicons name="play-skip-forward-outline" size={17} color="#630E13" />
+              <Text style={styles.secondaryButtonText}>Skip post</Text>
             </Pressable>
           </>
         ) : (
@@ -431,8 +484,16 @@ export function TrailReviewScreen() {
               onDescriptionChange={setConditionDescription}
             />
 
-            <Pressable style={[styles.submitButton, isSaving && styles.submitButtonDisabled]} onPress={handleSubmit} disabled={isSaving}>
+            <Pressable style={[styles.submitButton, isSaving && styles.submitButtonDisabled]} onPress={() => void handleSubmit()} disabled={isSaving}>
               {isSaving ? <ActivityIndicator color="#fff" /> : <Text style={styles.submitButtonText}>Save hike</Text>}
+            </Pressable>
+            <Pressable
+              style={[styles.secondaryButton, isSaving && styles.submitButtonDisabled]}
+              onPress={() => void handleSubmit({ skipReview: true })}
+              disabled={isSaving}
+            >
+              <Ionicons name="play-skip-forward-outline" size={17} color="#630E13" />
+              <Text style={styles.secondaryButtonText}>Skip review</Text>
             </Pressable>
           </>
         )}
@@ -1031,6 +1092,23 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 15,
     fontWeight: '800',
+  },
+  secondaryButton: {
+    marginTop: 12,
+    minHeight: 50,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 8,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E7D8C3',
+  },
+  secondaryButtonText: {
+    color: '#630E13',
+    fontSize: 14,
+    fontWeight: '900',
   },
   emptyState: {
     flex: 1,

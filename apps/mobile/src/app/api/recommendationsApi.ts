@@ -4,6 +4,10 @@ type Envelope<T> = {
   data: T;
 };
 
+function createClientRequestId() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
 export type TrailRecommendation = {
   trail_id: string;
   name: string;
@@ -21,7 +25,16 @@ export type TrailRecommendation = {
 };
 
 export async function getTrailRecommendations() {
-  const response = await apiRequest<Envelope<TrailRecommendation[]>>('/api/recommendations/trails');
+  const response = await apiRequest<Envelope<TrailRecommendation[]>>(
+    '/api/recommendations/trails',
+    {
+      cache: 'no-store',
+      headers: {
+        'Cache-Control': 'no-store',
+      },
+    },
+    { _request_id: createClientRequestId() },
+  );
 
   return response.data.map((recommendation) => ({
     ...recommendation,

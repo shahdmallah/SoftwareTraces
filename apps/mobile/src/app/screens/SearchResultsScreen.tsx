@@ -41,6 +41,7 @@ export function SearchResultsScreen() {
 
       setIsLoading(true);
       setErrorMessage(null);
+      setResult(null);
 
       try {
         const nextResult = await searchOrGenerateTrail(query);
