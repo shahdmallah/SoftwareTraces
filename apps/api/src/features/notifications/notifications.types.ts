@@ -8,6 +8,7 @@ export type NotificationType =
   | "meetup_join"
   | "meetup_update"
   | "danger_alert"
+  | "sos_alert"
   | "system";
 
 export interface NotificationActor {
@@ -50,7 +51,11 @@ export interface PushToken {
   user_id: string;
   token: string;
   platform: "ios" | "android" | "web";
+  provider?: "expo" | "fcm" | "apns" | "webpush";
   device_id: string | null;
+  app_version?: string | null;
+  last_seen_at?: string | null;
+  is_active?: boolean;
   created_at: string;
   updated_at: string | null;
 }

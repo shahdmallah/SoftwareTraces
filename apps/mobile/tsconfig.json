@@ -4,6 +4,7 @@
     "jsx": "react-jsx",
     "types": ["react", "react-native"],
     "baseUrl": "./src",
+    "ignoreDeprecations": "6.0",
     "paths": {
       "@/*": ["./*"],
       "@traces/shared-types": ["../../packages/shared-types/src"],

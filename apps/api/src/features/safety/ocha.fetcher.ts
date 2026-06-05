@@ -216,9 +216,9 @@ async function insertIncident(incident: MappedIncident): Promise<boolean> {
     `INSERT INTO safety_incidents (
        incident_type, severity, latitude, longitude,
        description, headline, reported_at, expires_at,
-       source, source_name, source_url, confirmed_count
+       source, source_name, source_url, confirmed_count, moderation_status
      )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'ocha', 'OCHA oPt', $9, 1)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'ocha', 'OCHA oPt', $9, 1, 'active')
      ON CONFLICT DO NOTHING`,
     [
       incident.incident_type,

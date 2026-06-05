@@ -23,10 +23,13 @@ CREATE TABLE IF NOT EXISTS public.messages (
   conversation_id uuid NOT NULL REFERENCES public.conversations(id) ON DELETE CASCADE,
   sender_id uuid NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
   content text NOT NULL,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
   created_at timestamptz DEFAULT now(),
   edited_at timestamptz,
   deleted_at timestamptz
 );
+
+ALTER TABLE public.messages ADD COLUMN IF NOT EXISTS metadata jsonb NOT NULL DEFAULT '{}'::jsonb;
 
 CREATE INDEX IF NOT EXISTS idx_conversation_participants_user
 ON public.conversation_participants(user_id);
