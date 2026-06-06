@@ -9,6 +9,10 @@ export type NotificationType =
   | "meetup_update"
   | "danger_alert"
   | "sos_alert"
+  | "challenge_created"
+  | "challenge_invite"
+  | "challenge_completed"
+  | "badge_earned"
   | "system";
 
 export interface NotificationActor {

@@ -3,8 +3,11 @@ import express from "express";
 import helmet from "helmet";
 import cron from "node-cron";
 import achievementsRoutes from "./features/achievements/achievements.routes";
+import adminRoutes from "./features/admin/admin.routes";
 import activitiesRoutes from "./features/activities/activities.routes";
 import authRoutes from "./features/auth/auth.routes";
+import badgesRoutes from "./features/badges/badges.routes";
+import challengesRoutes from "./features/challenges/challenges.routes";
 import debugRoutes from "./features/debug/debug.routes";
 import healthRoutes from "./features/health/health.routes";
 import mediaRoutes from "./features/media/media.routes";
@@ -37,6 +40,9 @@ export function createApp() {
   });
 
   app.use("/api/auth", authRoutes);
+  app.use("/api/admin", adminRoutes);
+  app.use("/api/badges", badgesRoutes);
+  app.use("/api/challenges", challengesRoutes);
   app.use("/api/debug", debugRoutes);
   app.use("/api/trails", accessRoutes);
   app.use("/api/trails", trailsRoutes);

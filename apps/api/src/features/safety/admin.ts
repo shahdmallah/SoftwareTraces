@@ -3,23 +3,16 @@ import { pool } from "../../db/pool";
 
 function parseAdminIds(): Set<string> {
   return new Set(
-    String(process.env.SAFETY_ADMIN_USER_IDS ?? process.env.ADMIN_USER_IDS ?? "")
+    [process.env.ADMIN_USER_IDS, process.env.SAFETY_ADMIN_USER_IDS]
+      .join(",")
       .split(",")
       .map((value) => value.trim())
       .filter(Boolean)
   );
 }
 
-function profileLooksAdmin(profile: Record<string, unknown> | null | undefined): boolean {
-  if (!profile) {
-    return false;
-  }
-
-  return (
-    profile.is_admin === true ||
-    String(profile.role ?? "").toLowerCase() === "admin" ||
-    String(profile.user_role ?? "").toLowerCase() === "admin"
-  );
+function normalizeRole(value: unknown): string {
+  return String(value ?? "user").trim().toLowerCase();
 }
 
 export async function isAdminUser(userId: string): Promise<boolean> {
@@ -28,15 +21,16 @@ export async function isAdminUser(userId: string): Promise<boolean> {
   }
 
   try {
-    const result = await pool.query<{ profile: Record<string, unknown> | null }>(
-      `SELECT to_jsonb(p) AS profile
+    const result = await pool.query<{ role: string | null }>(
+      `SELECT COALESCE(p.role, 'user') AS role
        FROM profiles p
        WHERE p.user_id = $1::uuid
+          OR p.id = $1::uuid
        LIMIT 1`,
       [userId]
     );
 
-    return profileLooksAdmin(result.rows[0]?.profile);
+    return normalizeRole(result.rows[0]?.role) === "admin";
   } catch (error) {
     console.error("[safety.admin.isAdminUser] Admin lookup failed:", error);
     return false;

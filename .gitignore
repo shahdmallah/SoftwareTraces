@@ -10,3 +10,4 @@ apps/mobile/.expo
 apps/mobile/.env
 apps/api/.env
 firebase-service-account.json
+docs
