@@ -1,5 +1,10 @@
 {
   "android": {
     "package": "com.anonymous.traces"
+  },
+  "extra": {
+    "eas": {
+      "projectId": "f55b9de6-5d43-4a9a-bb1e-08c034fd9224"
+    }
   }
 }

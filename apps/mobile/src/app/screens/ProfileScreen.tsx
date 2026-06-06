@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   Image,
   Platform,
+  Modal,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
@@ -21,7 +22,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getMyAchievements, type UserAchievement } from '../api/achievementsApi';
 import { getMyActivities, type Activity } from '../api/activitiesApi';
 import { getProfile, getProfilePhotos, getProfileReviews, type Profile, type ProfilePhoto, type ProfileReview } from '../api/profilesApi';
-import { getSavedTrails, type Trail } from '../api/trailsApi';
+import { getFollowers, getFollowing, getMyFriends, type SocialProfile } from '../api/socialApi';
 
 const PROFILE_FONT = Platform.select({ ios: 'Avenir Next', android: 'sans-serif', default: 'System' }) as string;
 const PROFILE_FONT_MEDIUM = Platform.select({ ios: 'Avenir Next', android: 'sans-serif-medium', default: PROFILE_FONT }) as string;
@@ -381,6 +382,23 @@ function getAchievementProgress(achievement: UserAchievement): { percent: number
   };
 }
 
+function formatProfileCount(value: number | null | undefined): string {
+  const safeValue = Math.max(0, Number(value ?? 0));
+  if (!Number.isFinite(safeValue)) return '0';
+  if (safeValue >= 1000000) return `${(safeValue / 1000000).toFixed(safeValue >= 10000000 ? 0 : 1)}M`;
+  if (safeValue >= 1000) return `${(safeValue / 1000).toFixed(safeValue >= 10000 ? 0 : 1)}K`;
+  return String(Math.round(safeValue));
+}
+
+function getInitials(value: string): string {
+  return value
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? '')
+    .join('') || 'TR';
+}
+
 function buildProfileAchievements(backendAchievements: UserAchievement[]): ProfileAchievement[] {
   const byKey = new Map<string, UserAchievement>();
 
@@ -444,6 +462,7 @@ function buildProfileAchievements(backendAchievements: UserAchievement[]): Profi
 }
 
 type ProfileNavigationProp = StackNavigationProp<RootStackParamList>;
+type SocialListType = 'friends' | 'followers' | 'following';
 
 export function ProfileScreen() {
   const navigation = useNavigation<ProfileNavigationProp>();
@@ -457,6 +476,11 @@ export function ProfileScreen() {
   const [profilePhotos, setProfilePhotos] = useState<ProfilePhoto[]>([]);
   const [isProfileLoading, setIsProfileLoading] = useState(false);
   const [profileError, setProfileError] = useState('');
+  const [friendsVisible, setFriendsVisible] = useState(false);
+  const [socialListType, setSocialListType] = useState<SocialListType>('friends');
+  const [friendsList, setFriendsList] = useState<SocialProfile[]>([]);
+  const [friendsLoading, setFriendsLoading] = useState(false);
+  const [friendsError, setFriendsError] = useState('');
   const displayName = profile?.full_name?.trim() || user?.full_name?.trim() || user?.email || '';
   const avatarText = displayName
     .split(/\s+/)
@@ -466,7 +490,6 @@ export function ProfileScreen() {
     .join('') || 'TR';
   const [achievements, setAchievements] = useState<ProfileAchievement[]>([]);
   const [activities, setActivities] = useState<Activity[]>([]);
-  const [completedTrails, setCompletedTrails] = useState<Trail[]>([]);
 
   useFocusEffect(
     useCallback(() => {
@@ -478,7 +501,8 @@ export function ProfileScreen() {
         setProfilePhotos([]);
         setAchievements([]);
         setActivities([]);
-        setCompletedTrails([]);
+        setFriendsList([]);
+        setFriendsVisible(false);
         setProfileError('');
         setIsProfileLoading(false);
         return () => { cancelled = true; };
@@ -510,10 +534,9 @@ export function ProfileScreen() {
         };
 
         try {
-          const [userAchievements, userActivities, completedTrailResponse, loadedProfile] = await Promise.all([
+          const [userAchievements, userActivities, loadedProfile] = await Promise.all([
             getMyAchievements().catch(() => [] as UserAchievement[]),
             getMyActivities({ page: 1, limit: 50 }).catch(() => [] as Activity[]),
-            getSavedTrails({ type: 'completed', page: 1, limit: 100 }).catch(() => ({ items: [] })),
             getProfile(user.id),
           ]);
 
@@ -540,7 +563,6 @@ export function ProfileScreen() {
             setProfilePhotos(nextPhotos);
             setAchievements(buildProfileAchievements(userAchievements));
             setActivities(userActivities);
-            setCompletedTrails(completedTrailResponse.items.map((item) => item.trail));
             setProfileError('');
           }
         } catch (error) {
@@ -550,7 +572,6 @@ export function ProfileScreen() {
             setProfilePhotos([]);
             setAchievements([]);
             setActivities([]);
-            setCompletedTrails([]);
             setProfileError(error instanceof Error ? error.message : 'Unable to load profile data.');
           }
         } finally {
@@ -566,11 +587,23 @@ export function ProfileScreen() {
   const earnedCount = achievements.filter((a) => a.earned).length;
   const progress = achievements.length ? (earnedCount / achievements.length) * 100 : 0;
   const nextAchievement = achievements.find((a) => !a.earned);
-  const totalDistance = completedTrails.reduce((sum, trail) => sum + trail.distance, 0);
-  const completedTrips = activities.filter((activity) => activity.status === 'completed').length;
-  const achievementPoints =
-    profile?.stats?.total_points ??
-    achievements.filter((achievement) => achievement.earned).reduce((sum, achievement) => sum + achievement.points, 0);
+  const followerCount = profile?.stats?.total_followers ?? 0;
+  const followingCount = profile?.stats?.total_following ?? 0;
+  const friendCount = Math.max(profile?.stats?.total_friends ?? 0, profile?.stats?.friends_count ?? 0);
+  const socialListTitle =
+    socialListType === 'friends'
+      ? isArabic ? '\u0627\u0644\u0623\u0635\u062f\u0642\u0627\u0621' : 'Friends'
+      : socialListType === 'followers'
+      ? isArabic ? '\u0627\u0644\u0645\u062a\u0627\u0628\u0639\u0648\u0646' : 'Followers'
+      : isArabic ? '\u064a\u062a\u0627\u0628\u0639' : 'Following';
+  const socialListCount =
+    socialListType === 'friends' ? friendCount : socialListType === 'followers' ? followerCount : followingCount;
+  const socialListEmpty =
+    socialListType === 'friends'
+      ? isArabic ? '\u0644\u0627 \u064a\u0648\u062c\u062f \u0623\u0635\u062f\u0642\u0627\u0621 \u0628\u0639\u062f.' : 'No friends yet.'
+      : socialListType === 'followers'
+      ? isArabic ? '\u0644\u0627 \u064a\u0648\u062c\u062f \u0645\u062a\u0627\u0628\u0639\u0648\u0646 \u0628\u0639\u062f.' : 'No followers yet.'
+      : isArabic ? '\u0644\u0627 \u062a\u062a\u0627\u0628\u0639 \u0623\u062d\u062f\u0627 \u0628\u0639\u062f.' : 'Not following anyone yet.';
   const reviewCount = Math.max(profile?.stats?.total_reviews ?? 0, profileReviews.length);
   const photoCount = Math.max(profile?.stats?.total_photos ?? 0, profilePhotos.length);
   const likesCount = Math.max(
@@ -606,6 +639,36 @@ export function ProfileScreen() {
   const handleProfileLinkPress = (item: ProfileLinkItem) => {
     triggerFeedback(10);
     navigation.navigate(item.route);
+  };
+
+  const handleOpenSocialList = async (type: SocialListType) => {
+    triggerFeedback(10);
+    const targetProfileId = profile?.id || profile?.user_id || user?.id;
+    if (!targetProfileId) return;
+    setSocialListType(type);
+    setFriendsVisible(true);
+    setFriendsLoading(true);
+    setFriendsError('');
+    setFriendsList([]);
+    try {
+      const response =
+        type === 'friends'
+          ? await getMyFriends({ page: 1, limit: 80 })
+          : type === 'followers'
+          ? await getFollowers(targetProfileId, { page: 1, limit: 80 })
+          : await getFollowing(targetProfileId, { page: 1, limit: 80 });
+      setFriendsList(response.data);
+    } catch (error) {
+      setFriendsError(error instanceof Error ? error.message : 'Unable to load this list.');
+    } finally {
+      setFriendsLoading(false);
+    }
+  };
+
+  const handleOpenFriendProfile = (friend: SocialProfile) => {
+    triggerFeedback(10);
+    setFriendsVisible(false);
+    navigation.navigate('PublicProfile', { profileId: friend.id });
   };
 
   if (!isAuthenticated || !user) {
@@ -682,30 +745,27 @@ export function ProfileScreen() {
               ) : null}
             </View>
 
-            {/* Stats strip */}
-            <View style={[styles.statsStrip, isArabic && styles.rowReverse]}>
+            <View style={[styles.socialStatsInline, isArabic && styles.rowReverse]}>
               {[
-                { value: totalDistance.toFixed(1), unit: 'km', labelKey: 'profileTotalDistance', icon: 'map-outline', onPress: undefined },
-                { value: String(completedTrips), unit: '', labelKey: 'profileCompletedTrips', icon: 'checkmark-circle-outline', onPress: () => navigation.navigate('History') },
-                { value: String(achievementPoints), unit: 'pts', labelKey: 'profileBadges', icon: 'trophy-outline', onPress: undefined },
+                { key: 'friends' as const, value: friendCount, label: isArabic ? '\u0623\u0635\u062f\u0642\u0627\u0621' : 'Friends', icon: 'people-circle-outline' },
+                { key: 'followers' as const, value: followerCount, label: isArabic ? '\u0645\u062a\u0627\u0628\u0639\u0648\u0646' : 'Followers', icon: 'people-outline' },
+                { key: 'following' as const, value: followingCount, label: isArabic ? '\u064a\u062a\u0627\u0628\u0639' : 'Following', icon: 'person-add-outline' },
               ].map((item, index, arr) => (
                 <Pressable
-                  key={item.labelKey}
-                  onPress={item.onPress}
+                  key={item.key}
+                  onPress={() => handleOpenSocialList(item.key)}
                   style={[
-                    styles.statCell,
-                    index < arr.length - 1 && (isArabic ? styles.statCellBorderRtl : styles.statCellBorder),
+                    styles.socialStatInlineItem,
+                    styles.socialStatInlinePressable,
+                    index < arr.length - 1 && styles.socialStatInlineDivider,
                   ]}
                 >
-                  <View style={styles.statIconWrap}>
-                    <Ionicons name={item.icon as any} size={17} color="#3A070B" />
-                  </View>
-                  <Text style={styles.statValue}>
-                    {item.value}
-                    {item.unit ? <Text style={styles.statUnit}> {item.unit}</Text> : null}
+                  <Ionicons name={item.icon as any} size={17} color="#630E13" />
+                  <Text style={styles.socialStatInlineValue} numberOfLines={1}>
+                    {formatProfileCount(item.value)}
                   </Text>
-                  <Text style={[styles.statLabel, isArabic && styles.textRtl]}>
-                    {t(item.labelKey as TranslationKey)}
+                  <Text style={[styles.socialStatInlineLabel, isArabic && styles.textRtl]} numberOfLines={1}>
+                    {item.label}
                   </Text>
                 </Pressable>
               ))}
@@ -767,14 +827,20 @@ export function ProfileScreen() {
                     <Text style={[styles.achPoints, isArabic && styles.textRtl]} numberOfLines={1}>
                       {achievement.points} pts
                     </Text>
-                    {!achievement.earned && achievement.progress !== undefined && (
-                      <View style={styles.achProgressWrap}>
+                    <View style={styles.achProgressSlot}>
+                      {!achievement.earned && achievement.progress !== undefined ? (
                         <View style={styles.achProgressBg}>
                           <View style={[styles.achProgressFill, { width: `${Math.max(0, Math.min(100, achievement.progress))}%` }]} />
                         </View>
-                        <Text style={styles.achProgressText}>{Math.round(Math.max(0, Math.min(100, achievement.progress)))}%</Text>
-                      </View>
-                    )}
+                      ) : (
+                        <View style={styles.achProgressBgPlaceholder} />
+                      )}
+                      <Text style={styles.achProgressText}>
+                        {!achievement.earned && achievement.progress !== undefined
+                          ? `${Math.round(Math.max(0, Math.min(100, achievement.progress)))}%`
+                          : ' '}
+                      </Text>
+                    </View>
                   </Pressable>
                 ))}
               </ScrollView>
@@ -997,6 +1063,71 @@ export function ProfileScreen() {
 
         <Text style={styles.versionText}>Hike time: {totalDurationHours.toFixed(1)}h</Text>
       </ScrollView>
+
+      <Modal
+        visible={friendsVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setFriendsVisible(false)}
+      >
+        <View style={styles.friendsModalOverlay}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setFriendsVisible(false)} />
+          <View style={[styles.friendsSheet, { marginBottom: Math.max(insets.bottom, 12) }]}>
+            <View style={[styles.friendsSheetHeader, isArabic && styles.rowReverse]}>
+              <View style={[styles.friendsSheetTitleWrap, isArabic && styles.friendsSheetTitleWrapRtl]}>
+                <Text style={[styles.friendsSheetTitle, isArabic && styles.textRtl]}>
+                  {socialListTitle}
+                </Text>
+                <Text style={[styles.friendsSheetSubtitle, isArabic && styles.textRtl]}>
+                  {formatProfileCount(socialListCount)} {socialListTitle.toLowerCase()}
+                </Text>
+              </View>
+              <Pressable style={styles.friendsSheetClose} onPress={() => setFriendsVisible(false)}>
+                <Ionicons name="close" size={18} color="#2C2418" />
+              </Pressable>
+            </View>
+
+            {friendsLoading ? (
+              <View style={styles.friendsState}>
+                <ActivityIndicator color="#630E13" />
+              </View>
+            ) : friendsError ? (
+              <Text style={[styles.friendsStateText, isArabic && styles.textRtl]}>{friendsError}</Text>
+            ) : friendsList.length === 0 ? (
+              <Text style={[styles.friendsStateText, isArabic && styles.textRtl]}>
+                {socialListEmpty}
+              </Text>
+            ) : (
+              <ScrollView style={styles.friendsList} showsVerticalScrollIndicator={false}>
+                {friendsList.map((friend, index) => (
+                  <Pressable
+                    key={friend.id}
+                    onPress={() => handleOpenFriendProfile(friend)}
+                    style={({ pressed }) => [
+                      styles.friendRow,
+                      isArabic && styles.rowReverse,
+                      index < friendsList.length - 1 && styles.friendRowDivider,
+                      pressed && styles.rowPressed,
+                    ]}
+                  >
+                    {friend.avatar_url ? (
+                      <Image source={{ uri: friend.avatar_url }} style={styles.friendAvatar} />
+                    ) : (
+                      <View style={styles.friendAvatarFallback}>
+                        <Text style={styles.friendAvatarText}>{getInitials(friend.full_name)}</Text>
+                      </View>
+                    )}
+                    <Text style={[styles.friendName, isArabic && styles.textRtl]} numberOfLines={1}>
+                      {friend.full_name}
+                    </Text>
+                    <Ionicons name={isArabic ? 'chevron-back' : 'chevron-forward'} size={15} color="#C4BBA0" />
+                  </Pressable>
+                ))}
+              </ScrollView>
+            )}
+          </View>
+        </View>
+      </Modal>
     </AnimatedScreen>
   );
 }
@@ -1143,66 +1274,49 @@ const styles = StyleSheet.create({
   },
 
   // Stats strip — tinted on dark bg
-  statsStrip: {
+  socialStatsInline: {
     flexDirection: 'row',
-    backgroundColor: '#F6F0E0',
-    marginTop: 22,
-    borderRadius: 20,
-    borderTopWidth: 1,
-    borderBottomWidth: 1,
-    borderColor: '#E4D8C2',
-    overflow: 'hidden',
     width: '100%',
+    marginTop: 24,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#E4D8C2',
+    backgroundColor: 'rgba(255,253,248,0.72)',
+    overflow: 'hidden',
   },
-  statCell: {
+  socialStatInlineItem: {
     flex: 1,
-    minHeight: 92,
-    paddingVertical: 13,
-    paddingHorizontal: 8,
+    minHeight: 72,
     alignItems: 'center',
-    gap: 4,
+    justifyContent: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 6,
   },
-  statCellBorder: {
+  socialStatInlinePressable: {
+    backgroundColor: 'rgba(99,14,19,0.025)',
+  },
+  socialStatInlineDivider: {
     borderRightWidth: StyleSheet.hairlineWidth,
     borderRightColor: '#E2D8C5',
   },
-  statCellBorderRtl: {
-    borderLeftWidth: StyleSheet.hairlineWidth,
-    borderLeftColor: '#E2D8C5',
-  },
-  statIconWrap: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    backgroundColor: '#FFFDF8',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 3,
-    borderWidth: 1,
-    borderColor: '#E7DDCB',
-  },
-  statValue: {
+  socialStatInlineValue: {
     fontFamily: PROFILE_FONT_MEDIUM,
+    marginTop: 3,
     color: '#2C2418',
     fontSize: 18,
-    fontWeight: '800',
     lineHeight: 22,
-  },
-  statUnit: {
-    fontFamily: PROFILE_FONT,
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#7B6D5A',
-  },
-  statLabel: {
-    fontFamily: PROFILE_FONT,
-    marginTop: 1,
-    fontSize: 11,
-    color: '#7B6D5A',
+    fontWeight: '900',
     textAlign: 'center',
-    lineHeight: 14,
   },
-
+  socialStatInlineLabel: {
+    fontFamily: PROFILE_FONT_MEDIUM,
+    marginTop: 1,
+    color: '#7B6D5A',
+    fontSize: 11,
+    lineHeight: 13,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
   // ── Unified body card ──
   bodyCard: {
     marginHorizontal: 14,
@@ -1279,12 +1393,13 @@ const styles = StyleSheet.create({
   },
   achievementsRow: {
     paddingRight: 4,
-    gap: 10,
+    gap: 8,
   },
   achCard: {
-    width: 82,
+    width: 86,
+    minHeight: 154,
     alignItems: 'center',
-    marginRight: 10,
+    marginRight: 8,
   },
   achCardLocked: {
     opacity: 0.55,
@@ -1343,23 +1458,32 @@ const styles = StyleSheet.create({
     color: '#4A4131',
     lineHeight: 13,
     fontWeight: '600',
+    height: 28,
+    textAlignVertical: 'center',
   },
   achPoints: {
     marginTop: 3,
     textAlign: 'center',
     fontSize: 9,
+    lineHeight: 11,
     color: '#946200',
     fontWeight: '800',
+    height: 12,
   },
-  achProgressWrap: {
+  achProgressSlot: {
     width: '100%',
+    height: 22,
     marginTop: 5,
+    justifyContent: 'flex-start',
   },
   achProgressBg: {
     height: 3,
     backgroundColor: '#EDE5D6',
     borderRadius: 2,
     overflow: 'hidden',
+  },
+  achProgressBgPlaceholder: {
+    height: 3,
   },
   achProgressFill: {
     height: '100%',
@@ -1591,6 +1715,118 @@ const styles = StyleSheet.create({
     color: '#FFF',
     fontSize: 10,
     fontWeight: '700',
+  },
+
+  // Social list sheet
+  friendsModalOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(44,36,24,0.34)',
+  },
+  friendsSheet: {
+    marginHorizontal: 12,
+    maxHeight: '68%',
+    borderRadius: 24,
+    backgroundColor: '#FFFDF8',
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 12,
+    shadowColor: '#2C2418',
+    shadowOpacity: 0.16,
+    shadowOffset: { width: 0, height: -6 },
+    shadowRadius: 20,
+    elevation: 12,
+  },
+  friendsSheetHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginBottom: 10,
+  },
+  friendsSheetTitleWrap: {
+    flex: 1,
+  },
+  friendsSheetTitleWrapRtl: {
+    alignItems: 'flex-end',
+  },
+  friendsSheetTitle: {
+    fontFamily: PROFILE_FONT_MEDIUM,
+    color: '#2C2418',
+    fontSize: 18,
+    lineHeight: 22,
+    fontWeight: '900',
+  },
+  friendsSheetSubtitle: {
+    fontFamily: PROFILE_FONT,
+    marginTop: 2,
+    color: '#7B6D5A',
+    fontSize: 11,
+    lineHeight: 14,
+    fontWeight: '700',
+  },
+  friendsSheetClose: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F0EBE1',
+  },
+  friendsState: {
+    minHeight: 96,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  friendsStateText: {
+    fontFamily: PROFILE_FONT_MEDIUM,
+    color: '#6B5D4E',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '700',
+    textAlign: 'center',
+    paddingVertical: 28,
+  },
+  friendsList: {
+    maxHeight: 420,
+  },
+  friendRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 11,
+  },
+  friendRowDivider: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#EDE5D6',
+  },
+  friendAvatar: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#E8E0D0',
+    marginRight: 10,
+  },
+  friendAvatarFallback: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#D4A843',
+    marginRight: 10,
+  },
+  friendAvatarText: {
+    fontFamily: PROFILE_FONT_MEDIUM,
+    color: '#FFF8EA',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  friendName: {
+    flex: 1,
+    fontFamily: PROFILE_FONT_MEDIUM,
+    color: '#2C2418',
+    fontSize: 14,
+    fontWeight: '800',
   },
 
   // Logout

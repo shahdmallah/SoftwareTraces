@@ -137,6 +137,11 @@ export async function getSocialFeed(params: { page?: number; limit?: number } = 
   });
 }
 
+export async function getSocialFeedItem(type: 'review' | 'activity', id: string) {
+  const response = await apiRequest<Envelope<SocialFeedItem>>(`/api/social/feed/${type}/${id}`);
+  return response.data;
+}
+
 export async function getFollowers(userId: string, params: { page?: number; limit?: number } = {}) {
   return apiRequest<PaginatedList<SocialProfile>>(`/api/social/users/${userId}/followers`, {}, params);
 }
@@ -208,7 +213,11 @@ export async function deleteReviewComment(commentId: string) {
 }
 
 export async function likeActivity(activityId: string) {
-  await apiRequest<void>(`/api/social/activities/${activityId}/like`, { method: 'POST' });
+  return apiRequest<{ message: string }>(`/api/social/activities/${activityId}/like`, { method: 'POST' });
+}
+
+export async function unlikeActivity(activityId: string) {
+  return apiRequest<{ message: string; deleted: number }>(`/api/social/activities/${activityId}/like`, { method: 'DELETE' });
 }
 
 export async function commentOnActivity(activityId: string, body: string) {

@@ -594,14 +594,6 @@ export function ExploreScreen() {
               </ScrollView>
             </AnimatedBlock>
 
-            <AnimatedBlock delay={125}>
-              <TrailRecommendationsSection
-                isAuthenticated={isAuthenticated}
-                isArabic={isArabic}
-                onOpenTrail={(trailId) => navigation.navigate('TrailDetail', { trailId })}
-              />
-            </AnimatedBlock>
-
             {/* ── Advanced filters panel ── */}
             {showFilters ? (
               <AnimatedBlock delay={130} style={styles.filtersCard}>
@@ -698,6 +690,14 @@ export function ExploreScreen() {
                 </View>
               </AnimatedBlock>
             ) : null}
+
+            <AnimatedBlock delay={125}>
+              <TrailRecommendationsSection
+                isAuthenticated={isAuthenticated}
+                isArabic={isArabic}
+                onOpenTrail={(trailId) => navigation.navigate('TrailDetail', { trailId })}
+              />
+            </AnimatedBlock>
 
             {/* ── Results row + sort ── */}
             <AnimatedBlock delay={170} style={[styles.resultsRow, isArabic ? rtlRow : ltrRow]}>

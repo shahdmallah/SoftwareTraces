@@ -306,6 +306,47 @@ async function findDirectConversation(profileIds: string[]): Promise<string | nu
   return result.rows[0]?.conversation_id ?? null;
 }
 
+async function findTrailConversation(contextId: string, contextType: string | null | undefined): Promise<string | null> {
+  const result = await pool.query<{ id: string }>(
+    `SELECT id
+     FROM conversations
+     WHERE type = 'trail'
+       AND context_id = $1::uuid
+       AND COALESCE(context_type, 'trail') = COALESCE($2, 'trail')
+     ORDER BY created_at ASC
+     LIMIT 1`,
+    [contextId, contextType ?? null]
+  );
+
+  return result.rows[0]?.id ?? null;
+}
+
+async function addConversationParticipants(conversationId: string, participantIds: string[]): Promise<void> {
+  const ids = uniqueIds(participantIds);
+  if (ids.length === 0) {
+    return;
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    for (const participantId of ids) {
+      await client.query(
+        `INSERT INTO conversation_participants (conversation_id, user_id)
+         VALUES ($1::uuid, $2::uuid)
+         ON CONFLICT (conversation_id, user_id) DO NOTHING`,
+        [conversationId, participantId]
+      );
+    }
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 export async function createConversation(userId: string, input: CreateConversationInput): Promise<Conversation> {
   const creatorProfileId = await getProfileIdForAuthUser(userId);
   const resolvedParticipants = await resolveProfileIds(input.participant_ids);
@@ -324,6 +365,17 @@ export async function createConversation(userId: string, input: CreateConversati
 
   if (participantIds.length === 0) {
     throw new Error("At least one participant is required");
+  }
+
+  const existingTrailConversationId = input.type === "trail" && input.context_id
+    ? await findTrailConversation(input.context_id, input.context_type ?? input.type)
+    : null;
+  if (existingTrailConversationId) {
+    await addConversationParticipants(existingTrailConversationId, participantIds);
+    const existingConversation = await getConversationById(existingTrailConversationId, creatorProfileId);
+    if (existingConversation) {
+      return existingConversation;
+    }
   }
 
   const existingDirectConversationId = input.type === "direct" ? await findDirectConversation(participantIds) : null;

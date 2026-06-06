@@ -150,7 +150,7 @@ export async function addActivityMedia(req: Request, res: Response): Promise<voi
     assertUuid(req.params.id, "Activity id");
 
     console.log("[activities.addActivityMedia] verifying activity ownership", { activity_id: req.params.id });
-    const activityResult = await pool.query("SELECT user_id, user_id = $2::uuid AS is_owner FROM activities WHERE id = $1::uuid", [req.params.id, auth.sub]);
+    const activityResult = await pool.query("SELECT user_id, trail_id, user_id = $2::uuid AS is_owner FROM activities WHERE id = $1::uuid", [req.params.id, auth.sub]);
     const activity = activityResult.rows[0];
 
     if (!activity) {
@@ -233,7 +233,7 @@ export async function addActivityMedia(req: Request, res: Response): Promise<voi
     }
 
     console.log("[activities.addActivityMedia] returning created media", { media_id: insertResult.rows[0]?.id });
-    res.status(201).json({ data: insertResult.rows[0] });
+    res.status(201).json({ data: { ...insertResult.rows[0], source: "activity_media", activity_id: req.params.id, trail_id: activity.trail_id ?? null } });
   } catch (error) {
     handleActivityError("addActivityMedia", error);
   }
@@ -271,10 +271,18 @@ export async function getActivityMedia(req: Request, res: Response): Promise<voi
     console.log("[activities.getActivityMedia] fetching media", { activity_id: req.params.id });
     const mediaResult = await pool.query(
       `
-      SELECT id, public_url AS url, latitude, longitude, captured_at, caption, created_at
-      FROM activity_media
-      WHERE activity_id = $1::uuid
-      ORDER BY captured_at ASC
+      SELECT
+        am.id,
+        am.public_url AS url,
+        am.latitude,
+        am.longitude,
+        am.captured_at,
+        am.caption,
+        am.created_at,
+        'activity_media' AS source
+      FROM activity_media am
+      WHERE am.activity_id = $1::uuid
+      ORDER BY am.captured_at ASC
       `,
       [req.params.id]
     );

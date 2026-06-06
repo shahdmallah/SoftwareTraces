@@ -7,7 +7,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
 import { deleteActivityPost } from '../api/activitiesApi';
-import { addReviewComment, commentOnActivity, followUser, getFollowing, getFriendSuggestions, getReviewComments, likeActivity, likeReview, unfollowUser, unlikeReview, getSocialFeed, type ActivityComment, type FriendSuggestion, type ReviewComment } from '../api/socialApi';
+import { addReviewComment, commentOnActivity, followUser, getFollowing, getFriendSuggestions, getReviewComments, likeActivity, likeReview, unfollowUser, unlikeActivity, unlikeReview, getSocialFeed, type ActivityComment, type FriendSuggestion, type ReviewComment } from '../api/socialApi';
 import { deleteTrailReview } from '../api/trailsApi';
 import { listMeetups } from '../api/meetupsApi';
 import { type FeedCommentPreview, type FeedItem } from '../data/activitySocial';
@@ -1033,9 +1033,6 @@ export function ActivityScreen() {
   const handleToggleLike = useCallback(
     async (item: RecapItem) => {
       const wasLiked = Boolean(item.isLiked);
-      if (item.sourceType === 'activity' && wasLiked) {
-        return;
-      }
 
       updateRecap(item.id, (current) => ({
         ...current,
@@ -1047,7 +1044,7 @@ export function ActivityScreen() {
         if (item.sourceType === 'review') {
           await (wasLiked ? unlikeReview(item.id) : likeReview(item.id));
         } else if (item.sourceType === 'activity' && item.activityId) {
-          await likeActivity(item.activityId);
+          await (wasLiked ? unlikeActivity(item.activityId) : likeActivity(item.activityId));
         }
       } catch (error) {
         updateRecap(item.id, (current) => ({
@@ -1066,10 +1063,15 @@ export function ActivityScreen() {
       try {
         let previewComment: FeedCommentPreview | null = null;
 
-        if (item.activityId) {
+        if (item.sourceType === 'activity') {
+          if (!item.activityId) {
+            throw new Error('Activity comment target is not available for this post.');
+          }
           previewComment = activityCommentToPreview(await commentOnActivity(item.activityId, body), user ?? null);
         } else if (item.sourceType === 'review') {
           previewComment = reviewCommentToPreview(await addReviewComment(item.id, body));
+        } else if (item.activityId) {
+          previewComment = activityCommentToPreview(await commentOnActivity(item.activityId, body), user ?? null);
         } else {
           throw new Error('Comment target is not available for this post.');
         }

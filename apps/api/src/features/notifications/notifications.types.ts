@@ -7,7 +7,9 @@ export type NotificationType =
   | "meetup_invite"
   | "meetup_join"
   | "meetup_update"
+  | "sos_alert"
   | "danger_alert"
+  | "achievement"
   | "system";
 
 export interface NotificationActor {

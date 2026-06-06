@@ -32,6 +32,11 @@ export type Message = {
   id: string;
   conversation_id: string;
   sender_id: string;
+  sender?: {
+    id: string;
+    full_name?: string | null;
+    avatar_url?: string | null;
+  } | null;
   body: string;
   created_at: string;
   pending?: boolean;
@@ -75,10 +80,21 @@ function normalizeArrayResponse<T>(response: Envelope<T[]> | T[] | { conversatio
 }
 
 function normalizeMessage<T extends Record<string, unknown>>(payload: T): Message {
+  const sender = payload.sender && typeof payload.sender === 'object'
+    ? payload.sender as Record<string, unknown>
+    : null;
+
   return {
     id: String(payload.id ?? ''),
     conversation_id: String(payload.conversation_id ?? payload.conversationId ?? ''),
     sender_id: String(payload.sender_id ?? payload.senderId ?? ''),
+    sender: sender
+      ? {
+          id: String(sender.id ?? payload.sender_id ?? payload.senderId ?? ''),
+          full_name: (sender.full_name ?? null) as string | null,
+          avatar_url: (sender.avatar_url ?? null) as string | null,
+        }
+      : null,
     body: String(payload.body ?? payload.content ?? ''),
     created_at: String(payload.created_at ?? payload.createdAt ?? new Date().toISOString()),
     pending: payload.pending as boolean | undefined,

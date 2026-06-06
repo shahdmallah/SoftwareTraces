@@ -192,6 +192,7 @@ function activityMediaToBubble(photo: Awaited<ReturnType<typeof getActivityMedia
     lng,
     count: 1,
     media_ids: [photo.id],
+    media_refs: [{ id: photo.id, source: 'activity_media' }],
     preview_images: [uri],
     photos: [{
       id: photo.id,
@@ -200,20 +201,29 @@ function activityMediaToBubble(photo: Awaited<ReturnType<typeof getActivityMedia
       caption: photo.caption,
       created_at: photo.created_at,
       captured_at: photo.captured_at,
+      source: 'activity_media',
+      nature_sighting: photo.nature_sighting,
     }],
   };
 }
 
+function bubbleRefKeys(bubble: MapBubble) {
+  const refs = bubble.media_refs?.length ? bubble.media_refs : bubble.media_ids.map((id) => ({ id, source: undefined }));
+  return refs.map((ref) => `${ref.source ?? 'unknown'}:${ref.id}`);
+}
+
 function mergeBubbles(primary: MapBubble[], secondary: MapBubble[]) {
-  const seenMediaIds = new Set(primary.flatMap((bubble) => bubble.media_ids));
+  const seenMediaIds = new Set(primary.flatMap(bubbleRefKeys));
   const merged = [...primary];
 
   secondary.forEach((bubble) => {
-    if (bubble.media_ids.some((id) => seenMediaIds.has(id))) {
+    const keys = bubbleRefKeys(bubble);
+
+    if (keys.some((id) => seenMediaIds.has(id))) {
       return;
     }
 
-    bubble.media_ids.forEach((id) => seenMediaIds.add(id));
+    keys.forEach((id) => seenMediaIds.add(id));
     merged.push(bubble);
   });
 
@@ -463,7 +473,7 @@ export function MapScreen() {
     setSelectedPhoto(null);
 
     try {
-      const photos = await getMapBubblePhotos(bubble.media_ids);
+      const photos = await getMapBubblePhotos(bubble.media_refs?.length ? bubble.media_refs : bubble.media_ids);
       const visiblePhotos = photos.filter((photo) => photoUri(photo));
       setBubblePhotos(visiblePhotos.length ? visiblePhotos : bubble.photos?.filter((photo) => photoUri(photo)) ?? []);
     } catch (error) {

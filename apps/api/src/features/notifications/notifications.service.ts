@@ -1,4 +1,5 @@
 import { pool } from "../../db/pool";
+import fetch from "node-fetch";
 import type {
   CreateNotificationInput,
   Notification,
@@ -7,6 +8,27 @@ import type {
   NotificationType,
   PushToken,
 } from "./notifications.types";
+
+const EXPO_PUSH_ENDPOINT = "https://exp.host/--/api/v2/push/send";
+
+type ExpoPushTicket =
+  | {
+      status: "ok";
+      id?: string;
+    }
+  | {
+      status: "error";
+      message?: string;
+      details?: {
+        error?: string;
+        [key: string]: unknown;
+      };
+    };
+
+type ExpoPushResponse = {
+  data?: ExpoPushTicket | ExpoPushTicket[];
+  errors?: { code?: string; message?: string }[];
+};
 
 interface NotificationRow {
   id: string;
@@ -30,6 +52,23 @@ function toIsoString(value: string | Date | null): string | null {
   }
 
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+}
+
+function isExpoPushToken(token: string): boolean {
+  return /^(ExponentPushToken|ExpoPushToken)\[[^\]]+\]$/.test(token);
+}
+
+function getExpoChannelId(data?: object): string | undefined {
+  if (!data || typeof data !== "object") {
+    return undefined;
+  }
+
+  const typedData = data as Record<string, unknown>;
+  return typedData.notification_kind === "navigation_off_track" ? "navigation" : undefined;
+}
+
+async function removePushTokenById(tokenId: string): Promise<void> {
+  await pool.query("DELETE FROM push_tokens WHERE id = $1::uuid", [tokenId]);
 }
 
 function formatNotification(row: NotificationRow): Notification {
@@ -297,8 +336,55 @@ export async function removePushToken(userId: string, token: string): Promise<bo
   return (result.rowCount ?? 0) > 0;
 }
 
+async function sendExpoPush(token: PushToken, title: string, body: string, data?: object): Promise<void> {
+  const channelId = getExpoChannelId(data);
+  const response = await fetch(EXPO_PUSH_ENDPOINT, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Accept-Encoding": "gzip, deflate",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      to: token.token,
+      title,
+      body,
+      data: data ?? {},
+      sound: "default",
+      priority: "high",
+      ...(channelId ? { channelId } : {}),
+    }),
+  });
+
+  const payload = (await response.json().catch(() => ({}))) as ExpoPushResponse;
+  if (!response.ok) {
+    throw new Error(`Expo push request failed with ${response.status}: ${JSON.stringify(payload)}`);
+  }
+
+  const tickets = Array.isArray(payload.data) ? payload.data : payload.data ? [payload.data] : [];
+  const failedTicket = tickets.find((ticket) => ticket.status === "error");
+  if (!failedTicket) {
+    console.log("[notifications.service.sendExpoPush] Sent Expo push:", {
+      token_id: token.id,
+      ticket_count: tickets.length,
+    });
+    return;
+  }
+
+  if (failedTicket.details?.error === "DeviceNotRegistered") {
+    await removePushTokenById(token.id);
+  }
+
+  throw new Error(failedTicket.message ?? `Expo push failed: ${failedTicket.details?.error ?? "unknown error"}`);
+}
+
 async function sendFcmPush(token: PushToken, title: string, body: string, data?: object): Promise<void> {
-  console.log("[notifications.service.sendFcmPush] FCM push requested:", {
+  if (isExpoPushToken(token.token)) {
+    await sendExpoPush(token, title, body, data);
+    return;
+  }
+
+  console.warn("[notifications.service.sendFcmPush] Native FCM token delivery is not configured:", {
     token_id: token.id,
     title,
     body,
@@ -307,7 +393,12 @@ async function sendFcmPush(token: PushToken, title: string, body: string, data?:
 }
 
 async function sendApnsPush(token: PushToken, title: string, body: string, data?: object): Promise<void> {
-  console.log("[notifications.service.sendApnsPush] APNS push requested:", {
+  if (isExpoPushToken(token.token)) {
+    await sendExpoPush(token, title, body, data);
+    return;
+  }
+
+  console.warn("[notifications.service.sendApnsPush] Native APNS token delivery is not configured:", {
     token_id: token.id,
     title,
     body,
@@ -316,7 +407,12 @@ async function sendApnsPush(token: PushToken, title: string, body: string, data?
 }
 
 async function sendWebPush(token: PushToken, title: string, body: string, data?: object): Promise<void> {
-  console.log("[notifications.service.sendWebPush] Web push requested:", {
+  if (isExpoPushToken(token.token)) {
+    await sendExpoPush(token, title, body, data);
+    return;
+  }
+
+  console.warn("[notifications.service.sendWebPush] Native web push delivery is not configured:", {
     token_id: token.id,
     title,
     body,

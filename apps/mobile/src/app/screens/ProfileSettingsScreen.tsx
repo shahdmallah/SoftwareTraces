@@ -1,5 +1,5 @@
-import React, { useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
@@ -8,6 +8,11 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
 import { useLanguage } from '../contexts/LanguageContext';
 import { RootStackParamList } from '../navigation/types';
+import {
+  getPushNotificationActivationStatus,
+  registerDeviceForPushNotifications,
+  type PushNotificationActivationStatus,
+} from '../services/pushNotifications';
 import { ltrRow, ltrText, rtlRow, rtlText } from '../utils/direction';
 
 type SettingsRouteProp = RouteProp<RootStackParamList, 'ProfileSettings'>;
@@ -27,10 +32,50 @@ export function ProfileSettingsScreen() {
   const insets = useSafeAreaInsets();
   const { language, setLanguage } = useLanguage();
   const isArabic = language === 'ar';
-  const [notificationsOn, setNotificationsOn] = useState(true);
+  const [pushStatus, setPushStatus] = useState<PushNotificationActivationStatus>('disabled');
+  const [isActivatingPush, setIsActivatingPush] = useState(false);
   const [publicProfile, setPublicProfile] = useState(true);
   const [trailUpdates, setTrailUpdates] = useState(true);
   const meta = settingMeta[route.params.settingId] ?? settingMeta.s5;
+  const notificationsOn = pushStatus === 'enabled';
+
+  const refreshPushStatus = useCallback(async () => {
+    try {
+      setPushStatus(await getPushNotificationActivationStatus());
+    } catch {
+      setPushStatus('unavailable');
+    }
+  }, []);
+
+  useEffect(() => {
+    if (route.params.settingId === 's3') {
+      void refreshPushStatus();
+    }
+  }, [refreshPushStatus, route.params.settingId]);
+
+  const handleNotificationsToggle = useCallback(async (enabled: boolean) => {
+    if (!enabled) {
+      Alert.alert(
+        'Notifications stay active',
+        'Turn them off from your device notification settings.',
+      );
+      return;
+    }
+
+    setIsActivatingPush(true);
+    try {
+      const token = await registerDeviceForPushNotifications();
+      await refreshPushStatus();
+
+      if (!token) {
+        Alert.alert('Notifications unavailable', 'Push notifications need a physical device and notification permission.');
+      }
+    } catch (error) {
+      Alert.alert('Unable to enable notifications', error instanceof Error ? error.message : 'Please try again.');
+    } finally {
+      setIsActivatingPush(false);
+    }
+  }, [refreshPushStatus]);
 
   const rows = useMemo(() => {
     if (route.params.settingId === 's1') {
@@ -85,8 +130,27 @@ export function ProfileSettingsScreen() {
           ) : (
             <>
               <View style={[styles.row, isArabic ? rtlRow : ltrRow]}>
-                <Text style={[styles.rowTitle, isArabic ? rtlText : ltrText]}>{isArabic ? 'الإشعارات' : 'Notifications'}</Text>
-                <Switch value={notificationsOn} onValueChange={setNotificationsOn} trackColor={{ true: '#D7BDA7', false: '#E5DDD2' }} thumbColor={notificationsOn ? '#630E13' : '#fff'} />
+                <View style={styles.rowCopy}>
+                  <Text style={[styles.rowTitle, isArabic ? rtlText : ltrText]}>{isArabic ? 'الإشعارات' : 'Notifications'}</Text>
+                  <Text style={[styles.rowSubtitle, isArabic ? rtlText : ltrText]}>
+                    {pushStatus === 'enabled'
+                      ? 'Enabled'
+                      : pushStatus === 'unavailable'
+                      ? 'Needs a physical device'
+                      : 'Tap to enable push alerts'}
+                  </Text>
+                </View>
+                {isActivatingPush ? (
+                  <ActivityIndicator color="#630E13" />
+                ) : (
+                  <Switch
+                    value={notificationsOn}
+                    disabled={pushStatus === 'unavailable'}
+                    onValueChange={(enabled) => void handleNotificationsToggle(enabled)}
+                    trackColor={{ true: '#D7BDA7', false: '#E5DDD2' }}
+                    thumbColor={notificationsOn ? '#630E13' : '#fff'}
+                  />
+                )}
               </View>
               <View style={[styles.row, isArabic ? rtlRow : ltrRow]}>
                 <Text style={[styles.rowTitle, isArabic ? rtlText : ltrText]}>{isArabic ? 'ملف عام' : 'Public profile'}</Text>
@@ -115,5 +179,7 @@ const styles = StyleSheet.create({
   badge: { width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F7EBE8' },
   card: { overflow: 'hidden', borderRadius: 24, backgroundColor: '#FFFFFF' },
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, paddingHorizontal: 16, paddingVertical: 16, borderBottomWidth: 1, borderBottomColor: '#F1E5D8' },
+  rowCopy: { flex: 1 },
   rowTitle: { flex: 1, color: '#2C2418', fontSize: 15, fontWeight: '800' },
+  rowSubtitle: { marginTop: 4, color: '#7B6D5A', fontSize: 12, lineHeight: 17, fontWeight: '700' },
 });

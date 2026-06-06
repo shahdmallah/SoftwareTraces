@@ -1,4 +1,5 @@
 import { apiRequest } from './client';
+import type { NatureSighting } from './natureSightingsApi';
 
 type Envelope<T> = {
   data: T;
@@ -10,8 +11,14 @@ export type MapBubble = {
   lng: number;
   count: number;
   media_ids: string[];
+  media_refs?: MediaRef[];
   preview_images: string[];
   photos?: MapBubblePhoto[];
+};
+
+export type MediaRef = {
+  id: string;
+  source?: 'media' | 'activity_media';
 };
 
 export type MapBubblePhoto = {
@@ -30,6 +37,7 @@ export type MapBubblePhoto = {
   };
   created_at?: string | null;
   captured_at?: string | null;
+  nature_sighting?: NatureSighting | null;
   likes_count?: number;
   comments_count?: number;
   is_liked?: boolean;
@@ -49,6 +57,8 @@ type RawMapBubble = Partial<MapBubble> & {
   activity_media_id?: unknown;
   activityMediaId?: unknown;
   ids?: unknown;
+  media_refs?: unknown;
+  mediaRefs?: unknown;
   preview_images?: unknown;
   previewImages?: unknown;
   preview_image?: unknown;
@@ -146,6 +156,39 @@ function uniqueStrings(values: string[]) {
   return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
 }
 
+function normalizeMediaRefs(value: unknown): MediaRef[] {
+  const rawRefs = Array.isArray(value) ? value : normalizeStringArray(value);
+  const refs: MediaRef[] = rawRefs
+    .flatMap((item): MediaRef[] => {
+      if (item && typeof item === 'object') {
+        const record = item as Record<string, unknown>;
+        const id = stringFromUnknown(record.id ?? record.media_id ?? record.mediaId);
+        const source = stringFromUnknown(record.source);
+
+        if (!id) {
+          return [];
+        }
+
+        return [{
+          id,
+          source: source === 'activity_media' || source === 'media' ? source : undefined,
+        }];
+      }
+
+      const raw = stringFromUnknown(item);
+      const [source, id] = raw.split(':');
+
+      if ((source === 'activity_media' || source === 'media') && id) {
+        return [{ id: id.trim(), source }];
+      }
+
+      return raw ? [{ id: raw }] : [];
+    })
+    .filter((ref, index, refs) => refs.findIndex((item) => `${item.source ?? 'unknown'}:${item.id}` === `${ref.source ?? 'unknown'}:${ref.id}`) === index);
+
+  return refs;
+}
+
 function normalizeRawBubbles(response: Envelope<RawMapBubbleResponse>) {
   const payload = response.data;
 
@@ -202,8 +245,10 @@ function normalizeBubble(raw: RawMapBubble): MapBubble | null {
     ...normalizeStringArray(raw.media),
     ...normalizeStringArray(raw.photos),
   ]);
+  const media_refs = normalizeMediaRefs(raw.media_refs ?? raw.mediaRefs);
+  const effectiveMediaRefs: MediaRef[] = media_refs.length ? media_refs : media_ids.map((id): MediaRef => ({ id }));
 
-  if (!Number.isFinite(lat) || !Number.isFinite(lng) || media_ids.length === 0) {
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || (media_ids.length === 0 && effectiveMediaRefs.length === 0)) {
     return null;
   }
 
@@ -211,8 +256,9 @@ function normalizeBubble(raw: RawMapBubble): MapBubble | null {
     id: raw.id,
     lat,
     lng,
-    count: Number(raw.count ?? media_ids.length),
+    count: Number(raw.count ?? (media_ids.length || effectiveMediaRefs.length)),
     media_ids,
+    media_refs: effectiveMediaRefs,
     preview_images,
   };
 }
@@ -229,9 +275,15 @@ export async function getMapBubbles(params: {
   return normalizeRawBubbles(response).map(normalizeBubble).filter((bubble): bubble is MapBubble => Boolean(bubble));
 }
 
-export async function getMapBubblePhotos(ids: string[]) {
-  const response = await apiRequest<Envelope<MapBubblePhoto[]>>('/api/media/map/bubbles/photos', {}, {
-    ids: ids.join(','),
-  });
+export async function getMapBubblePhotos(refs: Array<string | MediaRef>) {
+  const mediaRefs = refs
+    .map((ref) => (typeof ref === 'string' ? { id: ref } : ref))
+    .filter((ref) => ref.id);
+  const typedRefs = mediaRefs.filter((ref) => ref.source);
+  const params = typedRefs.length
+    ? { refs: typedRefs.map((ref) => `${ref.source}:${ref.id}`).join(',') }
+    : { ids: mediaRefs.map((ref) => ref.id).join(',') };
+
+  const response = await apiRequest<Envelope<MapBubblePhoto[]>>('/api/media/map/bubbles/photos', {}, params);
   return response.data;
 }

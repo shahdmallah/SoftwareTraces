@@ -21,6 +21,7 @@ import Svg, { Circle, Defs, LinearGradient, Path, Stop } from 'react-native-svg'
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { RootStackParamList } from '../navigation/types';
 import { getTrailById, getTrailElevationProfile, type ElevationProfile, type Trail } from '../api/trailsApi';
+import { getTrailNatureSightings, type NatureSighting } from '../api/natureSightingsApi';
 import {
   deleteReviewPhoto,
   deleteTrailPhoto,
@@ -43,6 +44,7 @@ type GalleryItem = {
   label: string;
   height: number;
   photo?: TrailPhoto;
+  sighting?: NatureSighting;
 };
 
 const { width } = Dimensions.get('window');
@@ -215,7 +217,13 @@ function toSeasonName(value?: string) {
   return 'Autumn';
 }
 
-function buildGalleryItems(tab: MediaTab, trail: Trail | null, photos: TrailPhoto[], images: string[]): GalleryItem[] {
+function buildGalleryItems(
+  tab: MediaTab,
+  trail: Trail | null,
+  photos: TrailPhoto[],
+  images: string[],
+  sightings: NatureSighting[],
+): GalleryItem[] {
   const photosWithUrls = photos.filter((photo) => Boolean(photo.url));
 
   if (tab === 'latest') {
@@ -237,6 +245,32 @@ function buildGalleryItems(tab: MediaTab, trail: Trail | null, photos: TrailPhot
   }
 
   if (tab === 'sights') {
+    if (sightings.length) {
+      const photosById = new Map(photosWithUrls.map((photo) => [`${getPhotoTypeForTrailPhoto(photo)}:${photo.id}`, photo]));
+
+      return sightings
+        .map((sighting, index) => {
+          const photo = sighting.photo_id && sighting.photo_type ? photosById.get(`${sighting.photo_type}:${sighting.photo_id}`) : undefined;
+          const imageUri = sighting.photo_url || photo?.url || '';
+          const label =
+            sighting.common_name?.trim()
+            || sighting.classification?.commonName?.trim()
+            || sighting.species?.trim()
+            || sighting.classification?.scientificName?.trim()
+            || 'Nature sighting';
+
+          return {
+            id: `sighting-${sighting.id}`,
+            imageUri,
+            label,
+            height: CARD_HEIGHTS[index % CARD_HEIGHTS.length],
+            photo,
+            sighting,
+          };
+        })
+        .filter((item) => Boolean(item.imageUri));
+    }
+
     if (photosWithUrls.length) {
       return photosWithUrls.map((photo, index) => ({
         id: `sight-${photo.id}`,
@@ -292,6 +326,7 @@ export function TrailMediaScreen() {
   const { trailId } = route.params;
   const [trail, setTrail] = useState<Trail | null>(null);
   const [trailPhotos, setTrailPhotos] = useState<TrailPhoto[]>([]);
+  const [natureSightings, setNatureSightings] = useState<NatureSighting[]>([]);
   const [elevationProfile, setElevationProfile] = useState<ElevationProfile | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -313,21 +348,24 @@ export function TrailMediaScreen() {
 
       try {
         const nextTrail = await getTrailById(trailId);
-        const [nextPhotos, profile] = await Promise.all([
+        const [nextPhotos, profile, sightings] = await Promise.all([
           getApprovedTrailPhotos(trailId, nextTrail).catch(() => []),
           getTrailElevationProfile(trailId, { points: ELEVATION_CHART_POINTS, simplify: true }).catch(() => null),
+          getTrailNatureSightings(trailId).catch(() => []),
         ]);
 
         if (!cancelled) {
           setTrail(nextTrail);
           setTrailPhotos(nextPhotos);
           setElevationProfile(profile);
+          setNatureSightings(sightings);
         }
       } catch (nextError) {
         if (!cancelled) {
           setError(nextError instanceof Error ? nextError.message : 'Unable to load trail media.');
           setTrail(null);
           setTrailPhotos([]);
+          setNatureSightings([]);
           setElevationProfile(null);
         }
       } finally {
@@ -347,10 +385,14 @@ export function TrailMediaScreen() {
   const refreshTrailPhotos = useCallback(async () => {
     try {
       const nextTrail = await getTrailById(trailId);
-      const nextPhotos = await getApprovedTrailPhotos(trailId, nextTrail).catch(() => []);
+      const [nextPhotos, sightings] = await Promise.all([
+        getApprovedTrailPhotos(trailId, nextTrail).catch(() => []),
+        getTrailNatureSightings(trailId).catch(() => []),
+      ]);
 
       setTrail(nextTrail);
       setTrailPhotos(nextPhotos);
+      setNatureSightings(sightings);
     } catch (nextError) {
       Alert.alert('Unable to refresh photos', nextError instanceof Error ? nextError.message : 'Please try again.');
     }
@@ -608,8 +650,8 @@ export function TrailMediaScreen() {
   }, []);
 
   const galleryItems = useMemo(
-    () => buildGalleryItems(activeTab, trail, trailPhotos, galleryImages),
-    [activeTab, galleryImages, trail, trailPhotos],
+    () => buildGalleryItems(activeTab, trail, trailPhotos, galleryImages, natureSightings),
+    [activeTab, galleryImages, natureSightings, trail, trailPhotos],
   );
   const isTour = activeTab === 'tour';
   const activeColor = theme.colors.buttonPrimary;

@@ -361,7 +361,7 @@ export function TrailDetailScreen() {
         const response = await getSocialFeed({ page: 1, limit: 50 });
         if (!cancelled) {
           const posts = response.data
-            .filter((item) => item.trail.id != null && String(item.trail.id) === String(trailId))
+            .filter((item) => item.type === 'activity' && item.trail.id != null && String(item.trail.id) === String(trailId))
             .map(mapSocialFeedItemToFeedItem);
           setCommunityPosts(posts);
         }
@@ -604,7 +604,7 @@ export function TrailDetailScreen() {
   const posts = communityPosts;
   const isThisTrailActive = activeSessionTrailId === trail.id || ongoingTrailActivity?.trail_id === trail.id;
   const safetyBand = trailSafety ? getSafetyBand(trailSafety.safety_score) : null;
-  const canAskTrailOwner = Boolean(trail.userId && trail.userId !== user?.id);
+  const canOpenTrailThread = isAuthenticated;
   const planTripButton = (
     <Pressable
       style={styles.planTripButton}
@@ -829,18 +829,16 @@ export function TrailDetailScreen() {
   </View>
 </AnimatedBlock>
 
-          {canAskTrailOwner ? (
+          {canOpenTrailThread ? (
             <AnimatedBlock delay={180}>
               <Pressable
                 style={styles.askTrailButton}
                 onPress={() => navigation.navigate('ActivityThread', {
-                  participantId: trail.userId!,
-                  friendId: trail.userId!,
                   participantName: isArabic ? trail.nameAr || trail.name : trail.name,
                   contextType: 'trail',
                   contextId: trail.id,
                   contextTitle: isArabic ? trail.nameAr || trail.name : trail.name,
-                  contextSubtitle: isArabic ? 'اسأل عن هذا المسار' : 'Ask about this trail',
+                  contextSubtitle: isArabic ? 'نقاش عام حول المسار' : 'Public trail discussion',
                 })}
               >
                 <View style={styles.askTrailIcon}>
@@ -848,10 +846,10 @@ export function TrailDetailScreen() {
                 </View>
                 <View style={styles.askTrailCopy}>
                   <Text style={[styles.askTrailTitle, isArabic ? { textAlign: 'right' } : null]}>
-                    {isArabic ? 'اسأل عن هذا المسار' : 'Ask about this trail'}
+                    {isArabic ? 'نقاش المسار' : 'Trail discussion'}
                   </Text>
                   <Text style={[styles.askTrailSubtitle, isArabic ? { textAlign: 'right' } : null]}>
-                    {isArabic ? 'افتح محادثة مرتبطة بتفاصيل المسار.' : 'Open a conversation linked to this trail.'}
+                    {isArabic ? 'افتح محادثة عامة مرتبطة بتفاصيل المسار.' : 'Open the public conversation linked to this trail.'}
                   </Text>
                 </View>
                 <Ionicons name={isArabic ? 'chevron-back' : 'chevron-forward'} size={18} color="#8A7A6A" />

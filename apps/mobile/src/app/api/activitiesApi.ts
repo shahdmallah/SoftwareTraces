@@ -1,4 +1,5 @@
 import { apiRequest, apiTextRequest } from './client';
+import type { NatureSighting } from './natureSightingsApi';
 
 type Envelope<T> = {
   data: T;
@@ -68,6 +69,8 @@ export type ActivityMedia = {
   captured_at?: string | null;
   caption?: string | null;
   created_at?: string | null;
+  source?: 'activity_media';
+  nature_sighting?: NatureSighting | null;
 };
 
 export type ActivityDetailPoint = {
@@ -325,11 +328,15 @@ export async function uploadActivityMedia(
 
   const response = await apiRequest<Envelope<{
     id: string;
+    activity_id?: string;
+    trail_id?: string | null;
     public_url: string;
     latitude: number;
     longitude: number;
     captured_at: string;
     caption?: string | null;
+    source?: 'activity_media';
+    nature_sighting?: NatureSighting | null;
   }>>(`/api/activities/${activityId}/media`, {
     method: 'POST',
     body: formData,

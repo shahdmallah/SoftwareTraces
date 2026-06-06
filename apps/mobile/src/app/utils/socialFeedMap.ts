@@ -100,6 +100,8 @@ export function mapSocialFeedItemToFeedItem(item: SocialFeedItem): FeedItem {
 
   const caption = item.caption?.trim() || '';
   const trailImage = item.trail.image || '';
+  const activityPhotoUris = item.photos.map((photoItem) => photoItem.url).filter(Boolean);
+  const activityCover = item.photo_url || activityPhotoUris[0] || trailImage;
   const distanceLabel = formatDistanceKmFromMeters(item.activity?.distance_meters ?? null);
   const trailId = item.trail.id ?? '';
 
@@ -123,7 +125,7 @@ export function mapSocialFeedItemToFeedItem(item: SocialFeedItem): FeedItem {
           trailImage: trailImage || undefined,
           rating: item.rating ?? 0,
           review: caption,
-          photoUris: item.photos.map((photoItem) => photoItem.url).filter(Boolean),
+          photoUris: activityPhotoUris,
           completedAtIso: item.created_at,
           durationMs: item.activity.elapsed_time_seconds ? item.activity.elapsed_time_seconds * 1000 : 0,
           stepCount: 0,
@@ -135,7 +137,7 @@ export function mapSocialFeedItemToFeedItem(item: SocialFeedItem): FeedItem {
     user: userName,
     handle,
     avatar: item.user.avatar_url || '',
-    image: trailImage,
+    image: activityCover,
     trailNameEn: item.trail.name ?? '',
     trailNameAr: item.trail.name ?? '',
     regionEn: item.visibility ? `Activity · ${item.visibility}` : 'Activity',

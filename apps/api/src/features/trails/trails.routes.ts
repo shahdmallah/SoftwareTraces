@@ -8,8 +8,10 @@ import {
   checkSavedStatus,
   createTrail,
   createTrailCondition,
+  createTrailNatureSighting,
   createTrailReview,
   deleteReviewPhoto,
+  deleteTrailReview,
   deleteTrail,
   deleteTrailPhoto,
   getElevationProfile,
@@ -17,6 +19,7 @@ import {
   getNearbyTrails,
   getTrailById,
   getTrailConditions,
+  getTrailNatureSightings,
   getTrailPhotos,
   getTrailReviews,
   parseTrailDescription,
@@ -27,7 +30,9 @@ import {
   searchTrails,
   setPrimaryPhoto,
   unsaveTrail,
+  updateReviewPhotoCaption,
   updateTrail,
+  updateTrailPhotoCaption,
   uploadTrailPhoto,
 } from "./trails.controller";
 import { getMyTrailDrafts } from "./trailDrafts.controller";
@@ -61,20 +66,25 @@ router.get("/mine", authenticate, asyncHandler(getMyTrails));
 router.get("/drafts", authenticate, asyncHandler(getMyTrailDrafts));
 router.get("/:id/elevation-profile", asyncHandler(getElevationProfile));
 router.get("/:id/photos", asyncHandler(getTrailPhotos));
+router.get("/:id/nature-sightings", asyncHandler(getTrailNatureSightings));
+router.post("/:id/nature-sightings", authenticate, asyncHandler(createTrailNatureSighting));
 router.get("/:id", asyncHandler(getTrailById));
 router.patch("/:id/publish", authenticate, asyncHandler(publishTrail));
 router.get("/:id/reviews", asyncHandler(getTrailReviews));
 router.post("/:id/reviews", authenticate, upload.array("photos", 10), asyncHandler(createTrailReview));
+router.delete("/reviews/:id", authenticate, asyncHandler(deleteTrailReview));
 router.get("/:id/conditions", asyncHandler(getTrailConditions));
 router.post("/:id/conditions", authenticate, validate(z.object({ condition_type: z.enum(['snow', 'ice', 'mud', 'flood', 'fallen_trees', 'wildfire', 'closure', 'good', 'fair']), severity: z.enum(['low', 'medium', 'high', 'extreme']).optional(), description: z.string().optional() })), asyncHandler(createTrailCondition));
 router.post("/:id/photos", authenticate, upload.single("photo"), asyncHandler(uploadTrailPhoto));
+router.patch("/review-photos/:id", authenticate, asyncHandler(updateReviewPhotoCaption));
 router.delete("/review-photos/:id", authenticate, asyncHandler(deleteReviewPhoto));
 router.post("/:id/save", authenticate, asyncHandler(saveTrail));
 router.delete("/:id/save", authenticate, asyncHandler(unsaveTrail));
 router.get("/:id/saved-status", authenticate, asyncHandler(checkSavedStatus));
-router.patch("/:id", authenticate, asyncHandler(updateTrail));
-router.delete("/:id", authenticate, asyncHandler(deleteTrail));
+router.patch("/photos/:id", authenticate, asyncHandler(updateTrailPhotoCaption));
 router.delete("/photos/:id", authenticate, asyncHandler(deleteTrailPhoto));
 router.patch("/photos/:id/primary", authenticate, asyncHandler(setPrimaryPhoto));
+router.patch("/:id", authenticate, asyncHandler(updateTrail));
+router.delete("/:id", authenticate, asyncHandler(deleteTrail));
 
 export default router;

@@ -78,13 +78,6 @@ const features = [
   },
 ];
 
-const stats = [
-  { value: '240+', label: 'Trails' },
-  { value: '18', label: 'Regions' },
-  { value: '12K+', label: 'Hikers' },
-  { value: '4.8', label: 'Rating' },
-];
-
 const difficultyStyle = {
   easy: { bg: 'bg-green-500/20', text: 'text-green-200', label: 'Easy' },
   moderate: { bg: 'bg-yellow-500/20', text: 'text-yellow-200', label: 'Moderate' },
@@ -230,21 +223,6 @@ export function LandingPage({ onAuth }: LandingPageProps) {
           </div>
         </div>
 
-        <div className="absolute bottom-0 left-0 right-0 z-10">
-          <div className="max-w-7xl mx-auto px-6 lg:px-8 pb-10">
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              {stats.map((stat) => (
-                <div
-                  key={stat.label}
-                  className="text-center p-4 rounded-xl bg-white/10 backdrop-blur-md border border-white/15"
-                >
-                  <p className="text-white font-bold text-2xl mb-0.5">{stat.value}</p>
-                  <p className="text-white/60 text-xs">{stat.label}</p>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
       </section>
 
       <section className="py-24 px-6 lg:px-8" style={{ backgroundColor: '#f7f7f7' }}>

@@ -1,4 +1,5 @@
 import axios, { type AxiosResponse } from 'axios';
+import Constants from 'expo-constants';
 
 import { getApiBaseUrl } from '../lib/auth';
 import type { ReactNativeFile } from './mediaApi';
@@ -47,19 +48,63 @@ type IdentifyResponse = {
   fallbackReason?: string;
 };
 
+function getExpoExtraWildlifeApiUrl() {
+  const candidates = [
+    Constants.expoConfig?.extra?.wildlifeApiUrl,
+    (Constants.manifest as { extra?: { wildlifeApiUrl?: unknown } } | null)?.extra?.wildlifeApiUrl,
+    (Constants.manifest2 as { extra?: { wildlifeApiUrl?: unknown } } | null)?.extra?.wildlifeApiUrl,
+    (
+      Constants.manifest2 as {
+        extra?: { expoClient?: { extra?: { wildlifeApiUrl?: unknown } } };
+      } | null
+    )?.extra?.expoClient?.extra?.wildlifeApiUrl,
+    process.env.EXPO_PUBLIC_WILDLIFE_API_URL,
+  ];
+
+  const resolved = candidates.find(
+    (candidate) => typeof candidate === 'string' && candidate.trim().length > 0,
+  );
+
+  return typeof resolved === 'string' ? resolved.trim() : '';
+}
+
+function getExpoExtraWildlifeApiPort() {
+  const candidates = [
+    Constants.expoConfig?.extra?.wildlifeApiPort,
+    (Constants.manifest as { extra?: { wildlifeApiPort?: unknown } } | null)?.extra?.wildlifeApiPort,
+    (Constants.manifest2 as { extra?: { wildlifeApiPort?: unknown } } | null)?.extra?.wildlifeApiPort,
+    (
+      Constants.manifest2 as {
+        extra?: { expoClient?: { extra?: { wildlifeApiPort?: unknown } } };
+      } | null
+    )?.extra?.expoClient?.extra?.wildlifeApiPort,
+    process.env.EXPO_PUBLIC_WILDLIFE_API_PORT,
+  ];
+
+  const resolved = candidates.find(
+    (candidate) => typeof candidate === 'string' && candidate.trim().length > 0,
+  );
+
+  return typeof resolved === 'string' ? resolved.trim() : '8000';
+}
+
 function getSpeciesBaseUrl() {
-  const explicitUrl = process.env.EXPO_PUBLIC_WILDLIFE_API_URL?.trim();
+  const explicitUrl = getExpoExtraWildlifeApiUrl();
 
   if (explicitUrl) {
     return explicitUrl.replace(/\/$/, '');
   }
 
   const apiUrl = new URL(getApiBaseUrl());
-  apiUrl.port = '8000';
+  apiUrl.port = getExpoExtraWildlifeApiPort();
   apiUrl.pathname = '';
   apiUrl.search = '';
   apiUrl.hash = '';
   return apiUrl.toString().replace(/\/$/, '');
+}
+
+function getWildlifeReachabilityMessage(baseUrl: string) {
+  return `Unable to reach the wildlife server at ${baseUrl}. Check your local IP and port 8000.`;
 }
 
 export async function identifySpecies(file: ReactNativeFile, language: SpeciesLanguage = 'en') {
@@ -67,10 +112,11 @@ export async function identifySpecies(file: ReactNativeFile, language: SpeciesLa
   formData.append('file', file as unknown as Blob);
   formData.append('language', language);
 
+  const baseUrl = getSpeciesBaseUrl();
   let response: AxiosResponse<PredictResponse>;
 
   try {
-    response = await axios.post<PredictResponse>(`${getSpeciesBaseUrl()}/predict`, formData, {
+    response = await axios.post<PredictResponse>(`${baseUrl}/predict`, formData, {
       headers: {
         'Content-Type': 'multipart/form-data',
       },
@@ -79,7 +125,7 @@ export async function identifySpecies(file: ReactNativeFile, language: SpeciesLa
   } catch (error) {
     if (axios.isAxiosError(error)) {
       if (!error.response) {
-        throw new Error('Unable to reach the wildlife server. Check your local IP and port 8000.');
+        throw new Error(getWildlifeReachabilityMessage(baseUrl));
       }
 
       const detail = (error.response.data as { detail?: unknown } | undefined)?.detail;
@@ -97,10 +143,11 @@ export async function identifySpeciesDetails(file: ReactNativeFile, language: Sp
   formData.append('file', file as unknown as Blob);
   formData.append('language', language);
 
+  const baseUrl = getSpeciesBaseUrl();
   let response: AxiosResponse<IdentifyResponse>;
 
   try {
-    response = await axios.post<IdentifyResponse>(`${getSpeciesBaseUrl()}/identify`, formData, {
+    response = await axios.post<IdentifyResponse>(`${baseUrl}/identify`, formData, {
       headers: {
         'Content-Type': 'multipart/form-data',
       },
@@ -109,7 +156,7 @@ export async function identifySpeciesDetails(file: ReactNativeFile, language: Sp
   } catch (error) {
     if (axios.isAxiosError(error)) {
       if (!error.response) {
-        throw new Error('Unable to reach the wildlife server. Check your local IP and port 8000.');
+        throw new Error(getWildlifeReachabilityMessage(baseUrl));
       }
 
       const detail = (error.response.data as { detail?: unknown } | undefined)?.detail;

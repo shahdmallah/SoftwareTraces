@@ -1,9 +1,20 @@
 import Constants from 'expo-constants';
-import { requireOptionalNativeModule } from 'expo-modules-core';
 import { Platform } from 'react-native';
 import { registerPushToken, type PushPlatform } from '../api/notificationsApi';
 
 export type PushNotificationData = Record<string, unknown>;
+export type PushNotificationActivationStatus = 'enabled' | 'disabled' | 'unavailable';
+export type NavigationAlertNotificationInput = {
+  trailId: string;
+  activityId?: string | null;
+  navigationSessionId: string;
+  title?: string;
+  body: string;
+  latitude: number;
+  longitude: number;
+  deviationMeters: number;
+  progressPercent: number;
+};
 
 type DeviceModule = typeof import('expo-device');
 type NotificationsModule = typeof import('expo-notifications');
@@ -15,28 +26,9 @@ let deviceModulePromise: Promise<DeviceModule | null> | null = null;
 let notificationsModulePromise: Promise<NotificationsModule | null> | null = null;
 let notificationHandlerConfigured = false;
 
-function nativeModuleAvailable(moduleName: string): boolean {
-  return requireOptionalNativeModule(moduleName) != null;
-}
-
-function pushNativeModulesAvailable(): boolean {
-  return (
-    nativeModuleAvailable('ExpoDevice') &&
-    nativeModuleAvailable('ExpoPushTokenManager') &&
-    nativeModuleAvailable('ExpoNotificationPermissionsModule') &&
-    nativeModuleAvailable('ExpoNotificationsEmitter') &&
-    nativeModuleAvailable('ExpoNotificationsHandlerModule') &&
-    (Platform.OS !== 'android' || nativeModuleAvailable('ExpoNotificationChannelManager'))
-  );
-}
-
 async function getDeviceModule(): Promise<DeviceModule | null> {
   if (deviceModulePromise) {
     return deviceModulePromise;
-  }
-
-  if (!nativeModuleAvailable('ExpoDevice')) {
-    return null;
   }
 
   deviceModulePromise = import('expo-device').catch((error) => {
@@ -69,10 +61,6 @@ async function getNotificationsModule(): Promise<NotificationsModule | null> {
     return notificationsModulePromise;
   }
 
-  if (!pushNativeModulesAvailable()) {
-    return null;
-  }
-
   notificationsModulePromise = import('expo-notifications')
     .then((Notifications) => {
       configureNotificationHandler(Notifications);
@@ -99,6 +87,10 @@ function getProjectId(): string | undefined {
   return Constants.easConfig?.projectId ?? Constants.expoConfig?.extra?.eas?.projectId;
 }
 
+function isExpoPushToken(token: string): boolean {
+  return /^(ExponentPushToken|ExpoPushToken)\[[^\]]+\]$/.test(token);
+}
+
 function getPlatform(): PushPlatform {
   if (Platform.OS === 'ios') {
     return 'ios';
@@ -116,12 +108,20 @@ async function ensureAndroidNotificationChannel(Notifications: NotificationsModu
     return;
   }
 
-  await Notifications.setNotificationChannelAsync('default', {
-    name: 'Default',
-    importance: Notifications.AndroidImportance.HIGH,
-    vibrationPattern: [0, 250, 250, 250],
-    lightColor: '#630E13',
-  });
+  await Promise.all([
+    Notifications.setNotificationChannelAsync('default', {
+      name: 'Default',
+      importance: Notifications.AndroidImportance.HIGH,
+      vibrationPattern: [0, 250, 250, 250],
+      lightColor: '#630E13',
+    }),
+    Notifications.setNotificationChannelAsync('navigation', {
+      name: 'Navigation alerts',
+      importance: Notifications.AndroidImportance.MAX,
+      vibrationPattern: [0, 250, 250, 250],
+      lightColor: '#8B1E1E',
+    }),
+  ]);
 }
 
 function isNotificationPermissionGranted(permission: NotificationPermissionsStatus): boolean {
@@ -142,6 +142,19 @@ async function requestNotificationPermission(Notifications: NotificationsModule)
   }
 
   return true;
+}
+
+export async function getPushNotificationActivationStatus(): Promise<PushNotificationActivationStatus> {
+  const { Device, Notifications } = await getPushModules();
+
+  if (!Device || !Notifications || !Device.isDevice || !getProjectId()) {
+    return 'unavailable';
+  }
+
+  await ensureAndroidNotificationChannel(Notifications);
+
+  const permission = await Notifications.getPermissionsAsync();
+  return isNotificationPermissionGranted(permission) ? 'enabled' : 'disabled';
 }
 
 export async function registerDeviceForPushNotifications(): Promise<string | null> {
@@ -166,16 +179,23 @@ export async function registerDeviceForPushNotifications(): Promise<string | nul
   }
 
   const projectId = getProjectId();
-  let resolvedToken = projectId
-    ? (await Notifications.getExpoPushTokenAsync({ projectId })).data
-    : (() => {
-        console.warn('[pushNotifications] Missing EAS projectId; registering the native device push token instead.');
-        return null;
-      })();
+  let resolvedToken: string | null = null;
 
-  if (!resolvedToken) {
-    const deviceToken = await Notifications.getDevicePushTokenAsync();
-    resolvedToken = typeof deviceToken.data === 'string' ? deviceToken.data : JSON.stringify(deviceToken.data);
+  if (!projectId) {
+    console.warn('[pushNotifications] Missing EAS projectId; Expo push token registration is unavailable.');
+    return null;
+  }
+
+  if (projectId) {
+    try {
+      resolvedToken = (await Notifications.getExpoPushTokenAsync({ projectId })).data;
+    } catch (error) {
+      console.warn('[pushNotifications] Failed to get Expo push token:', error);
+    }
+  }
+
+  if (!resolvedToken || !isExpoPushToken(resolvedToken)) {
+    return null;
   }
 
   await registerPushToken({
@@ -185,6 +205,42 @@ export async function registerDeviceForPushNotifications(): Promise<string | nul
   });
 
   return resolvedToken;
+}
+
+export async function presentNavigationAlertNotification(input: NavigationAlertNotificationInput): Promise<string | null> {
+  const { Device, Notifications } = await getPushModules();
+
+  if (!Device || !Notifications) {
+    return null;
+  }
+
+  await ensureAndroidNotificationChannel(Notifications);
+
+  const hasPermission = await requestNotificationPermission(Notifications);
+  if (!hasPermission) {
+    return null;
+  }
+
+  return Notifications.scheduleNotificationAsync({
+    content: {
+      title: input.title ?? 'Navigation alert',
+      body: input.body,
+      data: {
+        type: 'danger_alert',
+        notification_kind: 'navigation_off_track',
+        trail_id: input.trailId,
+        activity_id: input.activityId ?? undefined,
+        navigation_session_id: input.navigationSessionId,
+        latitude: input.latitude,
+        longitude: input.longitude,
+        deviation_meters: input.deviationMeters,
+        progress_percent: input.progressPercent,
+      },
+      sound: 'default',
+      priority: Notifications.AndroidNotificationPriority.MAX,
+    },
+    trigger: Platform.OS === 'android' ? { channelId: 'navigation' } : null,
+  });
 }
 
 export function getNotificationData(response: NotificationResponse): PushNotificationData {

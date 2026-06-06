@@ -29,6 +29,7 @@ import { useLanguage } from '../contexts/LanguageContext';
 import { addLocalFeedItem } from '../data/localSocial';
 import { createMeetup } from '../api/meetupsApi';
 import { uploadMedia, type ReactNativeFile } from '../api/mediaApi';
+import { saveNatureSighting } from '../api/natureSightingsApi';
 import { identifySpeciesDetails, type SpeciesIdentification, type SpeciesPrediction } from '../api/speciesApi';
 import { getFollowers, getFollowing, type SocialProfile } from '../api/socialApi';
 import { getTrails, type Trail } from '../api/trailsApi';
@@ -634,9 +635,47 @@ function toPointFeature(coordinate: LngLat | null): FeatureCollection<Point> {
   };
 }
 
+function joinPlaceParts(parts: Array<string | null | undefined>): string {
+  const uniqueParts: string[] = [];
+
+  parts.forEach((part) => {
+    const cleanPart = part?.trim();
+    if (!cleanPart) {
+      return;
+    }
+
+    const exists = uniqueParts.some((existing) => existing.toLowerCase() === cleanPart.toLowerCase());
+    if (!exists) {
+      uniqueParts.push(cleanPart);
+    }
+  });
+
+  return uniqueParts.join(', ');
+}
+
+async function reverseGeocodeExpoPlace(coordinate: LngLat): Promise<string> {
+  try {
+    const [place] = await Location.reverseGeocodeAsync({
+      latitude: coordinate[1],
+      longitude: coordinate[0],
+    });
+
+    if (!place) {
+      return '';
+    }
+
+    const primary = place.name || place.street || place.district || place.city || place.region;
+    const area = place.city || place.district || place.region || place.country;
+
+    return joinPlaceParts([primary, area]);
+  } catch {
+    return '';
+  }
+}
+
 async function reverseGeocodeMeetingPlace(coordinate: LngLat, isArabic: boolean): Promise<string> {
   if (!MAPBOX_ACCESS_TOKEN) {
-    return '';
+    return reverseGeocodeExpoPlace(coordinate);
   }
 
   try {
@@ -648,7 +687,7 @@ async function reverseGeocodeMeetingPlace(coordinate: LngLat, isArabic: boolean)
 
     const res = await fetch(url.toString());
     if (!res.ok) {
-      return '';
+      return reverseGeocodeExpoPlace(coordinate);
     }
 
     const data = await res.json() as {
@@ -661,7 +700,7 @@ async function reverseGeocodeMeetingPlace(coordinate: LngLat, isArabic: boolean)
     };
     const feature = data.features?.[0];
     if (!feature) {
-      return '';
+      return reverseGeocodeExpoPlace(coordinate);
     }
 
     const primary = feature.text?.trim();
@@ -676,9 +715,9 @@ async function reverseGeocodeMeetingPlace(coordinate: LngLat, isArabic: boolean)
       return `${primary}, ${neighborhood}`;
     }
 
-    return primary || feature.place_name?.split(',')[0]?.trim() || '';
+    return primary || feature.place_name?.split(',')[0]?.trim() || reverseGeocodeExpoPlace(coordinate);
   } catch {
-    return '';
+    return reverseGeocodeExpoPlace(coordinate);
   }
 }
 
@@ -1160,7 +1199,10 @@ export function ActivityShareComposerScreen() {
       const current = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
       const coords = { lat: current.coords.latitude, lng: current.coords.longitude };
       setMediaCoords(coords);
-      setLocationLabel(`${coords.lat.toFixed(5)}, ${coords.lng.toFixed(5)}`);
+      setLocationLabel(isArabic ? 'جار العثور على اسم المكان...' : 'Finding place name...');
+
+      const placeName = await reverseGeocodeMeetingPlace([coords.lng, coords.lat], isArabic);
+      setLocationLabel(placeName || `${coords.lat.toFixed(5)}, ${coords.lng.toFixed(5)}`);
     } catch (error) {
       Alert.alert(
         isArabic ? 'تعذر تحديد الموقع' : 'Unable to get location',
@@ -1185,25 +1227,60 @@ export function ActivityShareComposerScreen() {
         return;
       }
 
+      if (isLocating) {
+        Alert.alert(
+          isArabic ? 'جار العثور على اسم المكان' : 'Finding place name',
+          isArabic ? 'انتظر حتى ننتهي من تحديد اسم المكان.' : 'Wait until the place name finishes resolving.',
+        );
+        return;
+      }
+
       setIsPosting(true);
       try {
+        const trailIdForMedia = null;
+        const mediaLatitude = mediaCoords.lat;
+        const mediaLongitude = mediaCoords.lng;
+        const mediaLocationName = locationLabel.trim() || null;
         const uploaded = await Promise.all(
           photos.map((photo) =>
             uploadMedia({
               file: imageUriToFile(photo),
               caption: trimmedNote,
-              latitude: mediaCoords.lat,
-              longitude: mediaCoords.lng,
-              locationName: locationLabel.trim() || null,
-              tripId: route.params?.trailId ?? selectedTrailId ?? null,
+              latitude: mediaLatitude,
+              longitude: mediaLongitude,
+              locationName: mediaLocationName,
+              tripId: trailIdForMedia,
             }),
           ),
         );
 
+        await Promise.all(
+          uploaded.map(async (media, index) => {
+            if (!media.id) {
+              return;
+            }
+
+            const classification = index === 0 && speciesResult
+              ? speciesResult
+              : (await identifySpeciesDetails(imageUriToFile(photos[index]), isArabic ? 'ar' : 'en')).result;
+
+            await saveNatureSighting({
+              trail_id: trailIdForMedia,
+              photo_id: media.id,
+              photo_type: 'media',
+              photo_url: media.url,
+              latitude: mediaLatitude,
+              longitude: mediaLongitude,
+              language: isArabic ? 'ar' : 'en',
+              classification,
+            });
+          }),
+        ).catch(() => null);
+
         addLocalFeedItem({
           id: `local-location-media-${Date.now()}`,
           kind: 'recap',
-          trailId: route.params?.trailId ?? selectedTrailId ?? '',
+          trailId: trailIdForMedia ?? '',
           user: user?.full_name || 'You',
           handle: '@you',
           avatar: user?.avatar_url || 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?crop=faces&fit=crop&w=240&h=240',
@@ -1579,17 +1656,7 @@ export function ActivityShareComposerScreen() {
             </Card>
           ) : null}
 
-          {!isLocationMedia ? (
-            <FieldRow icon="trail-sign-outline" label={isArabic ? 'المسار' : 'Trail'} isArabic={isArabic}>
-              <SelectPill
-                value={trail}
-                placeholder={isLoadingTrails ? (isArabic ? 'جار تحميل المسارات...' : 'Loading trails...') : (isArabic ? 'اختر مساراً من Explore' : 'Choose a trail from Explore')}
-                isArabic={isArabic}
-                onPress={() => setShowTrailPicker(true)}
-                iconRight="list-outline"
-              />
-            </FieldRow>
-          ) : (
+          {isLocationMedia ? (
             <FieldRow icon="location-outline" label={isArabic ? 'الموقع الحالي' : 'Current location'} isArabic={isArabic}>
               <Pressable
                 style={[styles.locationButton, isLocating && styles.submitButtonDisabled]}
@@ -1602,19 +1669,17 @@ export function ActivityShareComposerScreen() {
                 </Text>
               </Pressable>
             </FieldRow>
-          )}
-
-          {isLocationMedia && (
-            <FieldRow icon="trail-sign-outline" label={isArabic ? 'ربط بمسار (اختياري)' : 'Link to trail (optional)'} isArabic={isArabic}>
+          ) : !isPlan ? (
+            <FieldRow icon="trail-sign-outline" label={isArabic ? 'المسار' : 'Trail'} isArabic={isArabic}>
               <SelectPill
                 value={trail}
-                placeholder={isLoadingTrails ? (isArabic ? 'جار تحميل المسارات...' : 'Loading trails...') : (isArabic ? 'اختر مساراً (اختياري)' : 'Choose trail (optional)')}
+                placeholder={isLoadingTrails ? (isArabic ? 'جار تحميل المسارات...' : 'Loading trails...') : (isArabic ? 'اختر مساراً من Explore' : 'Choose a trail from Explore')}
                 isArabic={isArabic}
                 onPress={() => setShowTrailPicker(true)}
-                iconRight="chevron-down-outline"
+                iconRight="list-outline"
               />
             </FieldRow>
-          )}
+          ) : null}
 
           {isPlan && (
             <>

@@ -5,7 +5,9 @@ import * as ImagePicker from 'expo-image-picker';
 import { useNavigation } from '@react-navigation/native';
 import type { StackNavigationProp } from '@react-navigation/stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { shareActivityPost } from '../api/activitiesApi';
+import { shareActivityPost, uploadActivityMedia, type ActivityMediaFile } from '../api/activitiesApi';
+import { saveNatureSighting } from '../api/natureSightingsApi';
+import { identifySpeciesDetails, type SpeciesLanguage } from '../api/speciesApi';
 import {
   addTrailCondition,
   addTrailReview,
@@ -14,7 +16,8 @@ import {
   type ConditionType,
   type ReactNativeFile,
 } from '../api/trailsApi';
-import { useTrailTracking } from '../contexts/TrailTrackingContext';
+import { useLanguage } from '../contexts/LanguageContext';
+import { useTrailTracking, type CompletedTrailSession } from '../contexts/TrailTrackingContext';
 import { saveJournalEntry } from '../data/localSocial';
 import type { TrailCompletionDraft } from '../features/trailCompletion/types';
 import type { RootStackParamList } from '../navigation/types';
@@ -56,13 +59,112 @@ function toReactNativeFile(uri: string): ReactNativeFile {
   };
 }
 
+function toActivityMediaFile(uri: string): ActivityMediaFile {
+  const filename = uri.split('/').pop()?.split('?')[0] || `activity-photo-${Date.now()}.jpg`;
+  const extension = filename.split('.').pop()?.toLowerCase();
+  const type = extension === 'png'
+    ? 'image/png'
+    : extension === 'webp'
+      ? 'image/webp'
+      : extension === 'gif'
+        ? 'image/gif'
+        : 'image/jpeg';
+
+  return { uri, name: filename, type };
+}
+
 function mergeUniquePhotos(current: string[], incoming: string[]) {
   return Array.from(new Set([...current, ...incoming])).slice(0, 6);
+}
+
+function isRemoteUri(uri: string) {
+  return /^https?:\/\//i.test(uri);
+}
+
+function coordinateForPostPhoto(session: CompletedTrailSession, uri: string): [number, number] | null {
+  const taggedPhoto = session.sessionPhotos.find((photo) => photo.uri === uri);
+
+  if (taggedPhoto) {
+    return taggedPhoto.coordinate;
+  }
+
+  if (session.trail?.coordinates) {
+    return [session.trail.coordinates[1], session.trail.coordinates[0]];
+  }
+
+  return null;
+}
+
+function capturedAtForPostPhoto(session: CompletedTrailSession, uri: string) {
+  const taggedPhoto = session.sessionPhotos.find((photo) => photo.uri === uri);
+  return new Date(taggedPhoto?.capturedAt ?? session.finishedAt).toISOString();
+}
+
+async function uploadPostPhotosToActivity(
+  session: CompletedTrailSession,
+  uris: string[],
+  caption: string,
+  language: SpeciesLanguage,
+) {
+  if (!session.activityId) {
+    return [];
+  }
+
+  const uploadedByLocalUri = new Map<string, string>();
+  const uniqueLocalUris = Array.from(new Set(uris.filter((uri) => uri && !isRemoteUri(uri))));
+
+  await Promise.all(
+    uniqueLocalUris.map(async (uri) => {
+      const taggedPhoto = session.sessionPhotos.find((photo) => photo.uri === uri);
+      if (taggedPhoto?.remoteId || taggedPhoto?.syncStatus === 'synced') {
+        return;
+      }
+
+      const coordinate = coordinateForPostPhoto(session, uri);
+      if (!coordinate) {
+        return;
+      }
+
+      const [lng, lat] = coordinate;
+      const uploaded = await uploadActivityMedia(session.activityId!, {
+        photo: toActivityMediaFile(uri),
+        latitude: lat,
+        longitude: lng,
+        capturedAt: capturedAtForPostPhoto(session, uri),
+        caption,
+      });
+
+      if (uploaded.public_url) {
+        uploadedByLocalUri.set(uri, uploaded.public_url);
+      }
+
+      if (uploaded.id) {
+        await identifySpeciesDetails(toActivityMediaFile(uri), language)
+          .then((identification) =>
+            saveNatureSighting({
+              trail_id: uploaded.trail_id ?? session.trailId ?? null,
+              activity_id: uploaded.activity_id ?? session.activityId,
+              photo_id: uploaded.id,
+              photo_type: 'activity_media',
+              photo_url: uploaded.public_url,
+              latitude: lat,
+              longitude: lng,
+              language,
+              classification: identification.result,
+            }),
+          )
+          .catch(() => undefined);
+      }
+    }),
+  );
+
+  return uris.map((uri) => uploadedByLocalUri.get(uri) ?? uri);
 }
 
 export function TrailReviewScreen() {
   const navigation = useNavigation<TrailReviewNavigationProp>();
   const insets = useSafeAreaInsets();
+  const { language } = useLanguage();
   const { finishedSession, clearFinishedSession } = useTrailTracking();
   const [rating, setRating] = useState(5);
   const [review, setReview] = useState('');
@@ -207,6 +309,15 @@ export function TrailReviewScreen() {
       const savedPostCaption = postSkipped ? '' : trimmedPostCaption;
       const savedPostPhotos = postSkipped ? [] : postPhotoUris;
       const savedReviewPhotos = skipReview ? [] : reviewPhotoUris;
+      const durablePostPhotos =
+        !postSkipped && finishedSession.activityId
+          ? await uploadPostPhotosToActivity(
+              finishedSession,
+              savedPostPhotos,
+              savedPostCaption || savedReview || 'Completed this hike',
+              language,
+            )
+          : savedPostPhotos;
       const draft: TrailCompletionDraft = {
         activityId: finishedSession.activityId,
         trailId: finishedSession.trailId,
@@ -222,14 +333,14 @@ export function TrailReviewScreen() {
         reviewPhotoUris: savedReviewPhotos,
         postSkipped,
         postCaption: savedPostCaption,
-        postPhotoUris: savedPostPhotos,
+        postPhotoUris: durablePostPhotos,
         activityPhotoTags: finishedSession.sessionPhotos.map((photo) => ({
           uri: photo.uri,
           coordinate: photo.coordinate,
           capturedAt: photo.capturedAt,
         })),
         postVisibility: visibility,
-        photoUris: savedPostPhotos.length ? savedPostPhotos : savedReviewPhotos,
+        photoUris: durablePostPhotos.length ? durablePostPhotos : savedReviewPhotos,
         completedAtIso: new Date().toISOString(),
         durationMs: finishedSession.elapsedMs,
         stepCount: finishedSession.stepCount,
@@ -281,7 +392,7 @@ export function TrailReviewScreen() {
             trail: trailName,
             note: savedPostCaption || savedReview || 'Private hike post',
             date: draft.completedAtIso,
-            photoUris: savedPostPhotos,
+            photoUris: durablePostPhotos,
           });
         }
         clearFinishedSession();

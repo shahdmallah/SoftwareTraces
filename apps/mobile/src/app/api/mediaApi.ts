@@ -116,7 +116,7 @@ export async function uploadMedia(payload: {
   if (payload.tripId) formData.append('trip_id', payload.tripId);
   formData.append('is_public', 'true');
 
-  const response = await apiRequest<Envelope<{ id: string; url: string; thumbnail_url?: string }>>('/api/media', {
+  const response = await apiRequest<Envelope<{ id: string; url: string; thumbnail_url?: string; source?: 'media'; nature_sighting?: unknown }>>('/api/media', {
     method: 'POST',
     body: formData,
   });
@@ -128,8 +128,24 @@ export async function deleteReviewPhoto(photoId: string) {
   return apiRequest<{ message: string }>(`/api/trails/review-photos/${photoId}`, { method: 'DELETE' });
 }
 
+export async function updateReviewPhotoCaption(photoId: string, payload: { caption?: string | null }) {
+  const response = await apiRequest<Envelope<{ id: string; caption: string | null }>>(`/api/trails/review-photos/${photoId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ caption: payload.caption ?? null }),
+  });
+  return response.data;
+}
+
 export async function deleteTrailPhoto(photoId: string) {
   return apiRequest<{ message: string }>(`/api/trails/photos/${photoId}`, { method: 'DELETE' });
+}
+
+export async function updateTrailPhotoCaption(photoId: string, payload: { caption?: string | null }) {
+  const response = await apiRequest<Envelope<{ id: string; caption: string | null }>>(`/api/trails/photos/${photoId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ caption: payload.caption ?? null }),
+  });
+  return response.data;
 }
 
 export async function setPrimaryTrailPhoto(photoId: string) {

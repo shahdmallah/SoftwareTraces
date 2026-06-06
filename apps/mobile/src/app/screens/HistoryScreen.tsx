@@ -3,13 +3,16 @@ import {
   View,
   Text,
   ScrollView,
+  FlatList,
   Pressable,
   StyleSheet,
   Dimensions,
   Image,
   ActivityIndicator,
   Alert,
+  Modal,
   Share,
+  TextInput,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
@@ -20,13 +23,56 @@ import { useLanguage } from '../contexts/LanguageContext';
 import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
 import { useAuth } from '../contexts/AuthContext';
 import { deleteActivity, getActivityById, getActivityGpx, getMyActivities, type Activity, type ActivityDetail } from '../api/activitiesApi';
-import { getSavedTrails, getTrailById, type Trail } from '../api/trailsApi';
+import { deleteReviewPhoto, deleteTrailPhoto, updateReviewPhotoCaption, updateTrailPhotoCaption } from '../api/mediaApi';
+import { getSocialFeedItem } from '../api/socialApi';
+import { addTrailReview, deleteTrailReview, getSavedTrails, getTrailById, type Trail } from '../api/trailsApi';
 import { getProfilePhotos, getProfileReviews, type ProfilePhoto, type ProfileReview } from '../api/profilesApi';
+import type { FeedItem } from '../data/activitySocial';
+import type { TrailCompletionDraft } from '../features/trailCompletion/types';
+import { mapSocialFeedItemToFeedItem } from '../utils/socialFeedMap';
 
 const dayNamesAr = ['أح', 'إث', 'ثل', 'أر', 'خم', 'جم', 'سب'];
 const dayNamesEn = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
 
-type HistoryNavigationProp = StackNavigationProp<RootStackParamList, 'TrailDetail'>;
+type HistoryNavigationProp = StackNavigationProp<RootStackParamList>;
+
+type SharedHistoryItem = {
+  id: string;
+  sourceId: string;
+  source?: ProfilePhoto['source'];
+  type: 'review' | 'post';
+  trailId?: string;
+  trailName: string;
+  title: string;
+  body: string;
+  image: string;
+  createdAt: string;
+  meta: string;
+  rating?: number;
+};
+
+function recapToDraft(item: Extract<FeedItem, { kind: 'recap' }>): TrailCompletionDraft {
+  return item.completionDraft ?? {
+    activityId: item.activityId,
+    trailId: item.trailId,
+    publisherId: item.userId,
+    publisherName: item.user,
+    publisherHandle: item.handle,
+    publisherAvatar: item.avatar,
+    trailName: item.trailNameEn,
+    trailNameAr: item.trailNameAr,
+    trailImage: item.image,
+    region: item.regionEn,
+    regionAr: item.regionAr,
+    rating: 0,
+    review: item.captionEn,
+    photoUris: item.image ? [item.image] : [],
+    completedAtIso: new Date().toISOString(),
+    durationMs: 0,
+    stepCount: 0,
+    routePointCount: 0,
+  };
+}
 
 export function HistoryScreen() {
   const navigation = useNavigation<HistoryNavigationProp>();
@@ -45,6 +91,11 @@ export function HistoryScreen() {
   const [loadingActivityId, setLoadingActivityId] = useState<string | null>(null);
   const [activityError, setActivityError] = useState('');
   const [exportingActivityId, setExportingActivityId] = useState<string | null>(null);
+  const [pendingSharedActionId, setPendingSharedActionId] = useState<string | null>(null);
+  const [editingSharedItem, setEditingSharedItem] = useState<SharedHistoryItem | null>(null);
+  const [editSharedText, setEditSharedText] = useState('');
+  const [editSharedRating, setEditSharedRating] = useState(5);
+  const [isSavingSharedEdit, setIsSavingSharedEdit] = useState(false);
   const [isHistoryLoading, setIsHistoryLoading] = useState(true);
   const [historyError, setHistoryError] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
@@ -161,9 +212,10 @@ export function HistoryScreen() {
     return sum + (ended - started) / 3600000;
   }, 0);
 
-  const sharedHistoryItems = useMemo(() => {
+  const sharedHistoryItems = useMemo<SharedHistoryItem[]>(() => {
     const reviewItems = profileReviews.map((review) => ({
       id: `review-${review.id}`,
+      sourceId: review.id,
       type: 'review' as const,
       trailId: review.trail.id,
       trailName: review.trail.name,
@@ -171,11 +223,14 @@ export function HistoryScreen() {
       body: review.content,
       image: review.photo_url || review.photos?.[0]?.url || review.trail.image || '',
       createdAt: review.created_at,
+      rating: Number(review.rating || 0),
       meta: `${Number(review.rating || 0).toFixed(1)} ★`,
     }));
 
     const photoItems = profilePhotos.map((photo) => ({
       id: `photo-${photo.id}`,
+      sourceId: photo.id,
+      source: photo.source,
       type: 'post' as const,
       trailId: photo.trail_id,
       trailName: photo.trail_name || (isArabic ? 'مسار' : 'Trail'),
@@ -255,6 +310,150 @@ export function HistoryScreen() {
     }
   };
 
+  const handleOpenSharedHistoryItem = async (item: SharedHistoryItem) => {
+    if (item.type === 'review') {
+      try {
+        const feedItem = mapSocialFeedItemToFeedItem(await getSocialFeedItem('review', item.sourceId));
+        if (feedItem.kind === 'recap') {
+          navigation.navigate('ActivityShare', { draft: recapToDraft(feedItem) });
+          return;
+        }
+      } catch (error) {
+        Alert.alert('Unable to open review', error instanceof Error ? error.message : 'Please try again.');
+        return;
+      }
+    }
+
+    if (item.trailId) {
+      navigation.navigate('ActivityShare', {
+        draft: {
+          trailId: item.trailId,
+          trailName: item.trailName || 'Trail',
+          trailImage: item.image || undefined,
+          rating: 0,
+          review: item.body || '',
+          reviewSkipped: true,
+          postCaption: item.body || '',
+          photoUris: item.image ? [item.image] : [],
+          postPhotoUris: item.image ? [item.image] : [],
+          completedAtIso: item.createdAt || new Date().toISOString(),
+          durationMs: 0,
+          stepCount: 0,
+          routePointCount: 0,
+        },
+      });
+    }
+  };
+
+  const handleDeleteSharedHistoryItem = (item: SharedHistoryItem) => {
+    const label = item.type === 'review' ? 'review' : 'post';
+    Alert.alert(
+      `Delete ${label}?`,
+      `This removes this ${label} from your history.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            setPendingSharedActionId(item.id);
+            try {
+              if (item.type === 'review') {
+                await deleteTrailReview(item.sourceId);
+                setProfileReviews((current) => current.filter((review) => review.id !== item.sourceId));
+              } else if (item.source === 'review') {
+                await deleteReviewPhoto(item.sourceId);
+                setProfilePhotos((current) => current.filter((photo) => photo.id !== item.sourceId));
+              } else {
+                await deleteTrailPhoto(item.sourceId);
+                setProfilePhotos((current) => current.filter((photo) => photo.id !== item.sourceId));
+              }
+            } catch (error) {
+              Alert.alert(`Unable to delete ${label}`, error instanceof Error ? error.message : 'Please try again.');
+            } finally {
+              setPendingSharedActionId(null);
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  const handleEditSharedHistoryItem = (item: SharedHistoryItem) => {
+    setEditingSharedItem(item);
+    setEditSharedText(item.body || '');
+    setEditSharedRating(Math.min(5, Math.max(1, Math.round(item.rating || 5))));
+  };
+
+  const handleCloseSharedEdit = () => {
+    if (isSavingSharedEdit) return;
+    setEditingSharedItem(null);
+    setEditSharedText('');
+    setEditSharedRating(5);
+  };
+
+  const handleSaveSharedEdit = async () => {
+    if (!editingSharedItem) return;
+
+    const nextText = editSharedText.trim();
+    if (editingSharedItem.type === 'review' && nextText.length < 2) {
+      Alert.alert('Review too short', 'Please write at least 2 characters.');
+      return;
+    }
+
+    setIsSavingSharedEdit(true);
+    try {
+      if (editingSharedItem.type === 'review') {
+        if (!editingSharedItem.trailId) {
+          throw new Error('This review is missing its trail link.');
+        }
+
+        const response = await addTrailReview(editingSharedItem.trailId, {
+          rating: editSharedRating,
+          content: nextText,
+        });
+        const updatedReview = response.data;
+        setProfileReviews((current) =>
+          current.map((review) =>
+            review.id === editingSharedItem.sourceId
+              ? {
+                  ...review,
+                  rating: updatedReview.rating ?? editSharedRating,
+                  title: updatedReview.title ?? review.title,
+                  content: updatedReview.content ?? nextText,
+                }
+              : review,
+          ),
+        );
+      } else {
+        const nextCaption = nextText || null;
+        if (editingSharedItem.source === 'review') {
+          await updateReviewPhotoCaption(editingSharedItem.sourceId, { caption: nextCaption });
+        } else {
+          await updateTrailPhotoCaption(editingSharedItem.sourceId, { caption: nextCaption });
+        }
+        setProfilePhotos((current) =>
+          current.map((photo) =>
+            photo.id === editingSharedItem.sourceId
+              ? {
+                  ...photo,
+                  caption: nextCaption,
+                }
+              : photo,
+          ),
+        );
+      }
+
+      setEditingSharedItem(null);
+      setEditSharedText('');
+      setEditSharedRating(5);
+    } catch (error) {
+      Alert.alert('Unable to save changes', error instanceof Error ? error.message : 'Please try again.');
+    } finally {
+      setIsSavingSharedEdit(false);
+    }
+  };
+
   const now = new Date();
   const monthLabel = new Intl.DateTimeFormat(isArabic ? 'ar' : 'en-US', { month: 'long', year: 'numeric' }).format(now);
 
@@ -323,9 +522,28 @@ export function HistoryScreen() {
       </AnimatedBlock>
 
       {/* ── Content ── */}
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        {activeTab === 'list' ? (
-          isHistoryLoading ? (
+      {activeTab === 'list' ? (
+        <FlatList
+          style={styles.scrollArea}
+          data={isHistoryLoading || historyError ? [] : completedActivities}
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={[styles.content, { paddingBottom: Math.max(32, insets.bottom + 24) }]}
+          extraData={{
+            activityDetails,
+            activityError,
+            expandedActivityId,
+            exportingActivityId,
+            loadingActivityId,
+            trailMap,
+          }}
+          nestedScrollEnabled
+          directionalLockEnabled={false}
+          keyboardShouldPersistTaps="handled"
+          removeClippedSubviews={false}
+          showsVerticalScrollIndicator={false}
+          ListHeaderComponent={
+            <>
+              {isHistoryLoading ? (
             <View style={styles.emptyState}>
               <ActivityIndicator color="#630E13" />
               <Text style={styles.emptyStateText}>Loading activity history...</Text>
@@ -355,16 +573,12 @@ export function HistoryScreen() {
                       </View>
                       <Ionicons name="albums-outline" size={19} color="#630E13" />
                     </View>
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.sharedRail}>
+                    <View style={styles.sharedRail}>
                       {sharedHistoryItems.map((item) => (
                         <Pressable
                           key={item.id}
                           style={styles.sharedCard}
-                          onPress={() => {
-                            if (item.trailId) {
-                              navigation.navigate('TrailDetail', { trailId: item.trailId });
-                            }
-                          }}
+                          onPress={() => void handleOpenSharedHistoryItem(item)}
                         >
                           {item.image ? (
                             <Image source={{ uri: item.image }} style={styles.sharedImage} />
@@ -380,11 +594,40 @@ export function HistoryScreen() {
                             </View>
                             <Text style={styles.sharedTrail} numberOfLines={1}>{item.trailName}</Text>
                             <Text style={styles.sharedText} numberOfLines={2}>{item.body}</Text>
-                            <Text style={styles.sharedMeta} numberOfLines={1}>{item.meta}</Text>
+                            <View style={styles.sharedFooter}>
+                              <Text style={styles.sharedMeta} numberOfLines={1}>{item.meta}</Text>
+                              <View style={styles.sharedActions}>
+                                <Pressable
+                                  style={styles.sharedActionButton}
+                                  onPress={(event) => {
+                                    event.stopPropagation();
+                                    handleEditSharedHistoryItem(item);
+                                  }}
+                                >
+                                  <Ionicons name="create-outline" size={14} color="#630E13" />
+                                  <Text style={styles.sharedActionText}>Edit</Text>
+                                </Pressable>
+                                <Pressable
+                                  style={[styles.sharedActionButton, styles.sharedDeleteButton]}
+                                  disabled={pendingSharedActionId === item.id}
+                                  onPress={(event) => {
+                                    event.stopPropagation();
+                                    handleDeleteSharedHistoryItem(item);
+                                  }}
+                                >
+                                  {pendingSharedActionId === item.id ? (
+                                    <ActivityIndicator size="small" color="#8B1E1E" />
+                                  ) : (
+                                    <Ionicons name="trash-outline" size={14} color="#8B1E1E" />
+                                  )}
+                                  <Text style={[styles.sharedActionText, styles.sharedDeleteText]}>Delete</Text>
+                                </Pressable>
+                              </View>
+                            </View>
                           </View>
                         </Pressable>
                       ))}
-                    </ScrollView>
+                    </View>
                   </View>
                 </AnimatedBlock>
               ) : null}
@@ -396,7 +639,7 @@ export function HistoryScreen() {
                 </View>
               ) : null}
 
-              {completedActivities.map((hike, index) => (
+              {false && completedActivities.map((hike, index) => (
                 <AnimatedBlock key={hike.id} delay={160 + index * 40}>
                 {/* Outer card is now a column so the detail panel sits below the row */}
                 <Pressable
@@ -510,9 +753,113 @@ export function HistoryScreen() {
                 </AnimatedBlock>
               ))}
             </>
-          )
-        ) : (
-          /* ── Calendar tab ── */
+              )}
+            </>
+          }
+          renderItem={({ item: hike, index }) => (
+            <AnimatedBlock delay={160 + index * 40}>
+              <Pressable style={styles.hikeCard} onPress={() => void handleToggleActivityDetail(hike)}>
+                <View style={styles.hikeRow}>
+                  <View style={styles.timelineMarker}>
+                    <View style={styles.timelineDot} />
+                    {index < completedActivities.length - 1 ? <View style={styles.timelineLine} /> : null}
+                  </View>
+
+                  <View style={styles.hikeContent}>
+                    <Image
+                      source={{ uri: trailMap[hike.trail_id ?? '']?.image ?? '' }}
+                      style={styles.hikeImage}
+                    />
+                    <View style={styles.hikeInfo}>
+                      <Text style={styles.hikeDate}>
+                        {new Intl.DateTimeFormat(isArabic ? 'ar' : 'en-US', {
+                          dateStyle: 'medium',
+                        }).format(new Date(hike.started_at))}
+                      </Text>
+                      <Text style={styles.hikeName} numberOfLines={1}>
+                        {trailMap[hike.trail_id ?? '']?.name ?? hike.trail_name ?? 'Trail'}
+                      </Text>
+                      <View style={styles.hikeMetaRow}>
+                        <Text style={styles.hikeMetaText}>{(hike.distance_km ?? 0).toFixed(1)}km</Text>
+                        <Text style={styles.hikeMetaDot}>آ·</Text>
+                        <Text style={styles.hikeMetaText}>{(hike.avg_speed_kph ?? 0).toFixed(1)} km/h</Text>
+                        <Text style={styles.hikeMetaDot}>آ·</Text>
+                        <Text style={styles.hikeMetaText}>â†'{Math.round(hike.elevation_gain_m ?? 0)}m</Text>
+                      </View>
+                    </View>
+                    <Ionicons
+                      name={expandedActivityId === hike.id ? 'chevron-up' : 'chevron-forward'}
+                      size={18}
+                      color="#8A7A6A"
+                      style={styles.hikeChevron}
+                    />
+                  </View>
+                </View>
+
+                {expandedActivityId === hike.id ? (
+                  <View style={styles.activityDetailPanel}>
+                    {loadingActivityId === hike.id ? (
+                      <ActivityIndicator color="#630E13" />
+                    ) : activityError ? (
+                      <Text style={styles.activityErrorText}>{activityError}</Text>
+                    ) : (
+                      <>
+                        <Text style={styles.activityDetailTitle}>Activity details</Text>
+                        <Text style={styles.activityDetailText}>
+                          {activityDetails[hike.id]?.points?.length ?? 0} GPS points آ·{' '}
+                          {Math.round(
+                            activityDetails[hike.id]?.elapsed_time_seconds ??
+                              hike.elapsed_time_seconds ??
+                              0,
+                          )}{' '}
+                          sec
+                        </Text>
+                        <View style={styles.activityActionRow}>
+                          {hike.trail_id ? (
+                            <Pressable
+                              style={styles.activityActionButton}
+                              onPress={() => navigation.navigate('TrailDetail', { trailId: hike.trail_id! })}
+                            >
+                              <Ionicons name="map-outline" size={14} color="#630E13" />
+                              <Text style={styles.activityActionText}>Open trail</Text>
+                            </Pressable>
+                          ) : null}
+                          <Pressable
+                            style={styles.activityActionButton}
+                            onPress={() => void handleShareGpx(hike)}
+                            disabled={exportingActivityId === hike.id}
+                          >
+                            {exportingActivityId === hike.id ? (
+                              <ActivityIndicator size="small" color="#630E13" />
+                            ) : (
+                              <Ionicons name="download-outline" size={14} color="#630E13" />
+                            )}
+                            <Text style={styles.activityActionText}>GPX</Text>
+                          </Pressable>
+                          <Pressable
+                            style={[styles.activityActionButton, styles.activityDeleteButton]}
+                            onPress={() => handleDeleteActivity(hike)}
+                          >
+                            <Ionicons name="trash-outline" size={14} color="#8B1E1E" />
+                            <Text style={[styles.activityActionText, styles.activityDeleteText]}>Delete</Text>
+                          </Pressable>
+                        </View>
+                      </>
+                    )}
+                  </View>
+                ) : null}
+              </Pressable>
+            </AnimatedBlock>
+          )}
+        />
+      ) : (
+        <ScrollView
+          style={styles.scrollArea}
+          contentContainerStyle={[styles.content, { paddingBottom: Math.max(32, insets.bottom + 24) }]}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          {/* Calendar tab */}
           <AnimatedBlock delay={180}>
             <View style={styles.calendarCard}>
               <Text style={styles.calendarTitle}>{monthLabel}</Text>
@@ -591,8 +938,76 @@ export function HistoryScreen() {
               </View>
             </View>
           </AnimatedBlock>
-        )}
-      </ScrollView>
+        </ScrollView>
+      )}
+      <Modal
+        visible={Boolean(editingSharedItem)}
+        transparent
+        animationType="fade"
+        onRequestClose={handleCloseSharedEdit}
+      >
+        <View style={styles.editModalOverlay}>
+          <View style={styles.editSheet}>
+            <View style={styles.editSheetHeader}>
+              <View>
+                <Text style={styles.editSheetTitle}>
+                  {editingSharedItem?.type === 'review' ? 'Edit review' : 'Edit post'}
+                </Text>
+                <Text style={styles.editSheetSubtitle} numberOfLines={1}>
+                  {editingSharedItem?.trailName || 'History item'}
+                </Text>
+              </View>
+              <Pressable style={styles.editCloseButton} onPress={handleCloseSharedEdit} disabled={isSavingSharedEdit}>
+                <Ionicons name="close" size={18} color="#2C2418" />
+              </Pressable>
+            </View>
+
+            {editingSharedItem?.type === 'review' ? (
+              <View style={styles.editRatingRow}>
+                {[1, 2, 3, 4, 5].map((rating) => (
+                  <Pressable
+                    key={rating}
+                    style={[styles.editStarButton, rating <= editSharedRating && styles.editStarButtonActive]}
+                    onPress={() => setEditSharedRating(rating)}
+                    disabled={isSavingSharedEdit}
+                  >
+                    <Ionicons
+                      name={rating <= editSharedRating ? 'star' : 'star-outline'}
+                      size={18}
+                      color={rating <= editSharedRating ? '#FFF8EA' : '#D4A843'}
+                    />
+                  </Pressable>
+                ))}
+              </View>
+            ) : null}
+
+            <TextInput
+              style={styles.editTextInput}
+              value={editSharedText}
+              onChangeText={setEditSharedText}
+              placeholder={editingSharedItem?.type === 'review' ? 'Update your review' : 'Update your caption'}
+              placeholderTextColor="#A0917E"
+              multiline
+              textAlignVertical="top"
+              editable={!isSavingSharedEdit}
+            />
+
+            <View style={styles.editActionRow}>
+              <Pressable style={styles.editSecondaryButton} onPress={handleCloseSharedEdit} disabled={isSavingSharedEdit}>
+                <Text style={styles.editSecondaryText}>Cancel</Text>
+              </Pressable>
+              <Pressable style={styles.editPrimaryButton} onPress={() => void handleSaveSharedEdit()} disabled={isSavingSharedEdit}>
+                {isSavingSharedEdit ? (
+                  <ActivityIndicator size="small" color="#FFF8EA" />
+                ) : (
+                  <Ionicons name="checkmark" size={17} color="#FFF8EA" />
+                )}
+                <Text style={styles.editPrimaryText}>Save</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </AnimatedScreen>
   );
 }
@@ -702,10 +1117,119 @@ const styles = StyleSheet.create({
   },
 
   // ── Scroll content ───────────────────────────────────────
+  scrollArea: {
+    flex: 1,
+  },
   content: {
     paddingHorizontal: 16,
-    paddingBottom: 32,
     paddingTop: 4,
+  },
+  editModalOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(25, 18, 12, 0.45)',
+  },
+  editSheet: {
+    marginHorizontal: 12,
+    marginBottom: 12,
+    borderRadius: 22,
+    padding: 16,
+    backgroundColor: '#FFFDF7',
+    borderWidth: 1,
+    borderColor: '#E7D8C3',
+  },
+  editSheetHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  editSheetTitle: {
+    color: '#2C2418',
+    fontSize: 17,
+    fontWeight: '900',
+  },
+  editSheetSubtitle: {
+    marginTop: 4,
+    color: '#8A7A6A',
+    fontSize: 12,
+    fontWeight: '700',
+    maxWidth: 240,
+  },
+  editCloseButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F6F0E0',
+  },
+  editRatingRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 16,
+  },
+  editStarButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFF8F1',
+    borderWidth: 1,
+    borderColor: '#E7D8C3',
+  },
+  editStarButtonActive: {
+    backgroundColor: '#D4A843',
+    borderColor: '#D4A843',
+  },
+  editTextInput: {
+    minHeight: 120,
+    marginTop: 14,
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    backgroundColor: '#F9F3E8',
+    borderWidth: 1,
+    borderColor: '#E7D8C3',
+    color: '#2C2418',
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  editActionRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 14,
+  },
+  editSecondaryButton: {
+    minHeight: 40,
+    paddingHorizontal: 14,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F6F0E0',
+  },
+  editSecondaryText: {
+    color: '#6B5D4E',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  editPrimaryButton: {
+    minHeight: 40,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingHorizontal: 16,
+    borderRadius: 20,
+    backgroundColor: '#630E13',
+  },
+  editPrimaryText: {
+    color: '#FFF8EA',
+    fontSize: 13,
+    fontWeight: '900',
   },
 
   // ── Empty state ──────────────────────────────────────────
@@ -738,6 +1262,7 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 4 },
     shadowRadius: 10,
     elevation: 2,
+    overflow: 'visible',
   },
   sharedHeader: {
     flexDirection: 'row',
@@ -757,12 +1282,11 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   sharedRail: {
-    gap: 10,
     paddingTop: 12,
-    paddingRight: 4,
+    gap: 12,
   },
   sharedCard: {
-    width: 210,
+    width: '100%',
     overflow: 'hidden',
     borderRadius: 18,
     backgroundColor: '#F6F0E0',
@@ -804,10 +1328,41 @@ const styles = StyleSheet.create({
     lineHeight: 17,
   },
   sharedMeta: {
-    marginTop: 8,
     color: '#8A7A6A',
     fontSize: 11,
     fontWeight: '800',
+    flex: 1,
+  },
+  sharedFooter: {
+    marginTop: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  sharedActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  sharedActionButton: {
+    minHeight: 30,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    backgroundColor: '#FFF8F1',
+  },
+  sharedDeleteButton: {
+    backgroundColor: '#F7EBE8',
+  },
+  sharedActionText: {
+    color: '#630E13',
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  sharedDeleteText: {
+    color: '#8B1E1E',
   },
   hikeCard: {
     flexDirection: 'column', // column so detail panel sits below the row

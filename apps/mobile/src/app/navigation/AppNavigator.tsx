@@ -57,6 +57,10 @@ import {
   type PushNotificationData,
 } from '../services/pushNotifications';
 import { getNotifications } from '../api/notificationsApi';
+import { getSocialFeedItem } from '../api/socialApi';
+import type { FeedItem } from '../data/activitySocial';
+import type { TrailCompletionDraft } from '../features/trailCompletion/types';
+import { mapSocialFeedItemToFeedItem } from '../utils/socialFeedMap';
 
 const Stack = createStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<AppTabParamList>();
@@ -284,7 +288,30 @@ function getPushEntity(data: PushNotificationData): { type: string | null; id: s
   };
 }
 
-function openPushNotificationDestination(data: PushNotificationData): void {
+function recapToDraft(item: Extract<FeedItem, { kind: 'recap' }>): TrailCompletionDraft {
+  return item.completionDraft ?? {
+    activityId: item.activityId,
+    trailId: item.trailId,
+    publisherId: item.userId,
+    publisherName: item.user,
+    publisherHandle: item.handle,
+    publisherAvatar: item.avatar,
+    trailName: item.trailNameEn,
+    trailNameAr: item.trailNameAr,
+    trailImage: item.image,
+    region: item.regionEn,
+    regionAr: item.regionAr,
+    rating: 0,
+    review: item.captionEn,
+    photoUris: item.image ? [item.image] : [],
+    completedAtIso: new Date().toISOString(),
+    durationMs: 0,
+    stepCount: 0,
+    routePointCount: 0,
+  };
+}
+
+async function openPushNotificationDestination(data: PushNotificationData): Promise<void> {
   if (!navigationRef.isReady()) {
     return;
   }
@@ -293,10 +320,13 @@ function openPushNotificationDestination(data: PushNotificationData): void {
   const entity = getPushEntity(data);
   const trailId = getPushString(data, ['trail_id']) || (entity.type === 'trail' ? entity.id : null);
   const activityId = getPushString(data, ['activity_id']) || (entity.type === 'activity' ? entity.id : null);
+  const reviewId = getPushString(data, ['review_id']) || (entity.type === 'review' ? entity.id : null);
+  const navigationSessionId = getPushString(data, ['navigation_session_id']);
+  const isNavigationAlert = getPushString(data, ['notification_kind']) === 'navigation_off_track' || Boolean(navigationSessionId);
 
   if (type === 'danger_alert') {
-    if (trailId && activityId) {
-      navigationRef.navigate('Recording', { trailId, activityId });
+    if (trailId && (activityId || isNavigationAlert)) {
+      navigationRef.navigate('Recording', activityId ? { trailId, activityId } : { trailId });
       return;
     }
 
@@ -329,6 +359,18 @@ function openPushNotificationDestination(data: PushNotificationData): void {
   }
 
   if (type === 'review_like' || type === 'review_comment') {
+    if (reviewId) {
+      try {
+        const feedItem = mapSocialFeedItemToFeedItem(await getSocialFeedItem('review', reviewId));
+        if (feedItem.kind === 'recap') {
+          navigationRef.navigate('ActivityShare', { draft: recapToDraft(feedItem) });
+          return;
+        }
+      } catch {
+        // Fall back to the trail page below.
+      }
+    }
+
     if (trailId) {
       navigationRef.navigate('TrailDetail', { trailId });
     }
@@ -336,6 +378,18 @@ function openPushNotificationDestination(data: PushNotificationData): void {
   }
 
   if (type === 'activity_like' || type === 'activity_comment') {
+    if (activityId) {
+      try {
+        const feedItem = mapSocialFeedItemToFeedItem(await getSocialFeedItem('activity', activityId));
+        if (feedItem.kind === 'recap') {
+          navigationRef.navigate('ActivityShare', { draft: recapToDraft(feedItem) });
+          return;
+        }
+      } catch {
+        // Fall back to the activity destination below.
+      }
+    }
+
     if (trailId && activityId) {
       navigationRef.navigate('Recording', { trailId, activityId });
       return;
@@ -370,7 +424,7 @@ function PushNotificationBridge({ enabled }: { enabled: boolean }) {
     });
 
     const subscription = addNotificationResponseListener((data) => {
-      openPushNotificationDestination(data);
+      void openPushNotificationDestination(data);
     });
 
     if (!handledInitialNotification.current) {
@@ -378,7 +432,7 @@ function PushNotificationBridge({ enabled }: { enabled: boolean }) {
       void getInitialNotificationData()
         .then((data) => {
           if (isMounted && data) {
-            openPushNotificationDestination(data);
+            void openPushNotificationDestination(data);
           }
         })
         .catch((error) => {

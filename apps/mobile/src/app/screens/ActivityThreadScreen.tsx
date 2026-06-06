@@ -4,6 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import type { Socket } from 'socket.io-client';
 
 import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
 import {
@@ -17,6 +18,7 @@ import {
   type Message,
 } from '../api/messagesApi';
 import { getMyFriends, type SocialProfile } from '../api/socialApi';
+import { getProfile } from '../api/profilesApi';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { RootStackParamList } from '../navigation/types';
@@ -59,6 +61,7 @@ export function ActivityThreadScreen() {
   const [draft, setDraft] = useState(route.params.initialMessage ?? '');
   const [messages, setMessages] = useState<Message[]>([]);
   const [contacts, setContacts] = useState<SocialProfile[]>([]);
+  const [currentProfileId, setCurrentProfileId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(Boolean(route.params.conversationId ?? route.params.threadId));
   const [isSending, setIsSending] = useState(false);
   const [apiMessage, setApiMessage] = useState<string | null>(null);
@@ -67,15 +70,20 @@ export function ActivityThreadScreen() {
     let cancelled = false;
     if (!user?.id) {
       setContacts([]);
+      setCurrentProfileId(null);
       return () => {
         cancelled = true;
       };
     }
 
     const loadContacts = async () => {
-      const friendsResponse = await getMyFriends({ page: 1, limit: 60 }).catch(() => ({ data: [] as SocialProfile[] }));
+      const [friendsResponse, profile] = await Promise.all([
+        getMyFriends({ page: 1, limit: 60 }).catch(() => ({ data: [] as SocialProfile[] })),
+        getProfile(user.id).catch(() => null),
+      ]);
       if (!cancelled) {
         setContacts(friendsResponse.data);
+        setCurrentProfileId(profile?.id ?? user.id);
       }
     };
 
@@ -127,7 +135,7 @@ export function ActivityThreadScreen() {
       return undefined;
     }
 
-    let socket: WebSocket | null = null;
+    let socket: Socket | null = null;
     let cancelled = false;
 
     void createMessagesSocket(
@@ -205,6 +213,46 @@ export function ActivityThreadScreen() {
     return nextConversation.id;
   };
 
+  useEffect(() => {
+    let cancelled = false;
+
+    if (conversationId || route.params.contextType !== 'trail' || !route.params.contextId) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const openTrailConversation = async () => {
+      setIsLoading(true);
+      try {
+        const participantIds = routeParticipantId ? [routeParticipantId] : [];
+        const nextConversation = await startConversation({
+          participant_ids: participantIds,
+          recipient_id: routeParticipantId,
+          type: 'trail',
+          context,
+        });
+
+        if (!cancelled) {
+          setConversation(nextConversation);
+          setConversationId(nextConversation.id);
+          setApiMessage(null);
+        }
+      } catch {
+        if (!cancelled) {
+          setApiMessage(isArabic ? 'تعذر فتح نقاش المسار الآن.' : 'Unable to open this trail discussion right now.');
+          setIsLoading(false);
+        }
+      }
+    };
+
+    void openTrailConversation();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [context, conversationId, isArabic, route.params.contextId, route.params.contextType, routeParticipantId]);
+
   const handleSend = async () => {
     const body = draft.trim();
     if (!body || isSending) return;
@@ -214,7 +262,12 @@ export function ActivityThreadScreen() {
     const optimistic: Message = {
       id: `local-${Date.now()}`,
       conversation_id: conversationId || 'pending',
-      sender_id: user?.id ?? 'me',
+      sender_id: currentProfileId ?? user?.id ?? 'me',
+      sender: {
+        id: currentProfileId ?? user?.id ?? 'me',
+        full_name: user?.full_name ?? 'You',
+        avatar_url: user?.avatar_url ?? null,
+      },
       body,
       created_at: new Date().toISOString(),
       pending: true,
@@ -286,14 +339,31 @@ export function ActivityThreadScreen() {
           </View>
         ) : messages.length ? (
           messages.map((message, index) => {
-            const mine = message.sender_id === user?.id || message.id.startsWith('local-');
+            const senderAvatar = message.sender?.avatar_url ?? null;
+            const senderId = message.sender?.id || message.sender_id;
+            const mine = message.id.startsWith('local-') || message.sender_id === currentProfileId || message.sender_id === user?.id || senderId === currentProfileId || senderId === user?.id;
+            const senderName = message.sender?.full_name?.trim() || (mine ? (isArabic ? 'أنت' : 'You') : (isArabic ? 'مستخدم' : 'Trail member'));
             return (
               <AnimatedBlock key={message.id} delay={40 + index * 25}>
-                <View style={[styles.bubble, mine ? styles.myBubble : styles.theirBubble]}>
-                  <Text style={[styles.bubbleText, mine && styles.myBubbleText, isArabic ? rtlText : ltrText]}>{message.body}</Text>
-                  <Text style={[styles.timeText, mine && styles.myTimeText]}>
-                    {message.failed ? (isArabic ? 'لم ترسل' : 'Not sent') : message.pending ? (isArabic ? 'جار الإرسال' : 'Sending') : formatMessageTime(message.created_at)}
-                  </Text>
+                <View style={[styles.messageRow, mine ? styles.myMessageRow : styles.theirMessageRow]}>
+                  {!mine ? <MessageAvatar name={senderName} uri={senderAvatar} profileId={senderId} navigation={navigation} /> : null}
+                  <View style={[styles.messageStack, mine ? styles.myMessageStack : styles.theirMessageStack]}>
+                    <Pressable
+                      disabled={!senderId}
+                      onPress={() => senderId && navigation.navigate('PublicProfile', { profileId: senderId })}
+                    >
+                      <Text style={[styles.senderName, mine ? styles.mySenderName : styles.theirSenderName, isArabic ? rtlText : ltrText]} numberOfLines={1}>
+                        {mine ? (isArabic ? 'أنت' : 'You') : senderName}
+                      </Text>
+                    </Pressable>
+                    <View style={[styles.bubble, mine ? styles.myBubble : styles.theirBubble]}>
+                      <Text style={[styles.bubbleText, mine && styles.myBubbleText, isArabic ? rtlText : ltrText]}>{message.body}</Text>
+                      <Text style={[styles.timeText, mine && styles.myTimeText]}>
+                        {message.failed ? (isArabic ? 'لم ترسل' : 'Not sent') : message.pending ? (isArabic ? 'جار الإرسال' : 'Sending') : formatMessageTime(message.created_at)}
+                      </Text>
+                    </View>
+                  </View>
+                  {mine ? <MessageAvatar name={senderName} uri={senderAvatar} profileId={senderId} navigation={navigation} /> : null}
                 </View>
               </AnimatedBlock>
             );
@@ -329,6 +399,34 @@ export function ActivityThreadScreen() {
   );
 }
 
+function MessageAvatar({
+  name,
+  uri,
+  profileId,
+  navigation,
+}: {
+  name: string;
+  uri: string | null;
+  profileId?: string;
+  navigation: ThreadNavigationProp;
+}) {
+  return (
+    <Pressable
+      style={styles.messageAvatarPressable}
+      disabled={!profileId}
+      onPress={() => profileId && navigation.navigate('PublicProfile', { profileId })}
+    >
+      {uri ? (
+        <Image source={{ uri }} style={styles.messageAvatar} />
+      ) : (
+        <View style={[styles.messageAvatar, styles.avatarFallback]}>
+          <Text style={styles.messageAvatarInitials}>{initials(name)}</Text>
+        </View>
+      )}
+    </Pressable>
+  );
+}
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F3F1ED' },
   header: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 16, paddingBottom: 12, backgroundColor: '#FFF8F1', borderBottomWidth: 1, borderBottomColor: '#E7D8C3' },
@@ -346,7 +444,19 @@ const styles = StyleSheet.create({
   messages: { padding: 16, gap: 12 },
   stateCard: { minHeight: 160, alignItems: 'center', justifyContent: 'center', gap: 10 },
   stateText: { color: '#6B5D4E', fontSize: 12, fontWeight: '800' },
-  bubble: { maxWidth: '82%', borderRadius: 18, paddingHorizontal: 14, paddingVertical: 11 },
+  messageRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, width: '100%' },
+  myMessageRow: { justifyContent: 'flex-end' },
+  theirMessageRow: { justifyContent: 'flex-start' },
+  messageStack: { maxWidth: '76%', minWidth: 0 },
+  myMessageStack: { alignItems: 'flex-end' },
+  theirMessageStack: { alignItems: 'flex-start' },
+  senderName: { marginBottom: 4, maxWidth: 220, fontSize: 11, fontWeight: '900' },
+  mySenderName: { color: '#7B6D5A' },
+  theirSenderName: { color: '#630E13' },
+  messageAvatarPressable: { width: 32, height: 32 },
+  messageAvatar: { width: 32, height: 32, borderRadius: 16, backgroundColor: '#E7D8C3' },
+  messageAvatarInitials: { color: '#fff', fontSize: 10, fontWeight: '900' },
+  bubble: { maxWidth: '100%', borderRadius: 18, paddingHorizontal: 14, paddingVertical: 11 },
   myBubble: { alignSelf: 'flex-end', backgroundColor: '#630E13', borderBottomRightRadius: 6 },
   theirBubble: { alignSelf: 'flex-start', backgroundColor: '#FFFFFF', borderBottomLeftRadius: 6 },
   bubbleText: { color: '#2C2418', fontSize: 14, lineHeight: 20 },

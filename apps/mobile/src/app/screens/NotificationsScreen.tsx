@@ -14,6 +14,7 @@ import { StackNavigationProp } from '@react-navigation/stack';
 import { Ionicons } from '@expo/vector-icons';
 import { RootStackParamList } from '../navigation/types';
 import { AnimatedScreen } from '../components/AnimatedUI';
+import { getSocialFeedItem } from '../api/socialApi';
 import {
   deleteNotification,
   getNotifications,
@@ -22,6 +23,14 @@ import {
   type AppNotification,
   type NotificationType,
 } from '../api/notificationsApi';
+import type { FeedItem } from '../data/activitySocial';
+import type { TrailCompletionDraft } from '../features/trailCompletion/types';
+import {
+  getPushNotificationActivationStatus,
+  registerDeviceForPushNotifications,
+  type PushNotificationActivationStatus,
+} from '../services/pushNotifications';
+import { mapSocialFeedItemToFeedItem } from '../utils/socialFeedMap';
 
 type NotificationsNavigationProp = StackNavigationProp<RootStackParamList, 'Notifications'>;
 
@@ -80,12 +89,50 @@ function getActivityId(notification: AppNotification): string | null {
   );
 }
 
+function getNavigationSessionId(notification: AppNotification): string | null {
+  return asString(notification.data.navigation_session_id);
+}
+
+function isNavigationAlert(notification: AppNotification): boolean {
+  return asString(notification.data.notification_kind) === 'navigation_off_track' || Boolean(getNavigationSessionId(notification));
+}
+
+function getReviewId(notification: AppNotification): string | null {
+  return (
+    asString(notification.data.review_id) ||
+    (notification.entity?.type === 'review' ? asString(notification.entity.id) : null)
+  );
+}
+
 function getUserId(notification: AppNotification): string | null {
   return (
     asString(notification.data.user_id) ||
     (notification.entity?.type === 'user' ? asString(notification.entity.id) : null) ||
     asString(notification.actor?.id)
   );
+}
+
+function recapToDraft(item: Extract<FeedItem, { kind: 'recap' }>): TrailCompletionDraft {
+  return item.completionDraft ?? {
+    activityId: item.activityId,
+    trailId: item.trailId,
+    publisherId: item.userId,
+    publisherName: item.user,
+    publisherHandle: item.handle,
+    publisherAvatar: item.avatar,
+    trailName: item.trailNameEn,
+    trailNameAr: item.trailNameAr,
+    trailImage: item.image,
+    region: item.regionEn,
+    regionAr: item.regionAr,
+    rating: 0,
+    review: item.captionEn,
+    photoUris: item.image ? [item.image] : [],
+    completedAtIso: new Date().toISOString(),
+    durationMs: 0,
+    stepCount: 0,
+    routePointCount: 0,
+  };
 }
 
 function formatNotificationDate(value: string) {
@@ -131,8 +178,18 @@ export function NotificationsScreen() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [pendingAction, setPendingAction] = useState<string | null>(null);
+  const [pushStatus, setPushStatus] = useState<PushNotificationActivationStatus>('disabled');
+  const [isActivatingPush, setIsActivatingPush] = useState(false);
 
   const hasUnread = unreadCount > 0;
+
+  const refreshPushStatus = useCallback(async () => {
+    try {
+      setPushStatus(await getPushNotificationActivationStatus());
+    } catch {
+      setPushStatus('unavailable');
+    }
+  }, []);
 
   const loadNotifications = useCallback(async (mode: 'initial' | 'refresh' = 'initial') => {
     if (mode === 'initial') {
@@ -156,7 +213,8 @@ export function NotificationsScreen() {
 
   useEffect(() => {
     void loadNotifications();
-  }, [loadNotifications]);
+    void refreshPushStatus();
+  }, [loadNotifications, refreshPushStatus]);
 
   const updateNotificationReadState = useCallback((notification: AppNotification) => {
     setNotifications((current) =>
@@ -165,14 +223,14 @@ export function NotificationsScreen() {
     setUnreadCount((count) => Math.max(0, count - 1));
   }, []);
 
-  const openNotificationDestination = useCallback((notification: AppNotification) => {
+  const openNotificationDestination = useCallback(async (notification: AppNotification) => {
     if (notification.type === 'danger_alert') {
       const trailId = getTrailId(notification);
       const activityId = getActivityId(notification);
       const meta = getDangerMeta(notification);
 
-      if (trailId && activityId) {
-        navigation.navigate('Recording', { trailId, activityId });
+      if (trailId && (activityId || isNavigationAlert(notification))) {
+        navigation.navigate('Recording', activityId ? { trailId, activityId } : { trailId });
         return;
       }
 
@@ -203,6 +261,19 @@ export function NotificationsScreen() {
     }
 
     if (notification.type === 'review_like' || notification.type === 'review_comment') {
+      const reviewId = getReviewId(notification);
+      if (reviewId) {
+        try {
+          const feedItem = mapSocialFeedItemToFeedItem(await getSocialFeedItem('review', reviewId));
+          if (feedItem.kind === 'recap') {
+            navigation.navigate('ActivityShare', { draft: recapToDraft(feedItem) });
+            return;
+          }
+        } catch {
+          // Fall through to the broader trail destination if the post is unavailable.
+        }
+      }
+
       const trailId = getTrailId(notification);
       if (trailId) {
         navigation.navigate('TrailDetail', { trailId });
@@ -213,6 +284,18 @@ export function NotificationsScreen() {
     if (notification.type === 'activity_like' || notification.type === 'activity_comment') {
       const trailId = getTrailId(notification);
       const activityId = getActivityId(notification);
+      if (activityId) {
+        try {
+          const feedItem = mapSocialFeedItemToFeedItem(await getSocialFeedItem('activity', activityId));
+          if (feedItem.kind === 'recap') {
+            navigation.navigate('ActivityShare', { draft: recapToDraft(feedItem) });
+            return;
+          }
+        } catch {
+          // Fall through to activity/trail destinations if the post is unavailable.
+        }
+      }
+
       if (trailId && activityId) {
         navigation.navigate('Recording', { trailId, activityId });
         return;
@@ -242,7 +325,7 @@ export function NotificationsScreen() {
       if (!notification.read_at) {
         updateNotificationReadState(nextNotification);
       }
-      openNotificationDestination(nextNotification);
+      await openNotificationDestination(nextNotification);
     } catch (error) {
       Alert.alert('Unable to open notification', error instanceof Error ? error.message : 'Please try again.');
     } finally {
@@ -264,6 +347,23 @@ export function NotificationsScreen() {
       setPendingAction(null);
     }
   }, []);
+
+  const handleEnablePush = useCallback(async () => {
+    setIsActivatingPush(true);
+
+    try {
+      const token = await registerDeviceForPushNotifications();
+      await refreshPushStatus();
+
+      if (!token) {
+        Alert.alert('Notifications unavailable', 'Push notifications need a physical device and notification permission.');
+      }
+    } catch (error) {
+      Alert.alert('Unable to enable notifications', error instanceof Error ? error.message : 'Please try again.');
+    } finally {
+      setIsActivatingPush(false);
+    }
+  }, [refreshPushStatus]);
 
   const handleDeleteNotification = useCallback((notification: AppNotification) => {
     Alert.alert('Delete notification?', 'This removes it from your inbox.', [
@@ -400,6 +500,38 @@ export function NotificationsScreen() {
           keyExtractor={(item) => item.id}
           renderItem={renderNotification}
           contentContainerStyle={notifications.length ? styles.listContent : styles.emptyContent}
+          ListHeaderComponent={
+            pushStatus === 'enabled' ? null : (
+              <View style={styles.pushCard}>
+                <View style={styles.pushCardIcon}>
+                  <Ionicons name={pushStatus === 'unavailable' ? 'phone-portrait-outline' : 'notifications-outline'} size={20} color="#630E13" />
+                </View>
+                <View style={styles.pushCardCopy}>
+                  <Text style={styles.pushCardTitle}>
+                    {pushStatus === 'unavailable' ? 'Push needs a device' : 'Enable push alerts'}
+                  </Text>
+                  <Text style={styles.pushCardText}>
+                    {pushStatus === 'unavailable'
+                      ? 'Use a physical development build to receive navigation alerts.'
+                      : 'Get navigation and safety alerts even when Traces is in the background.'}
+                  </Text>
+                </View>
+                {pushStatus === 'unavailable' ? null : (
+                  <Pressable
+                    style={[styles.pushButton, isActivatingPush && styles.pushButtonDisabled]}
+                    disabled={isActivatingPush}
+                    onPress={() => void handleEnablePush()}
+                  >
+                    {isActivatingPush ? (
+                      <ActivityIndicator size="small" color="#fff" />
+                    ) : (
+                      <Ionicons name="checkmark" size={17} color="#fff" />
+                    )}
+                  </Pressable>
+                )}
+              </View>
+            )
+          }
           refreshControl={
             <RefreshControl
               refreshing={isRefreshing}
@@ -595,6 +727,51 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 12,
     fontWeight: '900',
+  },
+  pushCard: {
+    minHeight: 84,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    borderRadius: 20,
+    padding: 14,
+    backgroundColor: '#FFF9F2',
+    borderWidth: 1,
+    borderColor: '#D7BDA7',
+  },
+  pushCardIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F7EBE8',
+  },
+  pushCardCopy: {
+    flex: 1,
+  },
+  pushCardTitle: {
+    color: '#2C2418',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  pushCardText: {
+    marginTop: 3,
+    color: '#6B5D4E',
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: '700',
+  },
+  pushButton: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#630E13',
+  },
+  pushButtonDisabled: {
+    opacity: 0.7,
   },
   emptyState: {
     alignItems: 'center',

@@ -13,11 +13,15 @@ import {
   updateActivityStatus,
   uploadActivityMedia,
 } from '../api/activitiesApi';
+import { saveNatureSighting } from '../api/natureSightingsApi';
+import { identifySpeciesDetails } from '../api/speciesApi';
+import { useLanguage } from './LanguageContext';
 import {
   checkNavigationPosition,
   endNavigationSession,
   startNavigationSession,
 } from '../api/navigationApi';
+import { presentNavigationAlertNotification } from '../services/pushNotifications';
 
 export type SessionPhoto = {
   id: string;
@@ -85,6 +89,7 @@ const locationOptions: Location.LocationOptions = {
 };
 const LIVE_POINT_SYNC_INTERVAL_MS = 20000;
 const NAVIGATION_CHECK_INTERVAL_MS = 12000;
+const NAVIGATION_ALERT_NOTIFICATION_COOLDOWN_MS = 5 * 60 * 1000;
 const ACTIVITY_SESSION_SNAPSHOT_PREFIX = 'traces.activity-session.';
 
 const TrailTrackingContext = createContext<TrailTrackingContextValue | undefined>(undefined);
@@ -221,6 +226,7 @@ function mediaFileFromUri(uri: string, id: string) {
 }
 
 export function TrailTrackingProvider({ children }: { children: ReactNode }) {
+  const { language } = useLanguage();
   const [activeSession, setActiveSession] = useState<ActiveTrailSession | null>(null);
   const [activeSessionTrailId, setActiveSessionTrailId] = useState<string | null>(null);
   const [finishedSession, setFinishedSession] = useState<CompletedTrailSession | null>(null);
@@ -232,6 +238,8 @@ export function TrailTrackingProvider({ children }: { children: ReactNode }) {
   const activeSessionRef = useRef<ActiveTrailSession | null>(null);
   const navigationCheckInFlightRef = useRef(false);
   const lastNavigationCheckAtRef = useRef(0);
+  const lastNavigationAlertNotificationAtRef = useRef(0);
+  const lastNavigationAlertNotificationSessionRef = useRef<string | null>(null);
 
   useEffect(() => {
     activeSessionRef.current = activeSession;
@@ -255,6 +263,8 @@ export function TrailTrackingProvider({ children }: { children: ReactNode }) {
   const attachNavigationSession = useCallback((trailId: string, runId: number) => {
     lastNavigationCheckAtRef.current = 0;
     navigationCheckInFlightRef.current = false;
+    lastNavigationAlertNotificationAtRef.current = 0;
+    lastNavigationAlertNotificationSessionRef.current = null;
 
     startNavigationSession(trailId)
       .then((navigationSession) => {
@@ -304,6 +314,30 @@ export function TrailTrackingProvider({ children }: { children: ReactNode }) {
       timestamp: new Date(position.timestamp || now).toISOString(),
     })
       .then((result) => {
+        const alertNotificationDue =
+          result.off_track &&
+          (
+            lastNavigationAlertNotificationSessionRef.current !== navigationSessionId ||
+            Date.now() - lastNavigationAlertNotificationAtRef.current >= NAVIGATION_ALERT_NOTIFICATION_COOLDOWN_MS
+          );
+
+        if (alertNotificationDue) {
+          lastNavigationAlertNotificationAtRef.current = Date.now();
+          lastNavigationAlertNotificationSessionRef.current = navigationSessionId;
+          void presentNavigationAlertNotification({
+            trailId: session.trailId,
+            activityId: session.backendActivityId,
+            navigationSessionId,
+            body: result.instruction,
+            latitude: coordinate[1],
+            longitude: coordinate[0],
+            deviationMeters: result.deviation_meters,
+            progressPercent: result.progress_percent,
+          }).catch((error) => {
+            console.warn('[navigation] Failed to present navigation alert notification:', error);
+          });
+        }
+
         setActiveSession((current) =>
           current?.navigationSessionId === navigationSessionId
             ? {
@@ -539,6 +573,24 @@ export function TrailTrackingProvider({ children }: { children: ReactNode }) {
         capturedAt: new Date(photo.capturedAt).toISOString(),
       });
 
+      if (uploadedPhoto.id) {
+        void identifySpeciesDetails(mediaFileFromUri(photo.uri, photo.id), language)
+          .then((identification) =>
+            saveNatureSighting({
+              trail_id: uploadedPhoto.trail_id ?? activeSessionRef.current?.trailId ?? null,
+              activity_id: uploadedPhoto.activity_id ?? activityId,
+              photo_id: uploadedPhoto.id,
+              photo_type: 'activity_media',
+              photo_url: uploadedPhoto.public_url,
+              latitude: photo.coordinate[1],
+              longitude: photo.coordinate[0],
+              language,
+              classification: identification.result,
+            }),
+          )
+          .catch(() => undefined);
+      }
+
       setActiveSession((current) =>
         current?.backendActivityId === activityId
           ? {
@@ -570,7 +622,7 @@ export function TrailTrackingProvider({ children }: { children: ReactNode }) {
           : current,
       );
     }
-  }, []);
+  }, [language]);
 
   const startTrailSession = useCallback(
     async (trailId: string) => {

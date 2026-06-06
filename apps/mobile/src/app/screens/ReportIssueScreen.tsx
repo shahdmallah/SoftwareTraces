@@ -32,6 +32,91 @@ const severityLevels: Array<{ value: SafetySeverity; label: string }> = [
   { value: 'low', label: 'Low' },
 ];
 
+type LngLat = [number, number];
+
+const MAPBOX_ACCESS_TOKEN = process.env.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN ?? '';
+
+function joinPlaceParts(parts: Array<string | null | undefined>): string {
+  const uniqueParts: string[] = [];
+
+  parts.forEach((part) => {
+    const cleanPart = part?.trim();
+    if (!cleanPart) {
+      return;
+    }
+
+    const exists = uniqueParts.some((existing) => existing.toLowerCase() === cleanPart.toLowerCase());
+    if (!exists) {
+      uniqueParts.push(cleanPart);
+    }
+  });
+
+  return uniqueParts.join(', ');
+}
+
+async function reverseGeocodeDevicePlace(coordinate: LngLat): Promise<string> {
+  try {
+    const [place] = await Location.reverseGeocodeAsync({
+      latitude: coordinate[1],
+      longitude: coordinate[0],
+    });
+
+    if (!place) {
+      return '';
+    }
+
+    const primary = place.name || place.street || place.district || place.city || place.region;
+    const area = place.city || place.district || place.region || place.country;
+
+    return joinPlaceParts([primary, area]);
+  } catch {
+    return '';
+  }
+}
+
+async function reverseGeocodePlaceName(coordinate: LngLat): Promise<string> {
+  if (!MAPBOX_ACCESS_TOKEN) {
+    return reverseGeocodeDevicePlace(coordinate);
+  }
+
+  try {
+    const url = new URL(`https://api.mapbox.com/geocoding/v5/mapbox.places/${coordinate[0]},${coordinate[1]}.json`);
+    url.searchParams.set('access_token', MAPBOX_ACCESS_TOKEN);
+    url.searchParams.set('types', 'poi,address,place,locality,neighborhood,district');
+    url.searchParams.set('language', 'en');
+    url.searchParams.set('limit', '1');
+
+    const response = await fetch(url.toString());
+    if (!response.ok) {
+      return reverseGeocodeDevicePlace(coordinate);
+    }
+
+    const data = await response.json() as {
+      features?: Array<{
+        text?: string;
+        place_name?: string;
+        context?: Array<{ text?: string; id?: string }>;
+      }>;
+    };
+    const feature = data.features?.[0];
+    if (!feature) {
+      return reverseGeocodeDevicePlace(coordinate);
+    }
+
+    const primary = feature.text?.trim();
+    const area = feature.context?.find((item) =>
+      item.id?.startsWith('place') ||
+      item.id?.startsWith('locality') ||
+      item.id?.startsWith('neighborhood') ||
+      item.id?.startsWith('district')
+    )?.text?.trim();
+
+    return joinPlaceParts([primary, area]) || feature.place_name?.split(',')[0]?.trim() || reverseGeocodeDevicePlace(coordinate);
+  } catch {
+    return reverseGeocodeDevicePlace(coordinate);
+  }
+}
+
 export function ReportIssueScreen() {
   const navigation = useNavigation<ReportIssueNavigationProp>();
   const route = useRoute<ReportIssueRouteProp>();
@@ -55,8 +140,13 @@ export function ReportIssueScreen() {
       }
 
       const position = await Location.getCurrentPositionAsync({});
-      setLatitude(position.coords.latitude.toFixed(6));
-      setLongitude(position.coords.longitude.toFixed(6));
+      const coords = { lat: position.coords.latitude, lng: position.coords.longitude };
+      setLatitude(coords.lat.toFixed(6));
+      setLongitude(coords.lng.toFixed(6));
+      setLocationName('Finding place name...');
+
+      const placeName = await reverseGeocodePlaceName([coords.lng, coords.lat]);
+      setLocationName(placeName || `${coords.lat.toFixed(5)}, ${coords.lng.toFixed(5)}`);
     } catch (error) {
       Alert.alert('Location unavailable', error instanceof Error ? error.message : 'Please enter coordinates manually.');
     } finally {
@@ -75,6 +165,10 @@ export function ReportIssueScreen() {
 
     if (!Number.isFinite(parsedLatitude) || !Number.isFinite(parsedLongitude)) {
       Alert.alert('Location needed', 'Add a valid latitude and longitude.');
+      return;
+    }
+    if (isLocating) {
+      Alert.alert('Finding place name', 'Wait until the place name finishes resolving.');
       return;
     }
 

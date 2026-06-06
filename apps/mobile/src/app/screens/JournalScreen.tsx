@@ -140,6 +140,7 @@ export function JournalScreen() {
       addLocalFeedItem({
         id: `journal-public-${selectedEntry.id}-${Date.now()}`,
         kind: 'recap',
+        sourceType: selectedEntry.activityId ? 'activity' : undefined,
         activityId: selectedEntry.activityId,
         trailId: selectedEntry.trailId || '0',
         user: 'You',

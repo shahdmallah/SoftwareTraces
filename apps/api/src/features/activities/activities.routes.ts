@@ -24,6 +24,7 @@ import { asyncHandler } from "../../lib/asyncHandler";
 import { HttpError } from "../../lib/httpError";
 import { authenticate } from "../../middleware/auth";
 import { validate } from "../../middleware/validate";
+import { getActivityNatureSightings } from "../trails/trails.controller";
 
 const router = Router();
 const upload = multer({
@@ -82,6 +83,7 @@ router.get("/me", authenticate, asyncHandler(getMyActivities));
 router.get("/journal", authenticate, asyncHandler(getMyActivityJournal));
 router.get("/user/:userId", authenticate, asyncHandler(getUserActivities));
 router.get("/:id/media", optionalAuthenticate, asyncHandler(getActivityMedia));
+router.get("/:id/nature-sightings", optionalAuthenticate, asyncHandler(getActivityNatureSightings));
 router.get("/:id", optionalAuthenticate, asyncHandler(getActivityById));
 router.post("/", authenticate, validate(z.object({ trail_id: z.string().uuid().optional(), started_at: z.string() })), asyncHandler(startActivity));
 router.post("/:id/media", authenticate, uploadActivityMedia, asyncHandler(addActivityMedia));

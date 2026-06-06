@@ -317,6 +317,19 @@ export async function findSimilarPublicTrails(input: DuplicateTrailCheckInput): 
          ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography AS start_point,
          ST_SetSRID(ST_MakePoint($3, $4), 4326)::geography AS end_point,
          ST_GeomFromText($5, 4326) AS geometry
+     ),
+     candidate_trails AS (
+       SELECT
+         t.id,
+         t.name,
+         t.length_meters,
+         ST_StartPoint(t.geometry::geometry)::geography AS start_point,
+         ST_EndPoint(t.geometry::geometry)::geography AS end_point,
+         t.geometry::geometry AS geometry
+       FROM trails t
+       WHERE t.deleted_at IS NULL
+         AND COALESCE(t.is_active, true) = true
+         AND COALESCE(t.status, 'published') = 'published'
      )
      SELECT
        t.id,
@@ -324,19 +337,16 @@ export async function findSimilarPublicTrails(input: DuplicateTrailCheckInput): 
        t.length_meters,
        ST_Distance(t.start_point, input.start_point) AS start_distance_meters,
        ST_Distance(t.end_point, input.end_point) AS end_distance_meters,
-       ST_XMin(ST_Envelope(t.geometry::geometry)) AS bbox_min_lng,
-       ST_YMin(ST_Envelope(t.geometry::geometry)) AS bbox_min_lat,
-       ST_XMax(ST_Envelope(t.geometry::geometry)) AS bbox_max_lng,
-       ST_YMax(ST_Envelope(t.geometry::geometry)) AS bbox_max_lat
-     FROM trails t
+       ST_XMin(ST_Envelope(t.geometry)) AS bbox_min_lng,
+       ST_YMin(ST_Envelope(t.geometry)) AS bbox_min_lat,
+       ST_XMax(ST_Envelope(t.geometry)) AS bbox_max_lng,
+       ST_YMax(ST_Envelope(t.geometry)) AS bbox_max_lat
+     FROM candidate_trails t
      CROSS JOIN input
-     WHERE t.deleted_at IS NULL
-       AND COALESCE(t.is_active, true) = true
-       AND COALESCE(t.status, 'published') = 'published'
-       AND (
+     WHERE (
          ST_DWithin(t.start_point, input.start_point, 5000)
          OR ST_DWithin(t.end_point, input.end_point, 5000)
-         OR t.geometry::geometry && ST_Expand(input.geometry, 0.05)
+         OR t.geometry && ST_Expand(input.geometry, 0.05)
          OR ($6::text <> '' AND t.name ILIKE '%' || $6::text || '%')
        )
      ORDER BY LEAST(

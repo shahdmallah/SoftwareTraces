@@ -1,4 +1,4 @@
-import { getMapBubblePhotos, getMapBubbles, type MapBubblePhoto } from '../api/mapApi';
+import { getMapBubblePhotos, getMapBubbles, type MapBubblePhoto, type MediaRef } from '../api/mapApi';
 import {
   getPhotoStatus,
   getPhotoTypeForTrailPhoto,
@@ -136,12 +136,17 @@ export async function getTrailRouteMediaPhotos(trail: Trail, limit = 100) {
   }
 
   const bubbles = await getMapBubbles({ ...bounds, zoom: 17, limit });
-  const mediaIds = Array.from(new Set(bubbles.flatMap((bubble) => bubble.media_ids))).slice(0, limit);
-  if (!mediaIds.length) {
+  const mediaRefs: MediaRef[] = bubbles.flatMap((bubble) => bubble.media_refs?.length ? bubble.media_refs : bubble.media_ids.map((id): MediaRef => ({ id })));
+  const dedupedMediaRefs = mediaRefs
+    .filter((ref) => ref.id)
+    .filter((ref, index, refs) => refs.findIndex((item) => `${item.source ?? 'unknown'}:${item.id}` === `${ref.source ?? 'unknown'}:${ref.id}`) === index)
+    .slice(0, limit);
+
+  if (!dedupedMediaRefs.length) {
     return [];
   }
 
-  const mediaPhotos = await getMapBubblePhotos(mediaIds);
+  const mediaPhotos = await getMapBubblePhotos(dedupedMediaRefs);
   return mediaPhotos.map(normalizeRouteMediaPhoto).filter((photo): photo is TrailPhoto => Boolean(photo));
 }
 

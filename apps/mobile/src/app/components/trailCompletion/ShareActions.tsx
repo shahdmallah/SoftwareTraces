@@ -4,6 +4,8 @@ import { Ionicons } from '@expo/vector-icons';
 import type { StackNavigationProp } from '@react-navigation/stack';
 import { AnimatedEntrance } from '../AnimatedUI';
 import { shareActivityPost, uploadActivityMedia, type ActivityMediaFile } from '../../api/activitiesApi';
+import { saveNatureSighting } from '../../api/natureSightingsApi';
+import { identifySpeciesDetails, type SpeciesLanguage } from '../../api/speciesApi';
 import { addLocalFeedItem } from '../../data/localSocial';
 import { completionRadii } from '../../features/trailCompletion/theme';
 import type { TrailCompletionDraft } from '../../features/trailCompletion/types';
@@ -56,7 +58,7 @@ function capturedAtForPhoto(draft: TrailCompletionDraft, uri: string) {
   return new Date(taggedPhoto?.capturedAt ?? draft.completedAtIso).toISOString();
 }
 
-async function uploadRecapPhotosToActivity(draft: TrailCompletionDraft, caption: string) {
+async function uploadRecapPhotosToActivity(draft: TrailCompletionDraft, caption: string, language: SpeciesLanguage) {
   if (!draft.activityId || draft.postVisibility === 'private' || draft.postSkipped) {
     return;
   }
@@ -75,13 +77,31 @@ async function uploadRecapPhotosToActivity(draft: TrailCompletionDraft, caption:
 
       const [lng, lat] = coordinate;
 
-      await uploadActivityMedia(draft.activityId!, {
+      const uploaded = await uploadActivityMedia(draft.activityId!, {
         photo: imageUriToActivityFile(uri),
         latitude: lat,
         longitude: lng,
         capturedAt: capturedAtForPhoto(draft, uri),
         caption,
       });
+
+      if (uploaded.id) {
+        await identifySpeciesDetails(imageUriToActivityFile(uri), language)
+          .then((identification) =>
+            saveNatureSighting({
+              trail_id: uploaded.trail_id ?? draft.trailId ?? null,
+              activity_id: uploaded.activity_id ?? draft.activityId,
+              photo_id: uploaded.id,
+              photo_type: 'activity_media',
+              photo_url: uploaded.public_url,
+              latitude: lat,
+              longitude: lng,
+              language,
+              classification: identification.result,
+            }),
+          )
+          .catch(() => undefined);
+      }
     }),
   );
 }
@@ -117,6 +137,7 @@ export function ShareActions({ draft, isArabic, navigation, isOwner = true, owne
     const item = {
       id: `local-recap-${Date.now()}`,
       kind: 'recap' as const,
+      sourceType: draft.activityId ? 'activity' as const : undefined,
       activityId: draft.activityId,
       completionDraft: draft,
       trailId: draft.trailId ?? '0',
@@ -139,7 +160,7 @@ export function ShareActions({ draft, isArabic, navigation, isOwner = true, owne
 
     if (draft.activityId) {
       try {
-        await uploadRecapPhotosToActivity(draft, postCaption || normalizedMessage);
+        await uploadRecapPhotosToActivity(draft, postCaption || normalizedMessage, isArabic ? 'ar' : 'en');
         if (!draft.activityPostId) {
           await shareActivityPost(draft.activityId, {
             visibility: postVisibility,

@@ -24,6 +24,13 @@ interface UploadedMediaFile {
   size: number;
 }
 
+type MediaSource = "media" | "activity_media";
+
+type MediaRef = {
+  id: string;
+  source?: MediaSource;
+};
+
 function parseRequiredNumber(value: unknown, fieldName: string): number {
   const parsed = Number(value);
 
@@ -62,6 +69,26 @@ function getGridSize(zoom: number): number | null {
 
 function isUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+function parseMediaRefs(value: unknown): MediaRef[] {
+  if (typeof value !== "string" || value.trim() === "") {
+    return [];
+  }
+
+  return value
+    .split(",")
+    .map((ref) => ref.trim())
+    .filter(Boolean)
+    .map((ref) => {
+      const [maybeSource, maybeId] = ref.split(":");
+
+      if ((maybeSource === "media" || maybeSource === "activity_media") && maybeId) {
+        return { source: maybeSource, id: maybeId.trim() };
+      }
+
+      return { id: ref };
+    });
 }
 
 function getSupabaseStorageClient() {
@@ -218,6 +245,8 @@ export async function uploadMedia(req: Request & { file?: UploadedMediaFile }, r
     res.status(201).json({
       data: {
         ...media,
+        source: "media",
+        nature_sighting: null,
         location: {
           name: locationName,
           latitude: media.latitude,
@@ -294,7 +323,8 @@ export async function getMapBubbles(req: Request, res: Response): Promise<void> 
               longitude AS cluster_lng,
               1 AS count,
               ARRAY[preview_image] AS preview_images,
-              ARRAY[id::text] AS media_ids
+              ARRAY[id::text] AS media_ids,
+              ARRAY[jsonb_build_object('id', id::text, 'source', source)] AS media_refs
             FROM map_media
             ORDER BY created_at DESC
             LIMIT $5
@@ -340,6 +370,7 @@ export async function getMapBubbles(req: Request, res: Response): Promise<void> 
                 FLOOR(latitude / $1) * $1 AS cluster_lat,
                 FLOOR(longitude / $2) * $2 AS cluster_lng,
                 id,
+                source,
                 preview_image,
                 created_at
               FROM map_media
@@ -349,7 +380,8 @@ export async function getMapBubbles(req: Request, res: Response): Promise<void> 
               cluster_lng,
               COUNT(*)::int AS count,
               (ARRAY_AGG(preview_image ORDER BY created_at DESC) FILTER (WHERE preview_image IS NOT NULL))[1:3] AS preview_images,
-              ARRAY_AGG(id::text) AS media_ids
+              ARRAY_AGG(id::text ORDER BY created_at DESC) AS media_ids,
+              ARRAY_AGG(jsonb_build_object('id', id::text, 'source', source) ORDER BY created_at DESC) AS media_refs
             FROM clustered_media
             GROUP BY cluster_lat, cluster_lng
             ORDER BY count DESC
@@ -365,7 +397,8 @@ export async function getMapBubbles(req: Request, res: Response): Promise<void> 
         lng: Number(row.cluster_lng),
         count: Number(row.count),
         preview_images: row.preview_images ?? [],
-        media_ids: row.media_ids ?? []
+        media_ids: row.media_ids ?? [],
+        media_refs: row.media_refs ?? []
       })),
       pagination: {
         limit,
@@ -381,25 +414,21 @@ export async function getBubblePhotos(req: Request, res: Response): Promise<void
   try {
     console.log("[media.getBubblePhotos] received params", req.query);
 
-    if (typeof req.query.ids !== "string" || req.query.ids.trim() === "") {
-      throw new HttpError(400, "ids query parameter is required");
+    const refs = parseMediaRefs(req.query.refs).length ? parseMediaRefs(req.query.refs) : parseMediaRefs(req.query.ids);
+
+    if (refs.length === 0) {
+      throw new HttpError(400, "ids or refs query parameter is required");
     }
 
-    const ids = req.query.ids
-      .split(",")
-      .map((id) => id.trim())
-      .filter(Boolean);
-
-    if (ids.length === 0) {
-      throw new HttpError(400, "ids query parameter is required");
-    }
-
-    const invalidId = ids.find((id) => !isUuid(id));
+    const invalidId = refs.find((ref) => !isUuid(ref.id))?.id;
     if (invalidId) {
       throw new HttpError(400, `Invalid media id: ${invalidId}`);
     }
 
-    console.log("[media.getBubblePhotos] querying photos", { count: ids.length });
+    const mediaIds = refs.filter((ref) => ref.source !== "activity_media").map((ref) => ref.id);
+    const activityMediaIds = refs.filter((ref) => ref.source !== "media").map((ref) => ref.id);
+
+    console.log("[media.getBubblePhotos] querying photos", { count: refs.length });
     const result = await pool.query(
       `
       WITH bubble_photos AS (
@@ -416,7 +445,7 @@ export async function getBubblePhotos(req: Request, res: Response): Promise<void
           p.full_name,
           p.avatar_url
         FROM media m
-        JOIN profiles p ON p.id = m.uploader_id
+        LEFT JOIN profiles p ON p.user_id = m.uploader_id
         WHERE m.id = ANY($1::uuid[])
           AND m.is_public = true
 
@@ -436,8 +465,8 @@ export async function getBubblePhotos(req: Request, res: Response): Promise<void
           p.avatar_url
         FROM activity_media am
         JOIN activities a ON a.id = am.activity_id
-        JOIN profiles p ON p.id = am.user_id
-        WHERE am.id = ANY($1::uuid[])
+        LEFT JOIN profiles p ON p.user_id = am.user_id
+        WHERE am.id = ANY($2::uuid[])
           AND a.is_public = true
       )
       SELECT
@@ -455,7 +484,7 @@ export async function getBubblePhotos(req: Request, res: Response): Promise<void
       FROM bubble_photos
       ORDER BY created_at DESC
       `,
-      [ids]
+      [mediaIds, activityMediaIds]
     );
 
     console.log("[media.getBubblePhotos] query result count", result.rows.length);
@@ -468,6 +497,7 @@ export async function getBubblePhotos(req: Request, res: Response): Promise<void
         latitude: row.latitude,
         longitude: row.longitude,
         created_at: row.created_at,
+        source: row.source,
         user: {
           id: row.user_id,
           full_name: row.full_name,
