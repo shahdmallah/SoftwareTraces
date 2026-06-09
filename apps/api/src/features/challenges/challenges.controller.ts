@@ -1,5 +1,6 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
+import { trackUserActivity } from "../analytics/analytics.service";
 import { requireAuth } from "../../middleware/auth";
 import {
   archiveChallenge,
@@ -184,7 +185,14 @@ export async function getPublicChallenge(req: Request, res: Response): Promise<v
 export async function postJoinChallenge(req: Request, res: Response): Promise<void> {
   try {
     const auth = requireAuth(req);
-    res.status(201).json({ data: await joinChallenge(uuidSchema.parse(req.params.id), auth.sub) });
+    const challengeId = uuidSchema.parse(req.params.id);
+    const data = await joinChallenge(challengeId, auth.sub);
+    await trackUserActivity({
+      userId: auth.sub,
+      eventType: "challenge_joined",
+      metadata: { challenge_id: challengeId },
+    });
+    res.status(201).json({ data });
   } catch (error) {
     sendChallengeError("postJoinChallenge", res, error);
   }

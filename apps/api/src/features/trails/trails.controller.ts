@@ -18,6 +18,7 @@ import { generateTrailFromDescription } from "../../services/trailGenerationServ
 import { searchTrailsByCriteria } from "../../services/trailSearchService";
 import { verifyPhoto } from "../../services/photoVerificationService";
 import { updateUserStats } from "../achievements/achievements.service";
+import { trackTrailView } from "../analytics/analytics.service";
 import { findSimilarPublicTrails } from "./duplicateTrail.service";
 
 const calculateTrailStatsBodySchema = z.object({
@@ -577,6 +578,7 @@ export async function getTrailById(req: Request, res: Response): Promise<void> {
 
     console.log("[getTrailById] Step 4: Formatting result...");
     const formattedTrail = formatTrailForApp(trailResult.rows[0]);
+    await trackTrailView(trailId, req.auth?.sub ?? null);
 
     console.log("[getTrailById] Step 5: Sending response...");
     res.json({ data: formattedTrail });

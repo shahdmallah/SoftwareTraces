@@ -3,6 +3,7 @@ import { z } from "zod";
 import { pool } from "../../db/pool";
 import { HttpError } from "../../lib/httpError";
 import { requireAuth } from "../../middleware/auth";
+import { trackUserActivity } from "../analytics/analytics.service";
 import {
   createEmergencyContact,
   createSosEvent,
@@ -31,15 +32,13 @@ const createSosSchema = z.object({
 });
 
 const contactSchema = z.object({
-  name: z.string().trim().min(1).max(120),
+  full_name: z.string().trim().min(2).max(100),
+  name: z.string().trim().min(2).max(100).optional(),
   contact_user_id: z.string().uuid().nullable().optional(),
   phone: z.string().trim().min(3).max(40).nullable().optional(),
   email: z.string().trim().email().nullable().optional(),
-  relationship: z.string().trim().max(80).nullable().optional(),
-  priority: z.coerce.number().int().min(1).max(20).optional(),
-  notify_by_sms: z.boolean().optional(),
-  notify_by_email: z.boolean().optional(),
-  notify_by_push: z.boolean().optional(),
+  relationship: z.string().trim().max(100).nullable().optional(),
+  is_primary: z.boolean().optional(),
   notify_on_sos: z.boolean().optional(),
 });
 
@@ -67,7 +66,12 @@ function sendSosError(action: string, res: Response, error: unknown): void {
     return;
   }
 
-  res.status(500).json({ error: "Internal server error", details: error instanceof Error ? error.message : String(error) });
+  res.status(500).json({
+    error: "Internal server error",
+    ...(process.env.NODE_ENV !== "production"
+      ? { details: error instanceof Error ? error.message : String(error) }
+      : {}),
+  });
 }
 
 async function ensureActivityOwnership(activityId: string | undefined, userId: string): Promise<void> {
@@ -104,7 +108,19 @@ export async function createSos(req: Request, res: Response): Promise<void> {
       occurredAt: body.occurred_at,
     });
 
-    res.status(201).json({ data: sos });
+    await trackUserActivity({
+      userId: auth.sub,
+      eventType: "sos_triggered",
+      metadata: { sos_id: sos.id, activity_id: body.activity_id ?? null },
+    });
+    res.status(201).json({
+      data: {
+        sos_event: sos,
+        emergency_contacts_count: sos.emergency_contacts_count,
+        contacts_notified: sos.contacts_notified,
+        notification_status: sos.notification_status,
+      },
+    });
   } catch (error) {
     sendSosError("createSos", res, error);
   }

@@ -9,6 +9,7 @@ export type NotificationType =
   | "meetup_update"
   | "danger_alert"
   | "sos_alert"
+  | "emergency_contact_alert"
   | "challenge_created"
   | "challenge_invite"
   | "challenge_completed"
