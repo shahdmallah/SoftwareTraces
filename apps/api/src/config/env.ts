@@ -68,7 +68,8 @@ const envSchema = z.object({
   GROQ_API_KEY: z.string().optional(),
   GROQ_MODEL: z.string().optional(),
   OPENWEATHER_API_KEY: z.string().optional(),
-  REDIS_URL: z.string().optional()
+  REDIS_URL: z.string().optional(),
+  OCHA_FETCH_INTERVAL_HOURS: z.coerce.number().int().min(1).max(24).default(6)
 });
 
 function getDatabaseHostname(databaseUrl: string): string | null {

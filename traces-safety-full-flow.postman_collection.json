@@ -1,0 +1,1387 @@
+{
+  "info": {
+    "name": "Traces Safety Full Flow",
+    "description": "End-to-end Safety system tests for normal users and admins. Covers user incident reporting, public visibility, community validation, admin moderation, dangerous locations, checkpoint reports, SOS, OCHA logs/manual import, and dashboard stats. Login first, then set userToken and adminToken collection variables.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:3000" },
+    { "key": "userToken", "value": "" },
+    { "key": "adminToken", "value": "" },
+    { "key": "incidentId", "value": "" },
+    { "key": "dangerousLocationId", "value": "" },
+    { "key": "checkpointReportId", "value": "" },
+    { "key": "sosEventId", "value": "" },
+    { "key": "emergencyContactId", "value": "" },
+    { "key": "trailId", "value": "" },
+    { "key": "feedbackIncidentId", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "A. Auth Setup / Instructions",
+      "description": "Use these requests if your local auth setup is configured. Otherwise log in through the app and paste tokens into collection variables userToken and adminToken.",
+      "item": [
+        {
+          "name": "Instructions - Set Tokens",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/health",
+            "description": "Run this after setting baseUrl. Then log in as a normal user and as an admin, and paste JWTs into userToken and adminToken. All user requests use Authorization: Bearer {{userToken}}. All admin requests use Authorization: Bearer {{adminToken}}."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('API is reachable', function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Optional Login - Normal User",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"user@example.com\",\n  \"password\": \"Password123!\"\n}"
+            },
+            "url": "{{baseUrl}}/api/auth/login",
+            "description": "Optional. Replace credentials with a real normal user. Saves token to userToken when login succeeds."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('login succeeded', function () { pm.response.to.have.status(200); });",
+                  "const json = pm.response.json();",
+                  "if (json.token) pm.collectionVariables.set('userToken', json.token);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Optional Login - Admin",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"admin@example.com\",\n  \"password\": \"Password123!\"\n}"
+            },
+            "url": "{{baseUrl}}/api/auth/login",
+            "description": "Optional. Replace credentials with a real admin user. Saves token to adminToken when login succeeds."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('login succeeded', function () { pm.response.to.have.status(200); });",
+                  "const json = pm.response.json();",
+                  "if (json.token) pm.collectionVariables.set('adminToken', json.token);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "B. User Safety - Incident Reporting",
+      "description": "Creates a normal user safety incident and verifies it appears in public nearby alerts with trust metadata.",
+      "item": [
+        {
+          "name": "Create Safety Incident",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{userToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"incident_type\": \"road_block\",\n  \"severity\": \"medium\",\n  \"latitude\": 31.9522,\n  \"longitude\": 35.2332,\n  \"location_name\": \"Postman Test Road Block\",\n  \"description\": \"Temporary road block reported from Postman end-to-end safety test.\"\n}"
+            },
+            "url": "{{baseUrl}}/api/safety/report-incident",
+            "description": "Creates a pending user report. The backend returns id and initial community trust fields."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('incident created', function () { pm.response.to.have.status(201); });",
+                  "const json = pm.response.json();",
+                  "if (json.data && json.data.id) {",
+                  "  pm.collectionVariables.set('incidentId', json.data.id);",
+                  "  pm.collectionVariables.set('feedbackIncidentId', json.data.id);",
+                  "}",
+                  "pm.test('initial trust metadata is returned', function () {",
+                  "  pm.expect(json.data).to.have.property('trust_level');",
+                  "  pm.expect(json.data).to.have.property('verification_label');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Nearby Public Incidents Around Test Location",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{userToken}}" }],
+            "url": "{{baseUrl}}/api/safety/nearby-alerts?lat=31.9522&lng=35.2332&radius=5000",
+            "description": "Public/user-facing nearby alert read. Should include pending, approved, verified, and legacy active incidents, plus dangerous locations."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('nearby alerts returned', function () { pm.response.to.have.status(200); });",
+                  "const json = pm.response.json();",
+                  "const incidentId = pm.collectionVariables.get('incidentId');",
+                  "const incidents = (json.data || []).filter(x => x.kind === 'incident');",
+                  "const created = incidents.find(x => x.id === incidentId);",
+                  "pm.test('created pending incident is publicly visible', function () { pm.expect(created).to.exist; });",
+                  "if (created) {",
+                  "  pm.test('incident has trust metadata', function () {",
+                  "    pm.expect(created).to.have.property('trust_level');",
+                  "    pm.expect(created).to.have.property('verification_label');",
+                  "    pm.expect(created).to.have.property('confirmation_label');",
+                  "    pm.expect(created).to.have.property('dispute_label');",
+                  "    pm.expect(created).to.have.property('confirmations_count');",
+                  "    pm.expect(created).to.have.property('disputes_count');",
+                  "    pm.expect(created).to.have.property('community_confidence_score');",
+                  "  });",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Nearby Alerts - Invalid Coordinates Negative",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/safety/nearby-alerts?lat=not-a-number&lng=35.2332&radius=5000",
+            "description": "Negative test for required numeric lat/lng."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('invalid coordinates rejected', function () { pm.response.to.have.status(400); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "C. User Safety - Community Validation",
+      "description": "Confirms, disputes, notes, and validates error handling for incident feedback.",
+      "item": [
+        {
+          "name": "Confirm Incident",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{userToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"action\": \"confirm\",\n  \"comment\": \"I passed near this location and can confirm it.\"\n}"
+            },
+            "url": "{{baseUrl}}/api/safety/incidents/{{incidentId}}/feedback",
+            "description": "Stores or updates this user's feedback as a confirmation."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('confirmation accepted', function () { pm.expect([200, 201]).to.include(pm.response.code); });",
+                  "const json = pm.response.json();",
+                  "pm.test('confirmation count present', function () { pm.expect(json.data.incident).to.have.property('confirmations_count'); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Dispute Incident",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{userToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"action\": \"dispute\",\n  \"comment\": \"This report seems outdated.\"\n}"
+            },
+            "url": "{{baseUrl}}/api/safety/incidents/{{incidentId}}/feedback",
+            "description": "Updates this user's feedback to a dispute. One feedback record per user per incident is supported."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('dispute accepted', function () { pm.expect([200, 201]).to.include(pm.response.code); });",
+                  "const json = pm.response.json();",
+                  "pm.test('dispute count present', function () { pm.expect(json.data.incident).to.have.property('disputes_count'); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Add Supporting Note",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{userToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"action\": \"note\",\n  \"comment\": \"The issue is closer to the main road entrance.\"\n}"
+            },
+            "url": "{{baseUrl}}/api/safety/incidents/{{incidentId}}/feedback",
+            "description": "Adds a supporting note. Current backend stores one feedback row per user, so this replaces this user's confirm/dispute status with note."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('note accepted', function () { pm.expect([200, 201]).to.include(pm.response.code); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Repeat Same Note Feedback",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{userToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"action\": \"note\",\n  \"comment\": \"Repeated note should update the existing feedback row.\"\n}"
+            },
+            "url": "{{baseUrl}}/api/safety/incidents/{{incidentId}}/feedback",
+            "description": "Repeated feedback by the same user intentionally updates the existing safety_incident_feedback row and returns duplicate_strategy."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('repeated feedback updates existing row', function () { pm.response.to.have.status(200); });",
+                  "const json = pm.response.json();",
+                  "pm.test('duplicate strategy is clear', function () { pm.expect(json.data.duplicate_strategy).to.eql('updated_existing_feedback'); });",
+                  "pm.test('comment alias returned from DB note', function () { pm.expect(json.data.feedback).to.have.property('comment'); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Re-fetch Nearby After Feedback",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{userToken}}" }],
+            "url": "{{baseUrl}}/api/safety/nearby-alerts?lat=31.9522&lng=35.2332&radius=5000",
+            "description": "Verifies public incident cards expose counts/confidence/trust after feedback changes."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('nearby alerts returned', function () { pm.response.to.have.status(200); });",
+                  "const json = pm.response.json();",
+                  "const created = (json.data || []).find(x => x.id === pm.collectionVariables.get('incidentId'));",
+                  "pm.test('feedback incident remains public', function () { pm.expect(created).to.exist; });",
+                  "if (created) {",
+                  "  pm.test('feedback trust metadata present', function () {",
+                  "    pm.expect(created).to.have.property('trust_level');",
+                  "    pm.expect(created).to.have.property('confirmations_count');",
+                  "    pm.expect(created).to.have.property('disputes_count');",
+                  "    pm.expect(created).to.have.property('community_confidence_score');",
+                  "  });",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Invalid Feedback Action Negative",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{userToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"action\": \"maybe\",\n  \"comment\": \"Invalid action should fail.\"\n}"
+            },
+            "url": "{{baseUrl}}/api/safety/incidents/{{incidentId}}/feedback",
+            "description": "Invalid feedback action must return 400."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('invalid feedback rejected', function () { pm.response.to.have.status(400); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated Feedback Negative",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"action\": \"confirm\",\n  \"comment\": \"This should fail without a token.\"\n}"
+            },
+            "url": "{{baseUrl}}/api/safety/incidents/{{incidentId}}/feedback",
+            "description": "Feedback requires a normal user token."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('unauthenticated feedback rejected', function () { pm.expect([401, 403]).to.include(pm.response.code); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "D. Admin Safety - Incident Moderation",
+      "description": "Admin-only incident list and moderation. Live API body is status/note.",
+      "item": [
+        {
+          "name": "List Admin Incidents",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{adminToken}}" }],
+            "url": "{{baseUrl}}/api/admin/incidents",
+            "description": "Lists all incidents, including hidden/rejected, with moderation and trust fields."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('admin incidents listed', function () { pm.response.to.have.status(200); });",
+                  "const json = pm.response.json();",
+                  "const incidentId = pm.collectionVariables.get('incidentId');",
+                  "const selected = (json.data || []).find(x => x.id === incidentId) || (json.data || [])[0];",
+                  "if (selected && selected.id) pm.collectionVariables.set('incidentId', selected.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Mark Incident Verified",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{adminToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"moderation_status\": \"verified\",\n  \"moderation_note\": \"Confirmed by admin after review.\"\n}"
+            },
+            "url": "{{baseUrl}}/api/admin/incidents/{{incidentId}}/moderation",
+            "description": "Admin confirms the incident. This only changes moderation fields."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('incident verified', function () { pm.response.to.have.status(200); });",
+                  "pm.test('status is verified', function () { pm.expect(pm.response.json().data.moderation_status).to.eql('verified'); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Mark Incident Pending",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{adminToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"moderation_status\": \"pending\",\n  \"moderation_note\": \"Returned to community review.\"\n}" },
+            "url": "{{baseUrl}}/api/admin/incidents/{{incidentId}}/moderation",
+            "description": "Returns incident to pending. Pending incidents remain visible publicly."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('incident set pending', function () { pm.response.to.have.status(200); });"] } }]
+        },
+        {
+          "name": "Mark Incident Hidden",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{adminToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"moderation_status\": \"hidden\",\n  \"moderation_note\": \"Hidden during Postman visibility test.\"\n}" },
+            "url": "{{baseUrl}}/api/admin/incidents/{{incidentId}}/moderation",
+            "description": "Hidden incidents should be excluded from public nearby alerts."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('incident hidden', function () { pm.response.to.have.status(200); });"] } }]
+        },
+        {
+          "name": "Confirm Hidden Excluded Publicly",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{userToken}}" }],
+            "url": "{{baseUrl}}/api/safety/nearby-alerts?lat=31.9522&lng=35.2332&radius=5000",
+            "description": "Hidden incident should not appear in public nearby incidents."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('nearby alerts returned', function () { pm.response.to.have.status(200); });",
+                  "const ids = (pm.response.json().data || []).map(x => x.id);",
+                  "pm.test('hidden incident excluded', function () { pm.expect(ids).to.not.include(pm.collectionVariables.get('incidentId')); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Mark Incident Rejected",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{adminToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"moderation_status\": \"rejected\",\n  \"moderation_note\": \"Rejected during Postman visibility test.\"\n}" },
+            "url": "{{baseUrl}}/api/admin/incidents/{{incidentId}}/moderation",
+            "description": "Rejected incidents should be excluded from public nearby alerts."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('incident rejected', function () { pm.response.to.have.status(200); });"] } }]
+        },
+        {
+          "name": "Confirm Rejected Excluded Publicly",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{userToken}}" }],
+            "url": "{{baseUrl}}/api/safety/nearby-alerts?lat=31.9522&lng=35.2332&radius=5000",
+            "description": "Rejected incident should not appear in public nearby incidents."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('nearby alerts returned', function () { pm.response.to.have.status(200); });",
+                  "const ids = (pm.response.json().data || []).map(x => x.id);",
+                  "pm.test('rejected incident excluded', function () { pm.expect(ids).to.not.include(pm.collectionVariables.get('incidentId')); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Mark Incident Back To Verified",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{adminToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"moderation_status\": \"verified\",\n  \"moderation_note\": \"Restored after visibility tests.\"\n}" },
+            "url": "{{baseUrl}}/api/admin/incidents/{{incidentId}}/moderation",
+            "description": "Restores the test incident to public verified visibility."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('incident restored verified', function () { pm.response.to.have.status(200); });"] } }]
+        },
+        {
+          "name": "Normal User Cannot Moderate Negative",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{userToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"moderation_status\": \"verified\",\n  \"moderation_note\": \"Normal user should not be allowed.\"\n}" },
+            "url": "{{baseUrl}}/api/admin/incidents/{{incidentId}}/moderation",
+            "description": "Admin moderation must fail for a normal user token."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('normal user forbidden', function () { pm.expect([401, 403]).to.include(pm.response.code); });"] } }]
+        },
+        {
+          "name": "Invalid Moderation Status Negative",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{adminToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"moderation_status\": \"active\",\n  \"moderation_note\": \"Invalid for current admin endpoint.\"\n}" },
+            "url": "{{baseUrl}}/api/admin/incidents/{{incidentId}}/moderation",
+            "description": "Current admin endpoint accepts pending, approved, verified, rejected, hidden only."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('invalid status rejected', function () { pm.response.to.have.status(400); });"] } }]
+        }
+      ]
+    },
+    {
+      "name": "D0. User Notifications",
+      "description": "Safety nearby-alert checks can create danger_alert notifications for authenticated users. This folder verifies the supported notification endpoints.",
+      "item": [
+        {
+          "name": "List My Notifications",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{userToken}}" }],
+            "url": "{{baseUrl}}/api/notifications?page=1&limit=20",
+            "description": "Lists notifications for the normal user, including any danger_alert notifications created by nearby-alert checks."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('notifications listed', function () { pm.response.to.have.status(200); });", "pm.test('notification response has unread count', function () { pm.expect(pm.response.json()).to.have.property('unread_count'); });"] } }]
+        },
+        {
+          "name": "List Unread Notifications",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{userToken}}" }],
+            "url": "{{baseUrl}}/api/notifications?unread_only=true&page=1&limit=20",
+            "description": "Filters to unread notifications using the supported unread_only query parameter."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('unread notifications listed', function () { pm.response.to.have.status(200); });"] } }]
+        },
+        {
+          "name": "Register Push Token",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{userToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"postman-test-web-token\",\n  \"platform\": \"web\",\n  \"provider\": \"webpush\",\n  \"device_id\": \"postman-web\",\n  \"app_version\": \"postman\"\n}"
+            },
+            "url": "{{baseUrl}}/api/notifications/push-token",
+            "description": "Registers or updates a supported push token record."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('push token registered', function () { pm.response.to.have.status(201); });"] } }]
+        },
+        {
+          "name": "Remove Push Token",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{userToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"postman-test-web-token\"\n}"
+            },
+            "url": "{{baseUrl}}/api/notifications/push-token",
+            "description": "Soft-disables the Postman push token."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('push token removed', function () { pm.response.to.have.status(200); });"] } }]
+        },
+        {
+          "name": "Invalid Push Platform Negative",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{userToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"postman-invalid-platform-token\",\n  \"platform\": \"desktop\"\n}"
+            },
+            "url": "{{baseUrl}}/api/notifications/push-token",
+            "description": "Invalid platform must fail validation. Supported platforms are ios, android, web."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('invalid platform rejected', function () { pm.response.to.have.status(400); });"] } }]
+        },
+        {
+          "name": "Mark All Notifications Read",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Authorization", "value": "Bearer {{userToken}}" }],
+            "url": "{{baseUrl}}/api/notifications/read-all",
+            "description": "Marks all current user notifications as read."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('mark all read succeeded', function () { pm.response.to.have.status(200); });", "pm.test('updated count returned', function () { pm.expect(pm.response.json()).to.have.property('updated'); });"] } }]
+        }
+      ]
+    },
+    {
+      "name": "E. Admin Safety - Dangerous Locations CRUD",
+      "description": "Admin dangerous location lifecycle. Live admin schema does not accept a source field.",
+      "item": [
+        {
+          "name": "List Dangerous Locations",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{adminToken}}" }],
+            "url": "{{baseUrl}}/api/admin/dangerous-locations",
+            "description": "Lists dangerous locations."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('locations listed', function () { pm.response.to.have.status(200); });"] } }]
+        },
+        {
+          "name": "Create Dangerous Location",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{adminToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Postman Test Military Checkpoint\",\n  \"location_type\": \"military_checkpoint\",\n  \"latitude\": 31.9522,\n  \"longitude\": 35.2332,\n  \"danger_radius_meters\": 100,\n  \"risk_level\": \"medium\",\n  \"description\": \"Created from Postman safety test.\",\n  \"is_active\": true\n}"
+            },
+            "url": "{{baseUrl}}/api/admin/dangerous-locations",
+            "description": "Creates a reportable military checkpoint. name_ar and description_ar are omitted so backend defaults them."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('location created', function () { pm.response.to.have.status(201); });",
+                  "const json = pm.response.json();",
+                  "if (json.data && json.data.id) pm.collectionVariables.set('dangerousLocationId', json.data.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update Dangerous Location",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{adminToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"risk_level\": \"high\",\n  \"description\": \"Updated from Postman safety test.\"\n}"
+            },
+            "url": "{{baseUrl}}/api/admin/dangerous-locations/{{dangerousLocationId}}",
+            "description": "Updates only supported fields."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('location updated', function () { pm.response.to.have.status(200); });"] } }]
+        },
+        {
+          "name": "Get Checkpoint Status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/safety/checkpoints/{{dangerousLocationId}}/status",
+            "description": "Public checkpoint status for the dangerous location created above. May return 404 before a checkpoint report exists."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('status endpoint responds', function () { pm.expect([200, 404]).to.include(pm.response.code); });"] } }]
+        },
+        {
+          "name": "Invalid Location Type Negative",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{adminToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Invalid Postman Location\",\n  \"location_type\": \"checkpoint\",\n  \"latitude\": 31.9522,\n  \"longitude\": 35.2332,\n  \"risk_level\": \"medium\"\n}"
+            },
+            "url": "{{baseUrl}}/api/admin/dangerous-locations",
+            "description": "Invalid location_type should fail validation."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('invalid location type rejected', function () { pm.response.to.have.status(400); });"] } }]
+        },
+        {
+          "name": "Invalid Risk Level Negative",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{adminToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Invalid Risk Postman Location\",\n  \"location_type\": \"military_checkpoint\",\n  \"latitude\": 31.9522,\n  \"longitude\": 35.2332,\n  \"risk_level\": \"severe\"\n}"
+            },
+            "url": "{{baseUrl}}/api/admin/dangerous-locations",
+            "description": "Invalid risk_level should fail validation."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('invalid risk rejected', function () { pm.response.to.have.status(400); });"] } }]
+        },
+        {
+          "name": "Disable Dangerous Location",
+          "request": {
+            "method": "DELETE",
+            "header": [{ "key": "Authorization", "value": "Bearer {{adminToken}}" }],
+            "url": "{{baseUrl}}/api/admin/dangerous-locations/{{dangerousLocationId}}",
+            "description": "Soft-disables the test location by setting is_active false."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('location disabled', function () { pm.response.to.have.status(200); });"] } }]
+        },
+        {
+          "name": "Verify Disabled Checkpoint Status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/safety/checkpoints/{{dangerousLocationId}}/status",
+            "description": "Disabled checkpoints should not behave as active reportable checkpoint locations."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('disabled checkpoint unavailable', function () { pm.expect([400, 404]).to.include(pm.response.code); });"] } }]
+        },
+        {
+          "name": "Re-enable Dangerous Location For Checkpoint Tests",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{adminToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"is_active\": true,\n  \"risk_level\": \"high\",\n  \"description\": \"Re-enabled for Postman checkpoint report tests.\"\n}"
+            },
+            "url": "{{baseUrl}}/api/admin/dangerous-locations/{{dangerousLocationId}}",
+            "description": "Re-enables the checkpoint so folder F can create a checkpoint report against it."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('location re-enabled', function () { pm.response.to.have.status(200); });"] } }]
+        }
+      ]
+    },
+    {
+      "name": "F. Checkpoint Reports",
+      "description": "User checkpoint report flow uses the dangerousLocationId created as a military checkpoint.",
+      "item": [
+        {
+          "name": "User Creates Checkpoint Report",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{userToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"slow\",\n  \"wait_minutes\": 25,\n  \"notes\": \"Postman test checkpoint report.\"\n}"
+            },
+            "url": "{{baseUrl}}/api/safety/checkpoints/{{dangerousLocationId}}/report",
+            "description": "Requires dangerousLocationId to reference an active military_checkpoint or flying_checkpoint."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('checkpoint report accepted or checkpoint unavailable', function () { pm.expect([201, 400, 404]).to.include(pm.response.code); });",
+                  "if (pm.response.code === 201) {",
+                  "  const json = pm.response.json();",
+                  "  if (json.data && json.data.id) pm.collectionVariables.set('checkpointReportId', json.data.id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Admin Lists Checkpoint Reports",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{adminToken}}" }],
+            "url": "{{baseUrl}}/api/admin/checkpoint-reports",
+            "description": "Admin report list. Saves checkpointReportId from latest report when possible."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('checkpoint reports listed', function () { pm.response.to.have.status(200); });",
+                  "const json = pm.response.json();",
+                  "const first = (json.data || [])[0];",
+                  "if (first && first.id) pm.collectionVariables.set('checkpointReportId', first.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Invalid Checkpoint Report Status Negative",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{userToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"status\": \"blocked\",\n  \"wait_minutes\": 10,\n  \"notes\": \"Invalid status should fail.\"\n}" },
+            "url": "{{baseUrl}}/api/safety/checkpoints/{{dangerousLocationId}}/report",
+            "description": "Current checkpoint statuses are open, closed, slow."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('invalid checkpoint status rejected', function () { pm.expect([400, 404]).to.include(pm.response.code); });"] } }]
+        }
+      ]
+    },
+    {
+      "name": "G. SOS Flow",
+      "description": "Emergency contacts, user SOS creation, contact notification attempts, and admin SOS listing.",
+      "item": [
+        {
+          "name": "User Creates Emergency Contact",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{userToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"full_name\": \"Postman Emergency Contact\",\n  \"phone\": \"+970599000001\",\n  \"email\": \"postman-emergency-contact@example.com\",\n  \"relationship\": \"Friend\",\n  \"is_primary\": true\n}"
+            },
+            "url": "{{baseUrl}}/api/sos/contacts",
+            "description": "Creates an active emergency contact for the authenticated user."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('emergency contact created', function () { pm.expect([201, 409]).to.include(pm.response.code); });",
+                  "const json = pm.response.json();",
+                  "if (json.data && json.data.id) pm.collectionVariables.set('emergencyContactId', json.data.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "User Lists Emergency Contacts",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{userToken}}" }],
+            "url": "{{baseUrl}}/api/sos/contacts",
+            "description": "Lists only the current user's active emergency contacts."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('contacts listed', function () { pm.response.to.have.status(200); });",
+                  "const first = (pm.response.json().data || [])[0];",
+                  "if (first && first.id) pm.collectionVariables.set('emergencyContactId', first.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "User Updates Emergency Contact",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{userToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"relationship\": \"Updated friend\",\n  \"is_primary\": true\n}"
+            },
+            "url": "{{baseUrl}}/api/sos/contacts/{{emergencyContactId}}",
+            "description": "Updates only the authenticated user's own contact."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('contact updated', function () { pm.response.to.have.status(200); });"] } }]
+        },
+        {
+          "name": "User Creates SOS Event With Contacts",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{userToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"latitude\": 31.9522,\n  \"longitude\": 35.2332,\n  \"message\": \"Postman safety test SOS event.\",\n  \"occurred_at\": \"{{$isoTimestamp}}\"\n}"
+            },
+            "url": "{{baseUrl}}/api/sos",
+            "description": "Creates an SOS event and records best-effort emergency contact notification attempts."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('SOS created', function () { pm.response.to.have.status(201); });",
+                  "const json = pm.response.json();",
+                  "if (json.data && json.data.sos_event && json.data.sos_event.id) pm.collectionVariables.set('sosEventId', json.data.sos_event.id);",
+                  "pm.test('SOS contact notification envelope returned', function () {",
+                  "  pm.expect(json.data).to.have.property('emergency_contacts_count');",
+                  "  pm.expect(json.data).to.have.property('contacts_notified');",
+                  "  pm.expect(json.data).to.have.property('notification_status');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "User Deactivates Emergency Contact",
+          "request": {
+            "method": "DELETE",
+            "header": [{ "key": "Authorization", "value": "Bearer {{userToken}}" }],
+            "url": "{{baseUrl}}/api/sos/contacts/{{emergencyContactId}}",
+            "description": "Soft-disables the emergency contact when is_active is available."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('contact deactivated', function () { pm.response.to.have.status(204); });"] } }]
+        },
+        {
+          "name": "User Creates SOS Event Without Active Contacts",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{userToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"latitude\": 31.9522,\n  \"longitude\": 35.2332,\n  \"message\": \"Postman SOS without active contacts.\",\n  \"occurred_at\": \"{{$isoTimestamp}}\"\n}"
+            },
+            "url": "{{baseUrl}}/api/sos",
+            "description": "SOS creation should still succeed when the user has no active contacts."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('SOS without active contacts created', function () { pm.response.to.have.status(201); });",
+                  "const json = pm.response.json();",
+                  "if (json.data && json.data.sos_event && json.data.sos_event.id) pm.collectionVariables.set('sosEventId', json.data.sos_event.id);",
+                  "pm.test('no-contact SOS has notification status', function () { pm.expect(json.data).to.have.property('notification_status'); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "User Lists Own SOS Events",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{userToken}}" }],
+            "url": "{{baseUrl}}/api/sos/my",
+            "description": "Shows SOS events belonging to the current user."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('my SOS listed', function () { pm.response.to.have.status(200); });"] } }]
+        },
+        {
+          "name": "User Gets SOS By ID",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{userToken}}" }],
+            "url": "{{baseUrl}}/api/sos/{{sosEventId}}",
+            "description": "Fetches the created SOS event."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('SOS by id returned', function () { pm.response.to.have.status(200); });"] } }]
+        },
+        {
+          "name": "User Updates SOS Status",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{userToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"status\": \"cancelled\",\n  \"note\": \"Cancelled after Postman test.\"\n}" },
+            "url": "{{baseUrl}}/api/sos/{{sosEventId}}/status",
+            "description": "Supported user SOS status update endpoint."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('SOS status updated', function () { pm.response.to.have.status(200); });"] } }]
+        },
+        {
+          "name": "Admin Lists SOS Events",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{adminToken}}" }],
+            "url": "{{baseUrl}}/api/admin/sos-events",
+            "description": "Admin SOS event list. Saves latest sosEventId if present."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('admin SOS listed', function () { pm.response.to.have.status(200); });",
+                  "const first = (pm.response.json().data || [])[0];",
+                  "if (first && first.id) pm.collectionVariables.set('sosEventId', first.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Invalid SOS Status Negative",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{userToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"status\": \"done\",\n  \"note\": \"Invalid status should fail.\"\n}" },
+            "url": "{{baseUrl}}/api/sos/{{sosEventId}}/status",
+            "description": "Current SOS statuses are created, notifying, notified, acknowledged, resolved, cancelled, failed."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('invalid SOS status rejected', function () { pm.response.to.have.status(400); });"] } }]
+        }
+      ]
+    },
+    {
+      "name": "H. OCHA",
+      "description": "OCHA fetch runs automatically through safety cron every OCHA_FETCH_INTERVAL_HOURS, default 6. Manual admin fetch remains for backup/testing.",
+      "item": [
+        {
+          "name": "Admin Gets OCHA Logs",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{adminToken}}" }],
+            "url": "{{baseUrl}}/api/admin/ocha/logs",
+            "description": "Lists OCHA import logs from news_fetch_log."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('OCHA logs returned', function () { pm.response.to.have.status(200); });"] } }]
+        },
+        {
+          "name": "Admin Manually Triggers OCHA Fetch",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{adminToken}}" }],
+            "url": "{{baseUrl}}/api/admin/ocha/fetch",
+            "description": "Manual backup/testing trigger. This may take time and depends on HDX network availability."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('manual OCHA fetch responded', function () { pm.expect([200, 500]).to.include(pm.response.code); });"] } }]
+        },
+        {
+          "name": "Admin Re-checks OCHA Logs",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{adminToken}}" }],
+            "url": "{{baseUrl}}/api/admin/ocha/logs",
+            "description": "Re-check logs after manual fetch. Failed imports should still write an error log when DB is available."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('OCHA logs returned after fetch', function () { pm.response.to.have.status(200); });"] } }]
+        },
+        {
+          "name": "Normal User Cannot Trigger OCHA Negative",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{userToken}}" }],
+            "url": "{{baseUrl}}/api/admin/ocha/fetch",
+            "description": "Admin OCHA manual trigger must fail for normal users."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('normal user cannot trigger OCHA', function () { pm.expect([401, 403]).to.include(pm.response.code); });"] } }]
+        }
+      ]
+    },
+    {
+      "name": "I. Admin Dashboard Safety Stats",
+      "description": "Verifies dashboard contains the expected Safety and business analytics metrics.",
+      "item": [
+        {
+          "name": "List Trails For Analytics",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/trails",
+            "description": "Saves the first available trailId so viewing trail details can create a trail_view_event."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('trails list returned', function () { pm.response.to.have.status(200); });",
+                  "const trails = pm.response.json().data || [];",
+                  "if (trails[0] && trails[0].id) pm.collectionVariables.set('trailId', trails[0].id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "View Trail Details Creates Trail View Event",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/trails/{{trailId}}",
+            "description": "Viewing a trail should insert trail_view_events and best-effort user_activity_events trail_view."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const trailId = pm.collectionVariables.get('trailId');",
+                  "pm.test('trail id is available', function () { pm.expect(trailId).to.not.be.empty; });",
+                  "pm.test('trail details returned', function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Admin Dashboard",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{adminToken}}" }],
+            "url": "{{baseUrl}}/api/admin/dashboard",
+            "description": "Includes safety stats and last OCHA import."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('dashboard returned', function () { pm.response.to.have.status(200); });",
+                  "const data = pm.response.json().data || {};",
+                  "const safety = data.safety;",
+                  "const users = data.users;",
+                  "const business = data.business;",
+                  "const expected = ['incidents_total','pending_incidents','approved_incidents','verified_incidents','admin_verified_reports','hidden_incidents','rejected_incidents','public_incidents','visible_public_incidents','non_public_incidents','reports_awaiting_review','community_confirmed_reports','disputed_reports','active_incidents','legacy_active_incidents','resolved_incidents','dangerous_locations','checkpoint_reports','sos_events_total','last_ocha_import'];",
+                  "pm.test('safety stats contain expected keys', function () {",
+                  "  pm.expect(safety).to.exist;",
+                  "  expected.forEach(key => pm.expect(safety).to.have.property(key));",
+                  "  ['emergency_contacts_total','sos_events_with_contacts','emergency_contact_notifications_sent','emergency_contact_notification_attempts','average_contacts_per_user'].forEach(key => pm.expect(safety).to.have.property(key));",
+                  "});",
+                  "pm.test('active user analytics are present', function () {",
+                  "  pm.expect(users).to.exist;",
+                  "  pm.expect(users).to.have.property('active_this_week');",
+                  "  pm.expect(users).to.have.property('active_this_month');",
+                  "  pm.expect(users.active_this_week).to.not.equal(null);",
+                  "  pm.expect(users.active_this_month).to.not.equal(null);",
+                  "});",
+                  "pm.test('business analytics are present', function () {",
+                  "  pm.expect(business).to.exist;",
+                  "  ['most_popular_trails','most_viewed_trails_this_month','most_active_regions','top_challenge_participation','most_earned_badges','safety_hotspots','incident_reports_by_region'].forEach(key => pm.expect(business).to.have.property(key));",
+                  "});",
+                  "pm.test('most popular trails is an array after trail views', function () {",
+                  "  pm.expect(business.most_popular_trails).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "J. Public Visibility Rules",
+      "description": "Focused public visibility checks for pending, verified, hidden, rejected, and disputed/community-warning behavior.",
+      "item": [
+        {
+          "name": "Set Incident Pending",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{adminToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"moderation_status\": \"pending\",\n  \"moderation_note\": \"Visibility rule: pending should be public.\"\n}" },
+            "url": "{{baseUrl}}/api/admin/incidents/{{incidentId}}/moderation"
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('pending set', function () { pm.response.to.have.status(200); });"] } }]
+        },
+        {
+          "name": "Pending Appears Publicly",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/safety/nearby-alerts?lat=31.9522&lng=35.2332&radius=5000"
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["const ids = (pm.response.json().data || []).map(x => x.id);", "pm.test('pending incident appears', function () { pm.expect(ids).to.include(pm.collectionVariables.get('incidentId')); });"] } }]
+        },
+        {
+          "name": "Dispute Incident For Warning Trust Level",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{userToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"action\": \"dispute\",\n  \"comment\": \"Visibility rule: disputed remains visible with warning.\"\n}" },
+            "url": "{{baseUrl}}/api/safety/incidents/{{incidentId}}/feedback"
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('dispute saved', function () { pm.response.to.have.status(200); });"] } }]
+        },
+        {
+          "name": "Disputed Remains Visible",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/safety/nearby-alerts?lat=31.9522&lng=35.2332&radius=5000"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const item = (pm.response.json().data || []).find(x => x.id === pm.collectionVariables.get('incidentId'));",
+                  "pm.test('disputed incident remains visible', function () { pm.expect(item).to.exist; });",
+                  "if (item) pm.test('has trust label', function () { pm.expect(item).to.have.property('trust_level'); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Set Incident Verified",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{adminToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"moderation_status\": \"verified\",\n  \"moderation_note\": \"Visibility rule: verified should be public.\"\n}" },
+            "url": "{{baseUrl}}/api/admin/incidents/{{incidentId}}/moderation"
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('verified set', function () { pm.response.to.have.status(200); });"] } }]
+        },
+        {
+          "name": "Verified Appears Publicly",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/safety/nearby-alerts?lat=31.9522&lng=35.2332&radius=5000"
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["const ids = (pm.response.json().data || []).map(x => x.id);", "pm.test('verified incident appears', function () { pm.expect(ids).to.include(pm.collectionVariables.get('incidentId')); });"] } }]
+        },
+        {
+          "name": "Set Hidden Then Verify Excluded",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{adminToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"moderation_status\": \"hidden\",\n  \"moderation_note\": \"Visibility rule: hidden should not be public.\"\n}" },
+            "url": "{{baseUrl}}/api/admin/incidents/{{incidentId}}/moderation"
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('hidden set', function () { pm.response.to.have.status(200); });"] } }]
+        },
+        {
+          "name": "Hidden Does Not Appear Publicly",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/safety/nearby-alerts?lat=31.9522&lng=35.2332&radius=5000"
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["const ids = (pm.response.json().data || []).map(x => x.id);", "pm.test('hidden incident excluded', function () { pm.expect(ids).to.not.include(pm.collectionVariables.get('incidentId')); });"] } }]
+        },
+        {
+          "name": "Set Rejected Then Verify Excluded",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{adminToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"moderation_status\": \"rejected\",\n  \"moderation_note\": \"Visibility rule: rejected should not be public.\"\n}" },
+            "url": "{{baseUrl}}/api/admin/incidents/{{incidentId}}/moderation"
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('rejected set', function () { pm.response.to.have.status(200); });"] } }]
+        },
+        {
+          "name": "Rejected Does Not Appear Publicly",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/safety/nearby-alerts?lat=31.9522&lng=35.2332&radius=5000"
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["const ids = (pm.response.json().data || []).map(x => x.id);", "pm.test('rejected incident excluded', function () { pm.expect(ids).to.not.include(pm.collectionVariables.get('incidentId')); });"] } }]
+        }
+      ]
+    },
+    {
+      "name": "K. Cleanup",
+      "description": "Cleanup soft-disables test dangerous locations and leaves incidents hidden/rejected if desired.",
+      "item": [
+        {
+          "name": "Cleanup - Hide Test Incident",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{adminToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"moderation_status\": \"hidden\",\n  \"moderation_note\": \"Cleanup after Postman test run.\"\n}" },
+            "url": "{{baseUrl}}/api/admin/incidents/{{incidentId}}/moderation",
+            "description": "Optional cleanup for test-created incident. Hidden incidents remain visible to admins."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('cleanup incident hidden', function () { pm.expect([200, 404]).to.include(pm.response.code); });"] } }]
+        },
+        {
+          "name": "Cleanup - Disable Test Dangerous Location",
+          "request": {
+            "method": "DELETE",
+            "header": [{ "key": "Authorization", "value": "Bearer {{adminToken}}" }],
+            "url": "{{baseUrl}}/api/admin/dangerous-locations/{{dangerousLocationId}}",
+            "description": "Soft-disables the test dangerous location. This can safely be run more than once only if the id still exists."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('cleanup location disabled or already gone', function () { pm.expect([200, 404]).to.include(pm.response.code); });"] } }]
+        },
+        {
+          "name": "Cleanup Notes",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{adminToken}}" }],
+            "url": "{{baseUrl}}/api/admin/incidents",
+            "description": "There is no hard-delete incident endpoint. Test-created incidents can be hidden through admin moderation or cleaned manually in the database if needed."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('admin incidents reachable for cleanup review', function () { pm.response.to.have.status(200); });"] } }]
+        }
+      ]
+    }
+  ]
+}
