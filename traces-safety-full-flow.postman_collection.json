@@ -949,7 +949,7 @@
               "raw": "{\n  \"latitude\": 31.9522,\n  \"longitude\": 35.2332,\n  \"message\": \"Postman safety test SOS event.\",\n  \"occurred_at\": \"{{$isoTimestamp}}\"\n}"
             },
             "url": "{{baseUrl}}/api/sos",
-            "description": "Creates an SOS event and records best-effort emergency contact notification attempts."
+            "description": "Creates an SOS event and records best-effort emergency contact notification attempts. If TWILIO_SMS_ENABLED=true and Twilio config is valid, this sends SMS for phone contacts."
           },
           "event": [
             {
@@ -963,6 +963,7 @@
                   "  pm.expect(json.data).to.have.property('emergency_contacts_count');",
                   "  pm.expect(json.data).to.have.property('contacts_notified');",
                   "  pm.expect(json.data).to.have.property('notification_status');",
+                  "  pm.expect(json.data.emergency_contacts_count).to.be.at.least(1);",
                   "});"
                 ]
               }
@@ -978,6 +979,73 @@
             "description": "Soft-disables the emergency contact when is_active is available."
           },
           "event": [{ "listen": "test", "script": { "exec": ["pm.test('contact deactivated', function () { pm.response.to.have.status(204); });"] } }]
+        },
+        {
+          "name": "User Creates Emergency Contact Without Phone",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{userToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"full_name\": \"Postman No Phone Contact {{$timestamp}}\",\n  \"relationship\": \"Friend without phone\",\n  \"is_primary\": false\n}"
+            },
+            "url": "{{baseUrl}}/api/sos/contacts",
+            "description": "Creates an active contact without phone. SOS should record a skipped SMS attempt for this contact."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('no-phone contact created', function () { pm.response.to.have.status(201); });",
+                  "const json = pm.response.json();",
+                  "if (json.data && json.data.id) pm.collectionVariables.set('emergencyContactId', json.data.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "User Creates SOS Event With Contact Without Phone",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{userToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"latitude\": 31.9522,\n  \"longitude\": 35.2332,\n  \"message\": \"Postman SOS with no-phone contact should record skipped SMS attempt.\",\n  \"occurred_at\": \"{{$isoTimestamp}}\"\n}"
+            },
+            "url": "{{baseUrl}}/api/sos",
+            "description": "Creates SOS with an active contact that has no phone; backend should still create SOS and record skipped SMS attempt."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('SOS with no-phone contact created', function () { pm.response.to.have.status(201); });",
+                  "const json = pm.response.json();",
+                  "if (json.data && json.data.sos_event && json.data.sos_event.id) pm.collectionVariables.set('sosEventId', json.data.sos_event.id);",
+                  "pm.test('no-phone contact counted', function () { pm.expect(json.data.emergency_contacts_count).to.be.at.least(1); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "User Deactivates No-Phone Emergency Contact",
+          "request": {
+            "method": "DELETE",
+            "header": [{ "key": "Authorization", "value": "Bearer {{userToken}}" }],
+            "url": "{{baseUrl}}/api/sos/contacts/{{emergencyContactId}}",
+            "description": "Soft-disables the no-phone emergency contact."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('no-phone contact deactivated', function () { pm.response.to.have.status(204); });"] } }]
         },
         {
           "name": "User Creates SOS Event Without Active Contacts",
@@ -1003,6 +1071,37 @@
                   "const json = pm.response.json();",
                   "if (json.data && json.data.sos_event && json.data.sos_event.id) pm.collectionVariables.set('sosEventId', json.data.sos_event.id);",
                   "pm.test('no-contact SOS has notification status', function () { pm.expect(json.data).to.have.property('notification_status'); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Twilio Disabled Or Missing Config Still Succeeds",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{userToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"latitude\": 31.9522,\n  \"longitude\": 35.2332,\n  \"message\": \"Postman SOS should succeed even when Twilio is disabled or unavailable.\",\n  \"occurred_at\": \"{{$isoTimestamp}}\"\n}"
+            },
+            "url": "{{baseUrl}}/api/sos",
+            "description": "Run this with TWILIO_SMS_ENABLED=false or missing Twilio config to verify SOS still succeeds and attempts are skipped instead of crashing."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('SOS succeeds regardless of Twilio config', function () { pm.response.to.have.status(201); });",
+                  "const json = pm.response.json();",
+                  "pm.test('Twilio-safe envelope returned', function () {",
+                  "  pm.expect(json.data).to.have.property('notification_status');",
+                  "  pm.expect(json.data).to.have.property('contacts_notified');",
+                  "});"
                 ]
               }
             }

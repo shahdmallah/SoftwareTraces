@@ -4,6 +4,7 @@ import { pool } from "../../db/pool";
 import { HttpError } from "../../lib/httpError";
 import { requireAuth } from "../../middleware/auth";
 import { trackUserActivity } from "../analytics/analytics.service";
+import { isValidInternationalPhone } from "./twilioSms.service";
 import {
   createEmergencyContact,
   createSosEvent,
@@ -35,7 +36,10 @@ const contactSchema = z.object({
   full_name: z.string().trim().min(2).max(100),
   name: z.string().trim().min(2).max(100).optional(),
   contact_user_id: z.string().uuid().nullable().optional(),
-  phone: z.string().trim().min(3).max(40).nullable().optional(),
+  phone: z.string().trim().nullable().optional()
+    .refine((value) => value == null || value === "" || isValidInternationalPhone(value), {
+      message: "phone must use international format like +97259XXXXXXX",
+    }),
   email: z.string().trim().email().nullable().optional(),
   relationship: z.string().trim().max(100).nullable().optional(),
   is_primary: z.boolean().optional(),

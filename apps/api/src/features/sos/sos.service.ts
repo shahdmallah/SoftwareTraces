@@ -1,6 +1,7 @@
 import { pool } from "../../db/pool";
 import { HttpError } from "../../lib/httpError";
 import { createNotification } from "../notifications/notifications.service";
+import { buildSosSmsBody, isValidInternationalPhone, sendTwilioSms } from "./twilioSms.service";
 
 export type SosStatus = "created" | "notifying" | "notified" | "acknowledged" | "resolved" | "cancelled" | "failed";
 type ContactNotificationStatus = "success" | "partial" | "failed";
@@ -384,10 +385,15 @@ export async function deleteEmergencyContact(userId: string, contactId: string):
 async function recordSosContactDelivery(input: {
   sosId: string;
   contactId: string;
+  userId?: string | null;
   recipientUserId?: string | null;
   channel: "sms" | "email" | "push" | "in_app_message";
+  provider?: string | null;
+  recipientPhone?: string | null;
+  recipientEmail?: string | null;
   status: "queued" | "sent" | "failed" | "skipped";
   notificationId?: string | null;
+  providerMessageId?: string | null;
   error?: string | null;
   metadata?: Record<string, unknown>;
 }): Promise<void> {
@@ -408,8 +414,13 @@ async function recordSosContactDelivery(input: {
       placeholders.push(`$${values.length}${cast}`);
     };
 
+    addColumn("user_id", input.userId ?? null, "::uuid");
     addColumn("recipient_user_id", input.recipientUserId ?? null, "::uuid");
     addColumn("notification_id", input.notificationId ?? null, "::uuid");
+    addColumn("provider", input.provider ?? null);
+    addColumn("recipient_phone", input.recipientPhone ?? null);
+    addColumn("recipient_email", input.recipientEmail ?? null);
+    addColumn("provider_message_id", input.providerMessageId ?? null);
     addColumn("metadata", JSON.stringify(input.metadata ?? {}), "::jsonb");
     addColumn("error", input.error ?? null);
     if (columns.has("updated_at")) {
@@ -421,8 +432,13 @@ async function recordSosContactDelivery(input: {
       ? " ON CONFLICT (sos_event_id, contact_id, channel) DO UPDATE SET status = EXCLUDED.status"
       : "";
     const updateParts = [
+      columns.has("user_id") ? "user_id = EXCLUDED.user_id" : null,
       columns.has("recipient_user_id") ? "recipient_user_id = EXCLUDED.recipient_user_id" : null,
       columns.has("notification_id") ? "notification_id = EXCLUDED.notification_id" : null,
+      columns.has("provider") ? "provider = EXCLUDED.provider" : null,
+      columns.has("recipient_phone") ? "recipient_phone = EXCLUDED.recipient_phone" : null,
+      columns.has("recipient_email") ? "recipient_email = EXCLUDED.recipient_email" : null,
+      columns.has("provider_message_id") ? "provider_message_id = EXCLUDED.provider_message_id" : null,
       columns.has("metadata") ? "metadata = COALESCE(sos_contact_notifications.metadata, '{}'::jsonb) || EXCLUDED.metadata" : null,
       columns.has("error") ? "error = EXCLUDED.error" : null,
       columns.has("updated_at") ? "updated_at = NOW()" : null,
@@ -436,6 +452,32 @@ async function recordSosContactDelivery(input: {
     );
   } catch (error) {
     console.warn("[sos.recordSosContactDelivery] failed:", error);
+  }
+}
+
+async function getSosUserDisplayName(userId: string): Promise<string> {
+  try {
+    const profileColumns = await getTableColumns("profiles");
+    const nameCandidates = [
+      profileColumns.has("full_name") ? "NULLIF(full_name, '')" : null,
+      profileColumns.has("username") ? "NULLIF(username, '')" : null,
+      profileColumns.has("handle") ? "NULLIF(handle, '')" : null,
+    ].filter(Boolean);
+    const nameExpression = nameCandidates.length > 0
+      ? `COALESCE(${nameCandidates.join(", ")}, 'A Traces user')`
+      : "'A Traces user'";
+    const result = await pool.query<{ display_name: string | null }>(
+      `SELECT ${nameExpression} AS display_name
+       FROM profiles
+       WHERE id = $1::uuid OR user_id = $1::uuid
+       LIMIT 1`,
+      [userId]
+    );
+
+    return result.rows[0]?.display_name ?? "A Traces user";
+  } catch (error) {
+    console.warn("[sos.getSosUserDisplayName] failed:", error);
+    return "A Traces user";
   }
 }
 
@@ -477,6 +519,7 @@ async function notifyAdminsBestEffort(sosId: string, input: CreateSosInput): Pro
 }
 
 async function notifyEmergencyContactBestEffort(sosId: string, contact: EmergencyContact, input: CreateSosInput): Promise<boolean> {
+  const userName = await getSosUserDisplayName(input.userId);
   const metadata = {
     sos_event_id: sosId,
     contact_id: contact.id,
@@ -486,6 +529,55 @@ async function notifyEmergencyContactBestEffort(sosId: string, contact: Emergenc
     phone_present: Boolean(contact.phone),
     email_present: Boolean(contact.email),
   };
+
+  let sent = false;
+
+  if (contact.phone) {
+    if (!isValidInternationalPhone(contact.phone)) {
+      await recordSosContactDelivery({
+        sosId,
+        contactId: contact.id,
+        userId: input.userId,
+        channel: "sms",
+        provider: "twilio",
+        recipientPhone: contact.phone,
+        status: "skipped",
+        error: "Emergency contact phone is not in international format",
+        metadata,
+      });
+    } else {
+      const smsResult = await sendTwilioSms(contact.phone, buildSosSmsBody({
+        userName,
+        latitude: input.latitude,
+        longitude: input.longitude,
+        message: input.message,
+      }));
+      await recordSosContactDelivery({
+        sosId,
+        contactId: contact.id,
+        userId: input.userId,
+        channel: "sms",
+        provider: smsResult.provider,
+        recipientPhone: contact.phone,
+        status: smsResult.status,
+        providerMessageId: smsResult.provider_message_id,
+        error: smsResult.error,
+        metadata,
+      });
+      sent = smsResult.status === "sent";
+    }
+  } else {
+    await recordSosContactDelivery({
+      sosId,
+      contactId: contact.id,
+      userId: input.userId,
+      channel: "sms",
+      provider: "twilio",
+      status: "skipped",
+      error: "Emergency contact has no phone number",
+      metadata,
+    });
+  }
 
   if (contact.contact_user_id && contact.contact_user_id !== input.userId) {
     try {
@@ -502,6 +594,7 @@ async function notifyEmergencyContactBestEffort(sosId: string, contact: Emergenc
       await recordSosContactDelivery({
         sosId,
         contactId: contact.id,
+        userId: input.userId,
         recipientUserId: contact.contact_user_id,
         channel: "in_app_message",
         status: "sent",
@@ -513,8 +606,9 @@ async function notifyEmergencyContactBestEffort(sosId: string, contact: Emergenc
       await recordSosContactDelivery({
         sosId,
         contactId: contact.id,
+        userId: input.userId,
         recipientUserId: contact.contact_user_id,
-        channel: "in_app",
+        channel: "in_app_message",
         status: "failed",
         error: error instanceof Error ? error.message : String(error),
         metadata,
@@ -522,29 +616,20 @@ async function notifyEmergencyContactBestEffort(sosId: string, contact: Emergenc
     }
   }
 
-  if (contact.phone) {
-    await recordSosContactDelivery({
-      sosId,
-      contactId: contact.id,
-      channel: "sms",
-      status: "skipped",
-      error: "External SMS provider is not configured",
-      metadata,
-    });
-  }
-
   if (contact.email) {
     await recordSosContactDelivery({
       sosId,
       contactId: contact.id,
+      userId: input.userId,
       channel: "email",
+      recipientEmail: contact.email,
       status: "skipped",
       error: "External email provider is not configured",
       metadata,
     });
   }
 
-  return false;
+  return sent;
 }
 
 async function notifyEmergencyContactsBestEffort(sosId: string, input: CreateSosInput): Promise<SosDeliverySummary> {

@@ -69,7 +69,13 @@ const envSchema = z.object({
   GROQ_MODEL: z.string().optional(),
   OPENWEATHER_API_KEY: z.string().optional(),
   REDIS_URL: z.string().optional(),
-  OCHA_FETCH_INTERVAL_HOURS: z.coerce.number().int().min(1).max(24).default(6)
+  OCHA_FETCH_INTERVAL_HOURS: z.coerce.number().int().min(1).max(24).default(6),
+  TWILIO_ACCOUNT_SID: z.string().optional(),
+  TWILIO_AUTH_TOKEN: z.string().optional(),
+  TWILIO_PHONE_NUMBER: z.string().optional(),
+  TWILIO_SMS_ENABLED: z
+    .union([z.boolean(), z.string().transform((value) => ["true", "1", "yes", "on"].includes(value.trim().toLowerCase()))])
+    .default(false),
 });
 
 function getDatabaseHostname(databaseUrl: string): string | null {
