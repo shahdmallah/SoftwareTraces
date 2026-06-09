@@ -1,4 +1,5 @@
 import { apiRequest } from './client';
+import type { NatureSighting } from './natureSightingsApi';
 
 type Envelope<T> = {
   data: T;
@@ -10,7 +11,7 @@ type Envelope<T> = {
   };
 };
 
-export type SocialFeedReviewPhotos = Array<{ id: string; url: string; created_at: string }>;
+export type SocialFeedReviewPhotos = Array<{ id: string; url: string; created_at: string; nature_sighting?: NatureSighting | null }>;
 
 type SocialFeedUser = {
   id: string;
@@ -29,6 +30,15 @@ type SocialFeedActivityStats = {
   distance_meters: number | null;
   elapsed_time_seconds: number | null;
   elevation_gain_meters: number | null;
+  elevation_loss_meters: number | null;
+  max_elevation_meters: number | null;
+  min_elevation_meters: number | null;
+  elevation_summary?: {
+    gain_meters: number | null;
+    loss_meters: number | null;
+    max_meters: number | null;
+    min_meters: number | null;
+  };
 } | null;
 
 export type SocialFeedComment = {
@@ -38,9 +48,8 @@ export type SocialFeedComment = {
   user: SocialFeedUser;
 };
 
-export type SocialFeedReviewItem = {
+type SocialFeedBaseItem = {
   id: string;
-  type: 'review';
   user: SocialFeedUser;
   trail: SocialFeedTrail;
   rating: number | null;
@@ -58,27 +67,21 @@ export type SocialFeedReviewItem = {
   recent_comments?: SocialFeedComment[];
 };
 
-export type SocialFeedActivityItem = {
-  id: string;
-  type: 'activity';
-  user: SocialFeedUser;
-  trail: SocialFeedTrail;
-  rating: number | null;
-  title: string | null;
-  content: string | null;
-  caption: string | null;
-  visibility: string | null;
-  photo_url: string | null;
-  photos: SocialFeedReviewPhotos;
-  activity: NonNullable<SocialFeedActivityStats>;
-  created_at: string;
-  likes_count: number;
-  comments_count: number;
-  is_liked_by_user: boolean;
-  recent_comments?: SocialFeedComment[];
+export type SocialFeedReviewItem = SocialFeedBaseItem & {
+  type: 'review';
 };
 
-export type SocialFeedItem = SocialFeedReviewItem | SocialFeedActivityItem;
+export type SocialFeedActivityItem = SocialFeedBaseItem & {
+  type: 'activity';
+  activity: NonNullable<SocialFeedActivityStats>;
+};
+
+export type SocialFeedMediaItem = SocialFeedBaseItem & {
+  type: 'media';
+  activity: null;
+};
+
+export type SocialFeedItem = SocialFeedReviewItem | SocialFeedActivityItem | SocialFeedMediaItem;
 
 export type SocialFeedResponse = {
   data: SocialFeedItem[];
@@ -137,7 +140,7 @@ export async function getSocialFeed(params: { page?: number; limit?: number } = 
   });
 }
 
-export async function getSocialFeedItem(type: 'review' | 'activity', id: string) {
+export async function getSocialFeedItem(type: 'review' | 'activity' | 'media', id: string) {
   const response = await apiRequest<Envelope<SocialFeedItem>>(`/api/social/feed/${type}/${id}`);
   return response.data;
 }

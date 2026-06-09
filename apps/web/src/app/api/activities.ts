@@ -35,13 +35,41 @@ export async function startActivity(trailId?: string) {
 export async function updateActivityStatus(id: string, status: string) {
   return apiRequest(`/api/activities/${id}/status`, {
     method: 'PATCH',
-    body: JSON.stringify({ status }),
+    body: JSON.stringify({ status, occurred_at: new Date().toISOString() }),
   });
 }
 
-export async function sendSosAlert(payload: Record<string, unknown> = {}) {
-  return apiRequest('/api/activities/sos', {
+export async function sendSosAlert(payload: { activityId?: string | null; location?: [number, number] | null; message?: string } = {}) {
+  const [longitude, latitude] = payload.location ?? [];
+
+  return apiRequest('/api/sos', {
     method: 'POST',
+    body: JSON.stringify({
+      activity_id: payload.activityId ?? undefined,
+      latitude,
+      longitude,
+      message: payload.message,
+      occurred_at: new Date().toISOString(),
+    }),
+  });
+}
+
+export async function completeActivity(id: string, payload: Record<string, unknown>) {
+  return apiRequest<Envelope<Activity>>(`/api/activities/${id}`, {
+    method: 'PUT',
     body: JSON.stringify(payload),
   });
+}
+
+export async function deleteActivity(id: string) {
+  return apiRequest(`/api/activities/${id}`, { method: 'DELETE' });
+}
+
+export async function deleteActivityPost(postId: string) {
+  return apiRequest<{ message: string }>(`/api/activities/posts/${postId}`, { method: 'DELETE' });
+}
+
+export async function getActivityJournal(params: { page?: number; limit?: number } = {}) {
+  const response = await apiRequest<Envelope<Activity[]>>('/api/activities/journal', {}, params);
+  return response.data;
 }

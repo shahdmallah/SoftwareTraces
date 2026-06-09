@@ -7,7 +7,7 @@ import type { StackNavigationProp } from '@react-navigation/stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { shareActivityPost, uploadActivityMedia, type ActivityMediaFile } from '../api/activitiesApi';
 import { saveNatureSighting } from '../api/natureSightingsApi';
-import { identifySpeciesDetails, type SpeciesLanguage } from '../api/speciesApi';
+import { hasDetectedSpecies, identifySpeciesDetails, type SpeciesLanguage } from '../api/speciesApi';
 import {
   addTrailCondition,
   addTrailReview,
@@ -140,8 +140,12 @@ async function uploadPostPhotosToActivity(
 
       if (uploaded.id) {
         await identifySpeciesDetails(toActivityMediaFile(uri), language)
-          .then((identification) =>
-            saveNatureSighting({
+          .then((identification) => {
+            if (!hasDetectedSpecies(identification.result)) {
+              return undefined;
+            }
+
+            return saveNatureSighting({
               trail_id: uploaded.trail_id ?? session.trailId ?? null,
               activity_id: uploaded.activity_id ?? session.activityId,
               photo_id: uploaded.id,
@@ -151,9 +155,11 @@ async function uploadPostPhotosToActivity(
               longitude: lng,
               language,
               classification: identification.result,
-            }),
-          )
-          .catch(() => undefined);
+            });
+          })
+          .catch((error) => {
+            console.warn('[TrailReview] Nature sighting skipped', error);
+          });
       }
     }),
   );

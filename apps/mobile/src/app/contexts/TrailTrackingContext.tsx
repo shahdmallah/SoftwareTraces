@@ -14,7 +14,7 @@ import {
   uploadActivityMedia,
 } from '../api/activitiesApi';
 import { saveNatureSighting } from '../api/natureSightingsApi';
-import { identifySpeciesDetails } from '../api/speciesApi';
+import { hasDetectedSpecies, identifySpeciesDetails } from '../api/speciesApi';
 import { useLanguage } from './LanguageContext';
 import {
   checkNavigationPosition,
@@ -91,6 +91,7 @@ const LIVE_POINT_SYNC_INTERVAL_MS = 20000;
 const NAVIGATION_CHECK_INTERVAL_MS = 12000;
 const NAVIGATION_ALERT_NOTIFICATION_COOLDOWN_MS = 5 * 60 * 1000;
 const ACTIVITY_SESSION_SNAPSHOT_PREFIX = 'traces.activity-session.';
+const OFF_ROUTE_DISTANCE_METERS = 50;
 
 const TrailTrackingContext = createContext<TrailTrackingContextValue | undefined>(undefined);
 
@@ -109,6 +110,36 @@ function getDistanceMeters(from: [number, number], to: [number, number]) {
   return earthRadius * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
+function projectToMeters(point: [number, number], origin: [number, number]) {
+  const metersPerDegreeLat = 111320;
+  const metersPerDegreeLng = metersPerDegreeLat * Math.cos((origin[1] * Math.PI) / 180);
+
+  return {
+    x: (point[0] - origin[0]) * metersPerDegreeLng,
+    y: (point[1] - origin[1]) * metersPerDegreeLat,
+  };
+}
+
+function getDistanceToSegmentMeters(point: [number, number], start: [number, number], end: [number, number]) {
+  const projectedPoint = projectToMeters(point, start);
+  const projectedEnd = projectToMeters(end, start);
+  const segmentLengthSquared = projectedEnd.x * projectedEnd.x + projectedEnd.y * projectedEnd.y;
+
+  if (segmentLengthSquared === 0) {
+    return getDistanceMeters(point, start);
+  }
+
+  const t = Math.max(0, Math.min(1, (projectedPoint.x * projectedEnd.x + projectedPoint.y * projectedEnd.y) / segmentLengthSquared));
+  const projection = {
+    x: projectedEnd.x * t,
+    y: projectedEnd.y * t,
+  };
+  const deltaX = projectedPoint.x - projection.x;
+  const deltaY = projectedPoint.y - projection.y;
+
+  return Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+}
+
 function getNearestDistanceToTrail(current: [number, number], trail: Trail | null) {
   if (!trail) {
     return null;
@@ -117,7 +148,22 @@ function getNearestDistanceToTrail(current: [number, number], trail: Trail | nul
   const route =
     trail.routeCoordinates?.length ? trail.routeCoordinates : ([[trail.coordinates[1], trail.coordinates[0]]] as [number, number][]);
 
-  return route.reduce((nearest, point) => Math.min(nearest, getDistanceMeters(current, point)), Number.POSITIVE_INFINITY);
+  if (route.length === 1) {
+    return getDistanceMeters(current, route[0]);
+  }
+
+  return route.reduce((nearest, point, index) => {
+    const previous = route[index - 1];
+    return previous ? Math.min(nearest, getDistanceToSegmentMeters(current, previous, point)) : nearest;
+  }, Number.POSITIVE_INFINITY);
+}
+
+function isOffRouteDistance(distance: number | null | undefined) {
+  return distance != null && Number.isFinite(distance) && distance > OFF_ROUTE_DISTANCE_METERS;
+}
+
+function isOffRouteStepMessage(message: string | null) {
+  return message?.startsWith('Steps are paused') === true;
 }
 
 function getPathDistanceMeters(path: [number, number][]) {
@@ -233,6 +279,8 @@ export function TrailTrackingProvider({ children }: { children: ReactNode }) {
   const watchSubscription = useRef<Location.LocationSubscription | null>(null);
   const pedometerSubscription = useRef<ReturnType<typeof Pedometer.watchStepCount> | null>(null);
   const stepsOffsetRef = useRef(0);
+  const pedometerRawStepsRef = useRef(0);
+  const hasPedometerReadingRef = useRef(false);
   const pedometerEnabledRef = useRef(false);
   const sessionRunIdRef = useRef(0);
   const activeSessionRef = useRef<ActiveTrailSession | null>(null);
@@ -314,8 +362,11 @@ export function TrailTrackingProvider({ children }: { children: ReactNode }) {
       timestamp: new Date(position.timestamp || now).toISOString(),
     })
       .then((result) => {
+        const localDeviationMeters = getNearestDistanceToTrail(coordinate, session.trail);
+        const effectiveDeviationMeters = result.deviation_meters ?? localDeviationMeters;
+        const isFarOffRoute = isOffRouteDistance(effectiveDeviationMeters);
         const alertNotificationDue =
-          result.off_track &&
+          isFarOffRoute &&
           (
             lastNavigationAlertNotificationSessionRef.current !== navigationSessionId ||
             Date.now() - lastNavigationAlertNotificationAtRef.current >= NAVIGATION_ALERT_NOTIFICATION_COOLDOWN_MS
@@ -331,8 +382,8 @@ export function TrailTrackingProvider({ children }: { children: ReactNode }) {
             body: result.instruction,
             latitude: coordinate[1],
             longitude: coordinate[0],
-            deviationMeters: result.deviation_meters,
-            progressPercent: result.progress_percent,
+            deviationMeters: effectiveDeviationMeters,
+            progressPercent: isFarOffRoute ? session.navigationProgressPercent ?? 0 : result.progress_percent,
           }).catch((error) => {
             console.warn('[navigation] Failed to present navigation alert notification:', error);
           });
@@ -343,9 +394,9 @@ export function TrailTrackingProvider({ children }: { children: ReactNode }) {
             ? {
                 ...current,
                 navigationInstruction: result.instruction,
-                navigationProgressPercent: result.progress_percent,
-                navigationOffTrack: result.off_track,
-                navigationDeviationMeters: result.deviation_meters,
+                navigationProgressPercent: isFarOffRoute ? current.navigationProgressPercent : result.progress_percent,
+                navigationOffTrack: isFarOffRoute,
+                navigationDeviationMeters: effectiveDeviationMeters,
               }
             : current,
         );
@@ -358,6 +409,8 @@ export function TrailTrackingProvider({ children }: { children: ReactNode }) {
 
   const beginPedometerWatch = useCallback((runId: number) => {
     stopPedometer();
+    pedometerRawStepsRef.current = 0;
+    hasPedometerReadingRef.current = false;
 
     if (!pedometerEnabledRef.current) {
       return;
@@ -368,14 +421,33 @@ export function TrailTrackingProvider({ children }: { children: ReactNode }) {
         return;
       }
 
+      const rawSteps = Math.max(0, result.steps);
+      const previousRawSteps = hasPedometerReadingRef.current ? pedometerRawStepsRef.current : 0;
+      const stepDelta = Math.max(0, rawSteps - previousRawSteps);
+      pedometerRawStepsRef.current = rawSteps;
+      hasPedometerReadingRef.current = true;
+
       setActiveSession((current) => {
         if (!current || !current.isTracking) {
           return current;
         }
 
+        const deviationMeters = current.navigationDeviationMeters ?? current.nearestDistance;
+        if (isOffRouteDistance(deviationMeters)) {
+          return {
+            ...current,
+            stepMessage: `Steps are paused until you are within ${OFF_ROUTE_DISTANCE_METERS} m of the trail.`,
+          };
+        }
+
+        if (stepDelta === 0) {
+          return current;
+        }
+
         return {
           ...current,
-          stepCount: stepsOffsetRef.current + result.steps,
+          stepCount: current.stepCount + stepDelta,
+          stepMessage: null,
         };
       });
     });
@@ -405,12 +477,18 @@ export function TrailTrackingProvider({ children }: { children: ReactNode }) {
         return current;
       }
 
+      const nearestDistance = getNearestDistanceToTrail(initialCoordinate, current.trail);
+      const isFarOffRoute = isOffRouteDistance(nearestDistance);
+
       return {
         ...current,
         currentLocation: initialCoordinate,
-        recordedPath: current.recordedPath.length ? current.recordedPath : [initialCoordinate],
-        locationMessage: null,
-        nearestDistance: getNearestDistanceToTrail(initialCoordinate, current.trail),
+        recordedPath: current.recordedPath.length || isFarOffRoute ? current.recordedPath : [initialCoordinate],
+        locationMessage: isFarOffRoute
+          ? `You are ${Math.round(nearestDistance ?? 0)} m off route. Rejoin the trail before progress, distance, or steps count.`
+          : null,
+        stepMessage: !isFarOffRoute && isOffRouteStepMessage(current.stepMessage) ? null : current.stepMessage,
+        nearestDistance,
       };
     });
     reportNavigationPosition(initialCoordinate, initialPosition);
@@ -427,9 +505,11 @@ export function TrailTrackingProvider({ children }: { children: ReactNode }) {
           return current;
         }
 
+        const nearestDistance = getNearestDistanceToTrail(nextCoordinate, current.trail);
+        const isFarOffRoute = isOffRouteDistance(nearestDistance);
         const lastPoint = current.recordedPath[current.recordedPath.length - 1];
         const nextRecordedPath =
-          current.isTracking && (!lastPoint || getDistanceMeters(lastPoint, nextCoordinate) >= 8)
+          current.isTracking && !isFarOffRoute && (!lastPoint || getDistanceMeters(lastPoint, nextCoordinate) >= 8)
             ? [...current.recordedPath, nextCoordinate]
             : current.recordedPath;
 
@@ -437,8 +517,11 @@ export function TrailTrackingProvider({ children }: { children: ReactNode }) {
           ...current,
           currentLocation: nextCoordinate,
           recordedPath: nextRecordedPath,
-          locationMessage: null,
-          nearestDistance: getNearestDistanceToTrail(nextCoordinate, current.trail),
+          locationMessage: isFarOffRoute
+            ? `You are ${Math.round(nearestDistance ?? 0)} m off route. Rejoin the trail before progress, distance, or steps count.`
+            : null,
+          stepMessage: !isFarOffRoute && isOffRouteStepMessage(current.stepMessage) ? null : current.stepMessage,
+          nearestDistance,
         };
       });
       reportNavigationPosition(nextCoordinate, position);
@@ -575,8 +658,12 @@ export function TrailTrackingProvider({ children }: { children: ReactNode }) {
 
       if (uploadedPhoto.id) {
         void identifySpeciesDetails(mediaFileFromUri(photo.uri, photo.id), language)
-          .then((identification) =>
-            saveNatureSighting({
+          .then((identification) => {
+            if (!hasDetectedSpecies(identification.result)) {
+              return undefined;
+            }
+
+            return saveNatureSighting({
               trail_id: uploadedPhoto.trail_id ?? activeSessionRef.current?.trailId ?? null,
               activity_id: uploadedPhoto.activity_id ?? activityId,
               photo_id: uploadedPhoto.id,
@@ -586,9 +673,11 @@ export function TrailTrackingProvider({ children }: { children: ReactNode }) {
               longitude: photo.coordinate[0],
               language,
               classification: identification.result,
-            }),
-          )
-          .catch(() => undefined);
+            });
+          })
+          .catch((error) => {
+            console.warn('[TrailTracking] Nature sighting skipped', error);
+          });
       }
 
       setActiveSession((current) =>

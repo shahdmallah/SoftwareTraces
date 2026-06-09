@@ -101,10 +101,11 @@ export async function filterTrailPhotosByAiStatus(photos: TrailPhoto[]) {
   const checked = await Promise.all(
     photos.map(async (photo) => {
       try {
+        const isTrailLinkedMedia = photo.source === 'media' && Boolean(photo.trip_id);
         const status = await getPhotoStatus(photo.id, getPhotoTypeForTrailPhoto(photo));
         const hasAiDecision = Boolean(status.ai_verified_at || status.ai_classification);
 
-        if (status.manual_review_required || (hasAiDecision && !status.approved_for_trail_page)) {
+        if (status.manual_review_required || (!isTrailLinkedMedia && hasAiDecision && !status.approved_for_trail_page)) {
           return null;
         }
 
@@ -117,7 +118,9 @@ export async function filterTrailPhotosByAiStatus(photos: TrailPhoto[]) {
           quality_score: status.quality_score,
         };
       } catch {
-        if (photo.manual_review_required === true || photo.approved_for_trail_page === false) {
+        const isTrailLinkedMedia = photo.source === 'media' && Boolean(photo.trip_id);
+
+        if (photo.manual_review_required === true || (!isTrailLinkedMedia && photo.approved_for_trail_page === false)) {
           return null;
         }
 

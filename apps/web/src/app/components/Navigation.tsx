@@ -1,25 +1,30 @@
 import { useState } from 'react';
 import { Link, useLocation } from 'react-router';
-import { Map, Compass, Bookmark, Activity, User, Plus, LogOut, LogIn } from 'lucide-react';
+import { Map, Compass, Bookmark, Activity, User, Plus, LogOut, LogIn, ShieldCheck, Users, Bell } from 'lucide-react';
 import { AuthModal } from './AuthModal';
 
 const navLinks = [
   { to: '/explore', label: 'Explore', icon: Compass },
   { to: '/map', label: 'Map', icon: Map },
-  { to: '/saved', label: 'Saved', icon: Bookmark },
+  { to: '/feed', label: 'Feed', icon: Users },
   { to: '/activity', label: 'Activity', icon: Activity },
+  { to: '/notifications', label: 'Alerts', icon: Bell },
   { to: '/profile', label: 'Profile', icon: User },
 ];
 
 interface DesktopNavigationProps {
   isAuthenticated?: boolean;
+  isAdmin?: boolean;
   onSignIn?: () => void;
   onSignOut?: () => void;
 }
 
-export function DesktopNavigation({ isAuthenticated = false, onSignIn, onSignOut }: DesktopNavigationProps) {
+export function DesktopNavigation({ isAuthenticated = false, isAdmin = false, onSignIn, onSignOut }: DesktopNavigationProps) {
   const { pathname } = useLocation();
   const [authMode, setAuthMode] = useState<'signin' | 'signup' | null>(null);
+  const visibleNavLinks = isAdmin
+    ? [...navLinks, { to: '/admin', label: 'Admin', icon: ShieldCheck }]
+    : navLinks;
 
   return (
     <>
@@ -32,7 +37,7 @@ export function DesktopNavigation({ isAuthenticated = false, onSignIn, onSignOut
         </Link>
 
         <div className="flex items-center gap-1">
-          {navLinks.map(({ to, label, icon: Icon }) => (
+          {visibleNavLinks.map(({ to, label, icon: Icon }) => (
             <Link
               key={to}
               to={to}
@@ -92,15 +97,15 @@ export function DesktopNavigation({ isAuthenticated = false, onSignIn, onSignOut
   );
 }
 
-export function MobileNavigation() {
+export function MobileNavigation({ isAdmin = false }: { isAdmin?: boolean }) {
   const { pathname } = useLocation();
 
   const mobileLinks = [
     { to: '/explore', label: 'Explore', icon: Compass },
-    { to: '/map', label: 'Map', icon: Map },
+    { to: '/feed', label: 'Feed', icon: Users },
     null,
-    { to: '/activity', label: 'Activity', icon: Activity },
-    { to: '/profile', label: 'Profile', icon: User },
+    { to: '/notifications', label: 'Alerts', icon: Bell },
+    isAdmin ? { to: '/admin', label: 'Admin', icon: ShieldCheck } : { to: '/profile', label: 'Profile', icon: User },
   ];
 
   return (

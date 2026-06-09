@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS profiles (
   user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   full_name TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('user', 'admin')),
   bio TEXT,
   avatar_url TEXT,
   home_region TEXT,
@@ -24,42 +25,6 @@ CREATE TABLE IF NOT EXISTS profiles (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-
-CREATE TABLE IF NOT EXISTS notifications (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  actor_id UUID REFERENCES users(id) ON DELETE SET NULL,
-  type TEXT NOT NULL CHECK (
-    type IN (
-      'follow',
-      'review_like',
-      'review_comment',
-      'activity_like',
-      'activity_comment',
-      'meetup_invite',
-      'meetup_join',
-      'meetup_update',
-      'sos_alert',
-      'danger_alert',
-      'achievement',
-      'system'
-    )
-  ),
-  title TEXT NOT NULL,
-  body TEXT NOT NULL,
-  entity_type TEXT,
-  entity_id UUID,
-  data JSONB NOT NULL DEFAULT '{}'::jsonb,
-  read_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS idx_notifications_user_created
-ON notifications(user_id, created_at DESC);
-
-CREATE INDEX IF NOT EXISTS idx_notifications_user_unread
-ON notifications(user_id)
-WHERE read_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS trails (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -351,38 +316,6 @@ CREATE INDEX IF NOT EXISTS trails_start_point_idx ON trails USING GIST (start_po
 CREATE INDEX IF NOT EXISTS trails_geometry_idx ON trails USING GIST (geometry);
 CREATE INDEX IF NOT EXISTS activities_route_idx ON activities USING GIST (route);
 CREATE INDEX IF NOT EXISTS activity_points_geom_idx ON activity_points USING GIST (geom);
-
-CREATE TABLE IF NOT EXISTS nature_sightings (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  activity_id UUID REFERENCES activities(id) ON DELETE SET NULL,
-  user_id UUID REFERENCES users(id) ON DELETE SET NULL,
-  latitude NUMERIC,
-  longitude NUMERIC,
-  category TEXT,
-  species TEXT,
-  common_name TEXT,
-  confidence NUMERIC,
-  photo_url TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  trail_id UUID REFERENCES trails(id) ON DELETE SET NULL,
-  photo_id UUID,
-  photo_type TEXT,
-  media_id UUID,
-  activity_media_id UUID,
-  classification JSONB,
-  language TEXT NOT NULL DEFAULT 'en',
-  source TEXT NOT NULL DEFAULT 'google-ai',
-  updated_at TIMESTAMPTZ
-);
-
-CREATE INDEX IF NOT EXISTS idx_nature_sightings_trail ON nature_sightings(trail_id);
-CREATE INDEX IF NOT EXISTS idx_nature_sightings_activity ON nature_sightings(activity_id);
-CREATE INDEX IF NOT EXISTS idx_nature_sightings_photo ON nature_sightings(photo_type, photo_id);
-CREATE INDEX IF NOT EXISTS idx_nature_sightings_media ON nature_sightings(media_id);
-CREATE INDEX IF NOT EXISTS idx_nature_sightings_activity_media ON nature_sightings(activity_media_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_nature_sightings_unique_photo
-  ON nature_sightings(photo_type, photo_id)
-  WHERE photo_type IS NOT NULL AND photo_id IS NOT NULL;
 
 ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE activities ENABLE ROW LEVEL SECURITY;

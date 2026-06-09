@@ -236,6 +236,25 @@ export async function getTrailAccess(trailId: string, params: { from_lat: number
   return response.data;
 }
 
+export type SetTrailAccessInput = {
+  latitude: number;
+  longitude: number;
+  name?: string;
+  name_ar?: string;
+  parking_notes?: string;
+  parking_notes_ar?: string;
+  access_notes?: string;
+  access_notes_ar?: string;
+};
+
+export async function setTrailAccess(trailId: string, payload: SetTrailAccessInput) {
+  const response = await apiRequest<Envelope<TrailAccess>>(`/api/trails/${trailId}/access`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+  return response.data;
+}
+
 export async function getTrailAlternativeRoute(
   trailId: string,
   params: { checkpoint_id: string; from_lat: number; from_lng: number },

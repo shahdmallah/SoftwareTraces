@@ -16,6 +16,8 @@ type TaxonomyKey = (typeof TAXONOMY_KEYS)[number];
 type Taxonomy = Record<TaxonomyKey, string>;
 
 interface IdentificationResult {
+  hasOrganism: boolean;
+  noOrganismReason?: string;
   commonName: string;
   scientificName: string;
   shortDescription: string;
@@ -66,9 +68,12 @@ function loadLocalEnv(): void {
 loadLocalEnv();
 
 const IDENTIFICATION_SYSTEM_INSTRUCTION = `You are a highly detailed and rigorous biological expert, entomologist, and botanist.
-Identify the organism in the provided photo.
+First decide whether the photo clearly contains a plant, animal, fungus, or other organism.
+If no organism is visible, or the organism is too obscured to identify, return hasOrganism false and do not invent a species.
 Return STRICTLY a valid JSON object matching this schema:
 {
+  "hasOrganism": true,
+  "noOrganismReason": "",
   "commonName": "Primary common name of organism",
   "scientificName": "Scientific nomenclature (Genus species)",
   "shortDescription": "An engaging, accurate 2-3 sentence overview describing the specimen.",
@@ -93,7 +98,7 @@ Return STRICTLY a valid JSON object matching this schema:
 Do not return Markdown or code fences.`;
 
 const IDENTIFICATION_USER_PROMPT =
-  "Identify the plant, animal, fungus, or other organism in this picture and provide its full biological taxonomy and descriptive details.";
+  "Identify the plant, animal, fungus, or other organism in this picture and provide its full biological taxonomy and descriptive details. If no organism is visible, return hasOrganism false with a short noOrganismReason.";
 
 const LANGUAGE_INSTRUCTIONS: Record<string, string> = {
   ar:
@@ -137,6 +142,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function normalizeIdentification(data: unknown): IdentificationResult {
   const source = isRecord(data) ? data : {};
+  const hasOrganism = source.hasOrganism !== false;
   const taxonomySource = isRecord(source.taxonomy) ? source.taxonomy : {};
   const taxonomy = TAXONOMY_KEYS.reduce<Taxonomy>((nextTaxonomy, key) => {
     nextTaxonomy[key] = getText(taxonomySource[key]);
@@ -145,9 +151,13 @@ function normalizeIdentification(data: unknown): IdentificationResult {
   const rawConfidenceLevel = source.confidenceLevel;
 
   return {
-    commonName: getText(source.commonName, "Unknown organism"),
+    hasOrganism,
+    noOrganismReason: getText(source.noOrganismReason),
+    commonName: hasOrganism ? getText(source.commonName, "Unknown organism") : "No organism detected",
     scientificName: getText(source.scientificName),
-    shortDescription: getText(source.shortDescription, "Google AI could not provide a detailed description for this organism."),
+    shortDescription: hasOrganism
+      ? getText(source.shortDescription, "Google AI could not provide a detailed description for this organism.")
+      : getText(source.shortDescription, getText(source.noOrganismReason, "No plant, animal, fungus, or other organism was detected in this photo.")),
     confidenceLevel: typeof rawConfidenceLevel === "number" ? Math.trunc(rawConfidenceLevel) : 0,
     taxonomy,
     notableFeatures: getStringList(source.notableFeatures),
@@ -341,6 +351,15 @@ function sendError(res: ServerResponse, error: unknown): void {
 async function handlePredict(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const { imageBytes, mimeType, language } = await readUploadImage(req);
   const result = await identifyWithGemini(imageBytes, mimeType, language);
+  if (!result.hasOrganism) {
+    sendJson(res, 200, {
+      top5: [],
+      hasOrganism: false,
+      noOrganismReason: result.noOrganismReason || result.shortDescription,
+    });
+    return;
+  }
+
   const confidence = typeof result.confidenceLevel === "number" ? result.confidenceLevel / 100 : 0;
   const prediction: Record<string, number | string> = {
     name: getText(result.commonName, getText(result.scientificName, "Unknown organism")),
@@ -365,11 +384,13 @@ async function handleIdentify(req: IncomingMessage, res: ServerResponse): Promis
 
   sendJson(res, 200, {
     result,
-    top5: [],
+    top5: result.hasOrganism
+      ? []
+      : [],
     source: "google-ai",
     language: responseLanguage,
     isFallback: false,
-    fallbackReason: "",
+    fallbackReason: result.hasOrganism ? "" : result.noOrganismReason || result.shortDescription,
   });
 }
 

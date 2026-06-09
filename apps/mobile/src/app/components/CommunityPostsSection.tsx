@@ -7,7 +7,7 @@ import { useLanguage } from '../contexts/LanguageContext';
 import type { FeedItem } from '../data/activitySocial';
 
 interface CommunityPostsSectionProps {
-  posts: FeedItem[];
+  posts: Array<Extract<FeedItem, { kind: 'recap' | 'plan' }>>;
   onOpenActivity?: () => void;
   onOpenProfile?: (profileId: string) => void;
 }

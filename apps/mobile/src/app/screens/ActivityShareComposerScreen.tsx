@@ -26,11 +26,9 @@ import type { Feature, FeatureCollection, Point } from 'geojson';
 import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
-import { addLocalFeedItem } from '../data/localSocial';
 import { createMeetup } from '../api/meetupsApi';
 import { uploadMedia, type ReactNativeFile } from '../api/mediaApi';
-import { saveNatureSighting } from '../api/natureSightingsApi';
-import { identifySpeciesDetails, type SpeciesIdentification, type SpeciesPrediction } from '../api/speciesApi';
+import { hasDetectedSpecies, identifySpeciesDetails, type SpeciesIdentification, type SpeciesPrediction } from '../api/speciesApi';
 import { getFollowers, getFollowing, type SocialProfile } from '../api/socialApi';
 import { getTrails, type Trail } from '../api/trailsApi';
 import { getWeatherForecast, type WeatherForecast } from '../api/weatherApi';
@@ -1143,6 +1141,17 @@ export function ActivityShareComposerScreen() {
     [],
   );
 
+  const getDetectedClassificationForUpload = useCallback(
+    async (photoUri: string, index: number) => {
+      const classification = index === 0 && speciesResult
+        ? speciesResult
+        : (await identifySpeciesDetails(imageUriToFile(photoUri), isArabic ? 'ar' : 'en')).result;
+
+      return hasDetectedSpecies(classification) ? classification : null;
+    },
+    [isArabic, speciesResult],
+  );
+
   const handlePickPhoto = async () => {
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (permission.status !== 'granted') {
@@ -1242,44 +1251,34 @@ export function ActivityShareComposerScreen() {
         const mediaLongitude = mediaCoords.lng;
         const mediaLocationName = locationLabel.trim() || null;
         const uploaded = await Promise.all(
-          photos.map((photo) =>
-            uploadMedia({
+          photos.map(async (photo, index) => {
+            let classification: SpeciesIdentification | null = null;
+
+            try {
+              classification = await getDetectedClassificationForUpload(photo, index);
+            } catch (error) {
+              console.warn('[ActivityShareComposer] Location media species identification skipped', error);
+            }
+
+            return uploadMedia({
               file: imageUriToFile(photo),
               caption: trimmedNote,
               latitude: mediaLatitude,
               longitude: mediaLongitude,
               locationName: mediaLocationName,
               tripId: trailIdForMedia,
-            }),
-          ),
-        );
-
-        await Promise.all(
-          uploaded.map(async (media, index) => {
-            if (!media.id) {
-              return;
-            }
-
-            const classification = index === 0 && speciesResult
-              ? speciesResult
-              : (await identifySpeciesDetails(imageUriToFile(photos[index]), isArabic ? 'ar' : 'en')).result;
-
-            await saveNatureSighting({
-              trail_id: trailIdForMedia,
-              photo_id: media.id,
-              photo_type: 'media',
-              photo_url: media.url,
-              latitude: mediaLatitude,
-              longitude: mediaLongitude,
               language: isArabic ? 'ar' : 'en',
               classification,
             });
           }),
-        ).catch(() => null);
+        );
 
-        addLocalFeedItem({
+        void ({
           id: `local-location-media-${Date.now()}`,
           kind: 'recap',
+          sourceType: 'media',
+          photoId: uploaded[0]?.id,
+          photoType: 'media',
           trailId: trailIdForMedia ?? '',
           user: user?.full_name || 'You',
           handle: '@you',
@@ -1316,6 +1315,11 @@ export function ActivityShareComposerScreen() {
 
     if (!isPlan && !selectedTrailId) {
       Alert.alert(isArabic ? 'اختر مساراً' : 'Choose a trail', isArabic ? 'اختر مساراً من قائمة Explore قبل النشر.' : 'Choose a trail from Explore before posting.');
+      return;
+    }
+
+    if (!isPlan && !photos.length) {
+      Alert.alert(isArabic ? 'ط£ط¶ظپ طµظˆط±ط§ظ‹' : 'Add media', isArabic ? 'ط§ط®طھط± طµظˆط±ط© ظˆط§ط­ط¯ط© ط¹ظ„ظ‰ ط§ظ„ط£ظ‚ظ„.' : 'Choose at least one photo for this recap.');
       return;
     }
 
@@ -1379,61 +1383,79 @@ export function ActivityShareComposerScreen() {
       return;
     }
 
-    const item = isPlan
-      ? {
-          id: `local-plan-${Date.now()}`,
-          kind: 'plan' as const,
-          trailId: route.params?.trailId ?? '0',
-          user: 'You',
-          handle: '@you',
-          avatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?crop=faces&fit=crop&w=240&h=240',
-          cover: photos[0] ?? 'https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=1200&q=80',
-          destinationEn: trimmedTrail,
-          destinationAr: trimmedTrail,
-          startsAt: startsAtIso,
-          dateEn: [selectedDateLabel, timeText].filter(Boolean).join(' · ') || 'Soon',
-          dateAr: [selectedDateLabel, timeText].filter(Boolean).join(' · ') || 'قريباً',
-          vibeEn: '',
-          vibeAr: '',
-          noteEn: trimmedNote,
-          noteAr: trimmedNote,
-          peopleJoined: joined,
-          spotsLeft,
-          visibility: planVisibility,
-          invitedNames: selectedFriends,
-        }
-      : {
-          id: `local-recap-${Date.now()}`,
-          kind: 'recap' as const,
-          trailId: selectedTrailId,
-          user: user?.full_name || 'You',
-          handle: '@you',
-          avatar: user?.avatar_url || 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?crop=faces&fit=crop&w=240&h=240',
-          image: photos[0] ?? 'https://images.unsplash.com/photo-1500534314209-a25ddb2bd429?auto=format&fit=crop&w=1200&q=80',
-          trailNameEn: selectedTrail?.name || trimmedTrail,
-          trailNameAr: selectedTrail?.nameAr || selectedTrail?.name || trimmedTrail,
-          regionEn: selectedTrail?.region || 'Trail recap',
-          regionAr: selectedTrail?.regionAr || selectedTrail?.region || 'ملخص المسار',
-          captionEn: trimmedNote,
-          captionAr: trimmedNote,
-          timeEn: 'Just now',
-          timeAr: 'الآن',
-          likes: 1,
-          comments: 0,
-          distance: selectedTrail ? `${selectedTrail.distance.toFixed(1)} km` : '0.0 km',
-        };
+    setIsPosting(true);
+    try {
+      const selectedTrailLatitude = typeof selectedTrail?.coordinates?.[0] === 'number' ? selectedTrail.coordinates[0] : null;
+      const selectedTrailLongitude = typeof selectedTrail?.coordinates?.[1] === 'number' ? selectedTrail.coordinates[1] : null;
+      const uploaded = await Promise.all(
+        photos.map(async (photo, index) => {
+          let classification: SpeciesIdentification | null = null;
 
-    addLocalFeedItem(item);
-    Alert.alert(
-      isArabic ? 'تم النشر' : 'Posted',
-      isArabic
-        ? 'تمت مشاركتك في صفحة النشاط.'
-        : 'Your post was added to the Activity feed.',
-      [{ text: isArabic ? 'حسناً' : 'OK', onPress: () => navigation.navigate('AppTabs', { screen: 'Activity' }) }],
-    );
+          try {
+            classification = await getDetectedClassificationForUpload(photo, index);
+          } catch (error) {
+            console.warn('[ActivityShareComposer] Recap species identification skipped', error);
+          }
+
+          return uploadMedia({
+            file: imageUriToFile(photo),
+            caption: trimmedNote,
+            latitude: selectedTrailLatitude,
+            longitude: selectedTrailLongitude,
+            locationName: selectedTrail?.name || trimmedTrail,
+            tripId: selectedTrailId,
+            language: isArabic ? 'ar' : 'en',
+            classification,
+          });
+        }),
+      );
+
+      void ({
+        id: `local-media-recap-${Date.now()}`,
+        kind: 'recap',
+        sourceType: 'media',
+        photoId: uploaded[0]?.id,
+        photoType: 'media',
+        trailId: selectedTrailId,
+        user: user?.full_name || 'You',
+        handle: '@you',
+        avatar: user?.avatar_url || 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?crop=faces&fit=crop&w=240&h=240',
+        image: uploaded[0]?.url ?? photos[0],
+        trailNameEn: selectedTrail?.name || trimmedTrail,
+        trailNameAr: selectedTrail?.nameAr || selectedTrail?.name || trimmedTrail,
+        regionEn: selectedTrail?.region || 'Trail recap',
+        regionAr: selectedTrail?.regionAr || selectedTrail?.region || 'Trail recap',
+        captionEn: trimmedNote,
+        captionAr: trimmedNote,
+        timeEn: 'Just now',
+        timeAr: 'ط§ظ„ط¢ظ†',
+        likes: 0,
+        comments: 0,
+        natureSightings: [],
+        distance: uploaded.length > 1 ? `${uploaded.length} photos` : 'Photo',
+      });
+
+      Alert.alert(
+        isArabic ? 'طھظ… ط§ظ„ظ†ط´ط±' : 'Posted',
+        isArabic
+          ? 'طھظ…طھ ظ…ط´ط§ط±ظƒطھظƒ ظپظٹ طµظپط­ط© ط§ظ„ظ†ط´ط§ط·.'
+          : 'Your recap media is saved to the backend and will appear in Activity.',
+        [{ text: isArabic ? 'ط­ط³ظ†ط§ظ‹' : 'OK', onPress: () => navigation.navigate('AppTabs', { screen: 'Activity' }) }],
+      );
+    } catch (error) {
+      Alert.alert(
+        isArabic ? 'طھط¹ط°ط± ط§ظ„ظ†ط´ط±' : 'Unable to post',
+        error instanceof Error ? error.message : isArabic ? 'ط­ط§ظˆظ„ ظ…ط±ط© ط£ط®ط±ظ‰.' : 'Please try again.',
+      );
+    } finally {
+      setIsPosting(false);
+    }
+    return;
+
   };
 
   const topSpeciesPrediction = speciesPredictions[0] ?? null;
+  const speciesDetected = hasDetectedSpecies(speciesResult);
 
   return (
     <AnimatedScreen style={styles.container}>
@@ -1511,7 +1533,7 @@ export function ActivityShareComposerScreen() {
                     <View style={styles.speciesMetaRow}>
                       <View style={styles.speciesStatusPill}>
                         <PaperText style={styles.speciesStatusText}>
-                          {speciesIsFallback ? 'Local Suggestion' : 'Result Identified'}
+                          {speciesDetected ? (speciesIsFallback ? 'Local Suggestion' : 'Result Identified') : 'No Species Detected'}
                         </PaperText>
                       </View>
                       <View style={styles.speciesConfidenceBlock}>

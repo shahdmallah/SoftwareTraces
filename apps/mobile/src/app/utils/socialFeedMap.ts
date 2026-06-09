@@ -49,6 +49,9 @@ export function mapSocialFeedItemToFeedItem(item: SocialFeedItem): FeedItem {
   const handle = handleFromName(userName);
   const relEn = formatFeedRelativeTime(item.created_at);
   const relAr = relEn;
+  const natureSightings = item.photos
+    .map((photo) => photo.nature_sighting)
+    .filter((sighting): sighting is NonNullable<typeof sighting> => Boolean(sighting));
 
   if (item.type === 'review') {
     const photo = item.photo_url || item.photos[0]?.url || item.trail.image || '';
@@ -73,6 +76,7 @@ export function mapSocialFeedItemToFeedItem(item: SocialFeedItem): FeedItem {
             rating: item.rating ?? 0,
             review: item.content ?? '',
             photoUris: item.photos.map((photoItem) => photoItem.url).filter(Boolean),
+            natureSightings,
             completedAtIso: item.created_at,
             durationMs: item.activity?.elapsed_time_seconds ? item.activity.elapsed_time_seconds * 1000 : 0,
             stepCount: 0,
@@ -94,7 +98,44 @@ export function mapSocialFeedItemToFeedItem(item: SocialFeedItem): FeedItem {
       likes: item.likes_count,
       comments: item.comments_count,
       previewComments: mapRecentComments(item.recent_comments),
+      natureSightings,
       distance: ratingLabel,
+    };
+  }
+
+  if (item.type === 'media') {
+    const photo = item.photo_url || item.photos[0]?.url || item.trail.image || '';
+    const trailId = item.trail.id ?? '';
+    const caption = item.caption?.trim() || item.content?.trim() || '';
+    const label = item.trail.name ?? (trailId ? 'Trail media' : 'Location media');
+
+    return {
+      id: item.id,
+      kind: 'recap',
+      sourceType: 'media',
+      userId: item.user.id,
+      isLiked: item.is_liked_by_user,
+      photoId: item.id,
+      photoType: 'media',
+      trailId,
+      completionDraft: undefined,
+      user: userName,
+      handle,
+      avatar: item.user.avatar_url || '',
+      image: photo,
+      trailNameEn: label,
+      trailNameAr: label,
+      regionEn: trailId ? 'Trail recap' : 'Location media',
+      regionAr: trailId ? 'Trail recap' : 'Location media',
+      captionEn: caption,
+      captionAr: caption,
+      timeEn: relEn,
+      timeAr: relAr,
+      likes: item.likes_count,
+      comments: item.comments_count,
+      previewComments: mapRecentComments(item.recent_comments),
+      natureSightings,
+      distance: item.photos.length > 1 ? `${item.photos.length} photos` : 'Photo',
     };
   }
 
@@ -126,6 +167,7 @@ export function mapSocialFeedItemToFeedItem(item: SocialFeedItem): FeedItem {
           rating: item.rating ?? 0,
           review: caption,
           photoUris: activityPhotoUris,
+          natureSightings,
           completedAtIso: item.created_at,
           durationMs: item.activity.elapsed_time_seconds ? item.activity.elapsed_time_seconds * 1000 : 0,
           stepCount: 0,
@@ -149,6 +191,7 @@ export function mapSocialFeedItemToFeedItem(item: SocialFeedItem): FeedItem {
     likes: item.likes_count,
     comments: item.comments_count,
     previewComments: mapRecentComments(item.recent_comments),
+    natureSightings,
     distance: distanceLabel,
   };
 }

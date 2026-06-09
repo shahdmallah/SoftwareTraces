@@ -16,6 +16,7 @@ export type NotificationType =
 
 export type NotificationEntityType = 'user' | 'trail' | 'review' | 'activity' | 'meetup' | 'achievement' | string;
 export type PushPlatform = 'ios' | 'android' | 'web';
+export type PushProvider = 'expo' | 'fcm' | 'apns' | 'webpush';
 
 export type NotificationActor = {
   id: string;
@@ -65,7 +66,11 @@ export type PushToken = {
   id: string;
   token: string;
   platform: PushPlatform;
+  provider?: PushProvider | null;
   device_id?: string | null;
+  app_version?: string | null;
+  last_seen_at?: string | null;
+  is_active?: boolean;
   created_at: string;
   updated_at?: string | null;
 };
@@ -114,13 +119,21 @@ export async function deleteNotification(id: string) {
   return apiRequest<{ deleted?: boolean }>(`/api/notifications/${id}`, { method: 'DELETE' });
 }
 
-export async function registerPushToken(payload: { token: string; platform: PushPlatform; deviceId?: string }) {
+export async function registerPushToken(payload: {
+  token: string;
+  platform: PushPlatform;
+  provider?: PushProvider;
+  deviceId?: string;
+  appVersion?: string;
+}) {
   const response = await apiRequest<Envelope<PushToken>>('/api/notifications/push-token', {
     method: 'POST',
     body: JSON.stringify({
       token: payload.token,
       platform: payload.platform,
+      provider: payload.provider,
       device_id: payload.deviceId,
+      app_version: payload.appVersion,
     }),
   });
 

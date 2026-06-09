@@ -87,6 +87,10 @@ function getProjectId(): string | undefined {
   return Constants.easConfig?.projectId ?? Constants.expoConfig?.extra?.eas?.projectId;
 }
 
+function getAppVersion(): string | undefined {
+  return Constants.expoConfig?.version;
+}
+
 function isExpoPushToken(token: string): boolean {
   return /^(ExponentPushToken|ExpoPushToken)\[[^\]]+\]$/.test(token);
 }
@@ -201,7 +205,9 @@ export async function registerDeviceForPushNotifications(): Promise<string | nul
   await registerPushToken({
     token: resolvedToken,
     platform: getPlatform(),
+    provider: 'expo',
     deviceId: Device.modelId ?? Device.modelName ?? undefined,
+    appVersion: getAppVersion(),
   });
 
   return resolvedToken;

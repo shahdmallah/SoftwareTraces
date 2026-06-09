@@ -9,7 +9,7 @@ export type RootStackParamList = {
   ForgotPassword: { email?: string } | undefined;
   AppTabs: NavigatorScreenParams<AppTabParamList> | undefined;
   TrailDetail: { trailId: string };
-  TrailAccess: { trailId: string; trailName?: string };
+  TrailAccess: { trailId: string; trailName?: string; canEditTrailhead?: boolean };
   AllReviews: { trailId: string; trailName: string };
   TrailMedia: { trailId: string };
   ActivityMessages: undefined;
@@ -36,6 +36,7 @@ export type RootStackParamList = {
     initialMeetingLng?: number;
   };
   ProfileSettings: { settingId: string };
+  RecommendationPreferences: undefined;
   PublicProfile: { profileId: string };
   CreateTrail: { generatedTrail?: GeneratedTrailSuggestion } | undefined;
   Recording: { trailId: string; activityId?: string };
@@ -44,7 +45,8 @@ export type RootStackParamList = {
   History: undefined;
   Journal: undefined;
   Notifications: undefined;
-  SearchResults: { query?: string } | undefined;
+  SafetyCenter: undefined;
+  SearchResults: { query?: string; mode?: 'trail' | 'people' } | undefined;
   AdvancedFilters: undefined;
   EditProfile: undefined;
   TrailDrafts: undefined;

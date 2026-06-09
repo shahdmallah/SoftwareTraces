@@ -148,11 +148,14 @@ export type TrailAnalysisResponse = TrailStatsResponse & {
   ai_labels?: string[];
 };
 
-export type TrailReviewStatsResponse = {
-  average_rating: number;
-  total_reviews: number;
-  rating: number;
-  reviews: number;
+export type ParsedTrailDescription = {
+  length_km: number | null;
+  difficulty: string | null;
+  region: string | null;
+  duration_minutes: number | null;
+  labels: string[];
+  name_suggestion: string;
+  description_suggestion: string;
 };
 
 export type ElevationProfile = {
@@ -336,6 +339,7 @@ export async function createTrail(payload: {
   status?: 'draft' | 'published';
   visibility?: 'public' | 'private';
   confirm_duplicate?: boolean;
+  confirm_hazard?: boolean;
   coordinates: [number, number][];
   stats: TrailStatsResponse;
 }) {
@@ -446,6 +450,14 @@ export async function analyzeTrailRoute(payload: { coordinates: [number, number]
   };
 }
 
+export async function parseTrailDescription(description: string) {
+  const response = await apiRequest<Envelope<ParsedTrailDescription>>('/api/trails/parse-description', {
+    method: 'POST',
+    body: JSON.stringify({ description }),
+  });
+  return response.data;
+}
+
 export async function searchTrails(params: {
   q?: string;
   difficulty?: TrailDifficulty | 'all';
@@ -516,13 +528,6 @@ export async function addTrailReview(id: string, payload: { rating: number; cont
       ...(payload.title ? { title: payload.title } : {}),
     }),
   });
-}
-
-export async function recalculateTrailReviewStats(id: string) {
-  const response = await apiRequest<Envelope<TrailReviewStatsResponse>>(`/api/trails/${id}/reviews/recalculate`, {
-    method: 'POST',
-  });
-  return response.data;
 }
 
 export async function getTrailReviews(id: string) {

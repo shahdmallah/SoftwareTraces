@@ -99,3 +99,12 @@ export async function getProfilePhotos(profileId: string, params: { page?: numbe
   const response = await apiRequest<Envelope<ProfilePhoto[]>>(`/api/profiles/${profileId}/photos`, {}, params);
   return response.data;
 }
+
+export async function searchProfiles(query: string, params: { page?: number; limit?: number } = {}) {
+  const response = await apiRequest<Envelope<Profile[]>>(`/api/profiles/search`, {}, {
+    q: query,
+    page: params.page,
+    limit: params.limit,
+  });
+  return response.data;
+}

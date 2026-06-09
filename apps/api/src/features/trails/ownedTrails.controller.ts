@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import { pool } from "../../db/pool";
 import { requireAuth } from "../../middleware/auth";
 import { formatTrailForApp } from "../../utils/formatTrail";
+import { attachApprovedTrailImages } from "./trailPhotoVisibility";
 
 function getOwnedTrailSelectFields(): string {
   return `
@@ -75,8 +76,10 @@ export async function getMyTrails(req: Request, res: Response): Promise<void> {
 
     const total = Number(countResult.rows[0]?.count ?? 0);
 
+    const trails = await attachApprovedTrailImages(trailsResult.rows.map(formatTrailForApp));
+
     res.json({
-      data: trailsResult.rows.map(formatTrailForApp),
+      data: trails,
       pagination: {
         page,
         limit,

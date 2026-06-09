@@ -34,7 +34,9 @@ import { TrailReviewScreen } from '../screens/TrailReviewScreen';
 import { HistoryScreen } from '../screens/HistoryScreen';
 import { JournalScreen } from '../screens/JournalScreen';
 import { ProfileSettingsScreen } from '../screens/ProfileSettingsScreen';
+import { RecommendationPreferencesScreen } from '../screens/RecommendationPreferencesScreen';
 import { NotificationsScreen } from '../screens/NotificationsScreen';
+import { SafetyCenterScreen } from '../screens/SafetyCenterScreen';
 import { SearchResultsScreen } from '../screens/SearchResultsScreen';
 import { AdvancedFiltersScreen } from '../screens/AdvancedFiltersScreen';
 import { EditProfileScreen } from '../screens/EditProfileScreen';
@@ -321,8 +323,25 @@ async function openPushNotificationDestination(data: PushNotificationData): Prom
   const trailId = getPushString(data, ['trail_id']) || (entity.type === 'trail' ? entity.id : null);
   const activityId = getPushString(data, ['activity_id']) || (entity.type === 'activity' ? entity.id : null);
   const reviewId = getPushString(data, ['review_id']) || (entity.type === 'review' ? entity.id : null);
+  const conversationId = getPushString(data, ['conversation_id']);
   const navigationSessionId = getPushString(data, ['navigation_session_id']);
   const isNavigationAlert = getPushString(data, ['notification_kind']) === 'navigation_off_track' || Boolean(navigationSessionId);
+
+  if (type === 'sos_alert') {
+    if (conversationId) {
+      navigationRef.navigate('ActivityThread', {
+        conversationId,
+        contextType: 'safety',
+        contextId: getPushString(data, ['sos_event_id']) ?? (entity.type === 'sos' ? entity.id ?? undefined : undefined),
+        contextTitle: getPushString(data, ['title']) ?? 'Emergency SOS',
+        contextSubtitle: getPushString(data, ['body']) ?? undefined,
+      });
+      return;
+    }
+
+    navigationRef.navigate('AppTabs', { screen: 'Activity' });
+    return;
+  }
 
   if (type === 'danger_alert') {
     if (trailId && (activityId || isNavigationAlert)) {
@@ -558,6 +577,7 @@ export function AppNavigator() {
           <Stack.Screen name="ActivityShare" component={ActivityShareScreen} />
           <Stack.Screen name="ActivityShareComposer" component={ActivityShareComposerScreen} />
           <Stack.Screen name="ProfileSettings" component={ProfileSettingsScreen} />
+          <Stack.Screen name="RecommendationPreferences" component={RecommendationPreferencesScreen} />
           <Stack.Screen name="PublicProfile" component={PublicProfileScreen} />
           <Stack.Screen name="CreateTrail" component={CreateTrailScreen} />
           <Stack.Screen name="Recording" component={RecordingScreen} />
@@ -566,6 +586,7 @@ export function AppNavigator() {
           <Stack.Screen name="History" component={HistoryScreen} />
           <Stack.Screen name="Journal" component={JournalScreen} />
           <Stack.Screen name="Notifications" component={NotificationsScreen} />
+          <Stack.Screen name="SafetyCenter" component={SafetyCenterScreen} />
           <Stack.Screen name="SearchResults" component={SearchResultsScreen} />
           <Stack.Screen name="AdvancedFilters" component={AdvancedFiltersScreen} />
           <Stack.Screen name="EditProfile" component={EditProfileScreen} />

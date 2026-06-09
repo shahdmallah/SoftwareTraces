@@ -1,9 +1,11 @@
 import type { NextFunction, Request, Response } from "express";
 import { Router } from "express";
 import jwt from "jsonwebtoken";
+import { z } from "zod";
 import { env } from "../../config/env";
 import { asyncHandler } from "../../lib/asyncHandler";
-import { getProfile, getProfilePhotos, getProfileReviews } from "./profiles.controller";
+import { validate } from "../../middleware/validate";
+import { getProfile, getProfilePhotos, getProfileReviews, searchProfiles } from "./profiles.controller";
 
 const router = Router();
 
@@ -36,6 +38,15 @@ function optionalAuthenticate(req: Request, _res: Response, next: NextFunction):
 
   next();
 }
+
+router.get(
+  "/search",
+  validate(
+    z.object({ q: z.string().min(1), page: z.coerce.number().min(1).optional(), limit: z.coerce.number().min(1).max(100).optional() }),
+    "query"
+  ),
+  asyncHandler(searchProfiles)
+);
 
 router.get("/:id", optionalAuthenticate, asyncHandler(getProfile));
 router.get("/:id/reviews", asyncHandler(getProfileReviews));

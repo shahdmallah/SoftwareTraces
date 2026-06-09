@@ -10,6 +10,9 @@ import { deleteActivityPost } from '../api/activitiesApi';
 import { addReviewComment, commentOnActivity, followUser, getFollowing, getFriendSuggestions, getReviewComments, likeActivity, likeReview, unfollowUser, unlikeActivity, unlikeReview, getSocialFeed, type ActivityComment, type FriendSuggestion, type ReviewComment } from '../api/socialApi';
 import { deleteTrailReview } from '../api/trailsApi';
 import { listMeetups } from '../api/meetupsApi';
+import type { NatureSighting } from '../api/natureSightingsApi';
+import { votePhoto } from '../api/mediaApi';
+import { getMyChallenges, joinChallenge, listChallenges, type Challenge } from '../api/challengesApi';
 import { type FeedCommentPreview, type FeedItem } from '../data/activitySocial';
 import { getLocalFeedItems } from '../data/localSocial';
 import { mapMeetupToFeedItem } from '../utils/meetupFeedMap';
@@ -44,6 +47,32 @@ function sameDay(a: Date, b: Date) {
 
 function hasImageUri(value: string | undefined | null): value is string {
   return typeof value === 'string' && value.trim().length > 0;
+}
+
+function getNatureSightingName(sighting: NatureSighting | undefined | null) {
+  return (
+    sighting?.common_name?.trim()
+    || sighting?.classification?.commonName?.trim()
+    || sighting?.species?.trim()
+    || sighting?.classification?.scientificName?.trim()
+    || ''
+  );
+}
+
+function getNatureSightingScientificName(sighting: NatureSighting | undefined | null) {
+  return sighting?.classification?.scientificName?.trim() || sighting?.species?.trim() || '';
+}
+
+function getNatureSightingConfidenceLabel(sighting: NatureSighting | undefined | null) {
+  const rawConfidence = sighting?.confidence ?? sighting?.classification?.confidenceLevel;
+
+  if (rawConfidence == null || !Number.isFinite(Number(rawConfidence))) {
+    return '';
+  }
+
+  const normalizedConfidence = Number(rawConfidence);
+  const percent = normalizedConfidence <= 1 ? normalizedConfidence * 100 : normalizedConfidence;
+  return `${Math.round(Math.max(0, Math.min(100, percent)))}%`;
 }
 
 function getInitials(name: string) {
@@ -259,6 +288,54 @@ function buildDateSearchValues(value: string): string[] {
   return values;
 }
 
+function formatChallengeGoal(goalType: string, goalValue: number) {
+  const value = Number(goalValue);
+  const formatted = Number.isFinite(value) ? value.toLocaleString('en-US') : String(goalValue);
+
+  switch (goalType) {
+    case 'complete_trails':
+      return `${formatted} trails`;
+    case 'total_distance_km':
+      return `${formatted} km`;
+    case 'complete_difficulty':
+      return `${formatted} difficult trails`;
+    case 'join_meetups':
+      return `${formatted} meetups`;
+    case 'submit_safety_reports':
+      return `${formatted} safety reports`;
+    case 'checkpoint_reports':
+      return `${formatted} checkpoints`;
+    default:
+      return formatted;
+  }
+}
+
+function formatChallengeDate(value: string) {
+  const timestamp = new Date(value).getTime();
+  if (!Number.isFinite(timestamp)) return '';
+  return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(new Date(timestamp));
+}
+
+function mapChallengeToFeedItem(challenge: Challenge): Extract<FeedItem, { kind: 'challenge' }> {
+  return {
+    id: challenge.id,
+    kind: 'challenge',
+    title: challenge.title,
+    description: challenge.description,
+    goalType: challenge.goal_type,
+    goalValue: challenge.goal_value,
+    startAt: challenge.start_at,
+    endAt: challenge.end_at,
+    rewardBadgeName: challenge.reward_badge_name,
+    rewardPoints: challenge.reward_points,
+    participantCount: challenge.participant_count,
+    completedCount: challenge.completed_count,
+    progressValue: challenge.progress_value,
+    participantStatus: challenge.participant_status,
+    createdAt: challenge.created_at,
+  };
+}
+
 function matchesQuery(item: FeedItem, query: string): boolean {
   if (!query) return true;
 
@@ -275,7 +352,8 @@ function matchesQuery(item: FeedItem, query: string): boolean {
           item.captionAr,
           item.distance,
         ]
-      : [
+      : item.kind === 'plan'
+        ? [
           item.user,
           item.handle,
           item.destinationEn,
@@ -288,6 +366,13 @@ function matchesQuery(item: FeedItem, query: string): boolean {
           item.vibeAr,
           item.noteEn,
           item.noteAr,
+        ]
+        : [
+          item.title,
+          item.description,
+          item.goalType,
+          formatChallengeGoal(item.goalType, item.goalValue),
+          item.rewardBadgeName ?? '',
         ];
 
   const normalizedSearchQuery = normalizeSearchValue(query);
@@ -315,6 +400,7 @@ type FeedCardProps = {
   onOpenRecap: (item: RecapItem) => void;
   onOpenPlan: (item: PlanItem) => void;
   onOpenProfile: (userId: string) => void;
+  onJoinChallenge: (item: ChallengeItem) => Promise<void>;
   onToggleLike: (item: RecapItem) => Promise<void>;
   onSendComment: (item: RecapItem, body: string) => Promise<void>;
   onToggleFollow: (item: RecapItem) => Promise<void>;
@@ -331,6 +417,7 @@ const FeedCard = memo(function FeedCard({
   onOpenRecap,
   onOpenPlan,
   onOpenProfile,
+  onJoinChallenge,
   onToggleLike,
   onSendComment,
   onToggleFollow,
@@ -353,8 +440,10 @@ const FeedCard = memo(function FeedCard({
           onDeleteRecap={onDeleteRecap}
           isFollowed={Boolean(item.userId && followedUsers[item.userId])}
         />
-      ) : (
+      ) : item.kind === 'plan' ? (
         <PlanCard item={item} isArabic={isArabic} onOpenPlan={onOpenPlan} onOpenProfile={onOpenProfile} />
+      ) : (
+        <ChallengeCard item={item} isArabic={isArabic} onJoinChallenge={onJoinChallenge} />
       )}
     </AnimatedBlock>
   );
@@ -362,6 +451,7 @@ const FeedCard = memo(function FeedCard({
 
 type RecapItem = Extract<FeedItem, { kind: 'recap' }>;
 type PlanItem = Extract<FeedItem, { kind: 'plan' }>;
+type ChallengeItem = Extract<FeedItem, { kind: 'challenge' }>;
 
 // ─── Shared card header ───────────────────────────────────────────────────────
 type CardHeaderProps = {
@@ -458,6 +548,15 @@ const RecapCard = memo(function RecapCard({
   const [pendingAction, setPendingAction] = useState<'like' | 'comment' | 'follow' | 'delete' | null>(null);
   const imageUri = hasImageUri(item.image) ? item.image.trim() : null;
   const visibleComments = item.previewComments ?? [];
+  const firstNatureSighting = item.natureSightings?.find((sighting) => getNatureSightingName(sighting));
+  const natureLabel = getNatureSightingName(firstNatureSighting);
+  const natureScientificName = getNatureSightingScientificName(firstNatureSighting);
+  const natureConfidence = getNatureSightingConfidenceLabel(firstNatureSighting);
+  const natureExtraCount = Math.max(0, (item.natureSightings?.length ?? 0) - 1);
+  const isMediaPost = item.sourceType === 'media';
+  const supportsLikeAction = !isMediaPost || Boolean(item.photoId || item.id);
+  const supportsComments = !isMediaPost;
+  const canOpenRecap = !isMediaPost;
 
   const handleLike = async () => {
     setPendingAction('like');
@@ -515,10 +614,10 @@ const RecapCard = memo(function RecapCard({
   };
 
   const showFollowButton = item.userId && item.userId !== currentUserId;
-  const showDeleteButton = item.userId && item.userId === currentUserId;
+  const showDeleteButton = supportsComments && item.userId && item.userId === currentUserId;
 
   return (
-    <Pressable style={styles.card} onPress={() => onOpenRecap(item)}>
+    <Pressable style={styles.card} onPress={canOpenRecap ? () => onOpenRecap(item) : undefined}>
       <CardHeader
         avatar={item.avatar}
         user={item.user}
@@ -598,27 +697,39 @@ const RecapCard = memo(function RecapCard({
 
       <View style={[styles.actions, isArabic && styles.actionsRtl]}>
         <View style={[styles.actionGroup, isArabic && styles.actionGroupRtl]}>
-          <Pressable
-            onPress={(event) => {
-              event.stopPropagation();
-              void handleLike();
-            }}
-            disabled={pendingAction === 'like'}
-          >
-            {pendingAction === 'like' ? (
-              <ActivityIndicator size="small" color="#C5333A" />
-            ) : (
-              <Ionicons name={item.isLiked ? 'heart' : 'heart-outline'} size={20} color={item.isLiked ? '#C5333A' : '#2C2418'} />
-            )}
-          </Pressable>
-          <Pressable
-            onPress={(event) => {
-              event.stopPropagation();
-              setCommentOpen((value) => !value);
-            }}
-          >
-            <Ionicons name="chatbubble-outline" size={19} color="#2C2418" />
-          </Pressable>
+          {supportsLikeAction ? (
+            <Pressable
+              onPress={(event) => {
+                event.stopPropagation();
+                void handleLike();
+              }}
+              disabled={pendingAction === 'like'}
+            >
+              {pendingAction === 'like' ? (
+                <ActivityIndicator size="small" color={isMediaPost ? '#2F6B4F' : '#C5333A'} />
+              ) : (
+                <Ionicons
+                  name={
+                    isMediaPost
+                      ? (item.isLiked ? 'arrow-up-circle' : 'arrow-up-circle-outline')
+                      : (item.isLiked ? 'heart' : 'heart-outline')
+                  }
+                  size={20}
+                  color={item.isLiked ? (isMediaPost ? '#2F6B4F' : '#C5333A') : '#2C2418'}
+                />
+              )}
+            </Pressable>
+          ) : null}
+          {supportsComments ? (
+            <Pressable
+              onPress={(event) => {
+                event.stopPropagation();
+                setCommentOpen((value) => !value);
+              }}
+            >
+              <Ionicons name="chatbubble-outline" size={19} color="#2C2418" />
+            </Pressable>
+          ) : null}
           <Ionicons name="navigate-outline" size={19} color="#2C2418" />
         </View>
         {item.trailId ? (
@@ -635,16 +746,45 @@ const RecapCard = memo(function RecapCard({
 
       <View style={styles.cardBody}>
         <Text style={[styles.likeCount, isArabic ? rtlText : ltrText]}>
-          {isArabic ? `${item.likes} إعجاب` : `${item.likes} likes`}
+          {isMediaPost ? `${item.likes} upvotes` : isArabic ? `${item.likes} إعجاب` : `${item.likes} likes`}
         </Text>
         <Text style={[styles.caption, isArabic ? rtlText : ltrText, { textAlign: isArabic ? 'right' : 'left' }]} numberOfLines={3}>
           <Text style={styles.captionUser}>{item.user} </Text>
           {isArabic ? item.captionAr : item.captionEn}
         </Text>
+        {natureLabel ? (
+          <View style={[styles.natureSightingCard, isArabic ? rtlRow : ltrRow]}>
+            <View style={styles.natureSightingIcon}>
+              <Ionicons name="leaf-outline" size={15} color="#2F6B4F" />
+            </View>
+            <View style={styles.natureSightingCopy}>
+              <Text style={[styles.natureSightingEyebrow, isArabic ? rtlText : ltrText]}>
+                {isArabic ? 'Nature sighting' : 'Nature sighting'}
+              </Text>
+              <Text style={[styles.natureSightingName, isArabic ? rtlText : ltrText]} numberOfLines={1}>
+                {natureLabel}
+              </Text>
+              {natureScientificName && natureScientificName !== natureLabel ? (
+                <Text style={[styles.natureSightingMeta, isArabic ? rtlText : ltrText]} numberOfLines={1}>
+                  {natureScientificName}
+                </Text>
+              ) : null}
+            </View>
+            {natureConfidence || natureExtraCount > 0 ? (
+              <View style={styles.natureSightingPill}>
+                <Text style={styles.natureSightingPillText}>
+                  {natureExtraCount > 0 ? `+${natureExtraCount}` : natureConfidence}
+                </Text>
+              </View>
+            ) : null}
+          </View>
+        ) : null}
         <View style={[styles.cardFooter, isArabic ? rtlRow : ltrRow]}>
-          <Text style={[styles.commentHint, isArabic ? rtlText : ltrText]}>
-            {isArabic ? `${item.comments} تعليق` : `${item.comments} comments`}
-          </Text>
+          {supportsComments ? (
+            <Text style={[styles.commentHint, isArabic ? rtlText : ltrText]}>
+              {isArabic ? `${item.comments} تعليق` : `${item.comments} comments`}
+            </Text>
+          ) : null}
           <Text style={[styles.locationLine, isArabic ? rtlText : ltrText]} numberOfLines={1}>
             {isArabic ? item.regionAr : item.regionEn}
           </Text>
@@ -680,7 +820,7 @@ const RecapCard = memo(function RecapCard({
             ))}
           </View>
         ) : null}
-        {commentOpen ? (
+        {supportsComments && commentOpen ? (
           <View style={[styles.commentComposer, isArabic ? rtlRow : ltrRow]}>
             <TextInput
               value={commentDraft}
@@ -777,6 +917,96 @@ const PlanCard = memo(function PlanCard({
 });
 
 // ─── Screen ───────────────────────────────────────────────────────────────────
+const ChallengeCard = memo(function ChallengeCard({
+  item,
+  isArabic,
+  onJoinChallenge,
+}: {
+  item: ChallengeItem;
+  isArabic: boolean;
+  onJoinChallenge: (item: ChallengeItem) => Promise<void>;
+}) {
+  const [pending, setPending] = useState(false);
+  const joined = item.participantStatus === 'joined' || item.participantStatus === 'completed';
+  const progress = item.progressValue != null && item.goalValue > 0
+    ? Math.min(1, Math.max(0, item.progressValue / item.goalValue))
+    : 0;
+  const dateRange = [formatChallengeDate(item.startAt), formatChallengeDate(item.endAt)].filter(Boolean).join(' - ');
+
+  const handleJoin = async () => {
+    if (joined || pending) return;
+    setPending(true);
+    try {
+      await onJoinChallenge(item);
+    } finally {
+      setPending(false);
+    }
+  };
+
+  return (
+    <View style={styles.challengeCard}>
+      <View style={[styles.challengeHeader, isArabic ? rtlRow : ltrRow]}>
+        <View style={styles.challengeIconWrap}>
+          <Ionicons name="trophy-outline" size={21} color="#7A4D00" />
+        </View>
+        <View style={styles.challengeHeaderCopy}>
+          <Text style={[styles.challengeEyebrow, isArabic ? rtlText : ltrText]}>
+            {isArabic ? 'Challenge' : 'Admin challenge'}
+          </Text>
+          <Text style={[styles.challengeTitle, isArabic ? rtlText : ltrText]} numberOfLines={2}>
+            {item.title}
+          </Text>
+        </View>
+      </View>
+
+      <Text style={[styles.challengeDescription, isArabic ? rtlText : ltrText, { textAlign: isArabic ? 'right' : 'left' }]} numberOfLines={3}>
+        {item.description}
+      </Text>
+
+      <View style={[styles.challengeMetricRow, isArabic ? rtlRow : ltrRow]}>
+        <View style={styles.challengeMetric}>
+          <Text style={styles.challengeMetricLabel}>{isArabic ? 'Goal' : 'Goal'}</Text>
+          <Text style={styles.challengeMetricValue}>{formatChallengeGoal(item.goalType, item.goalValue)}</Text>
+        </View>
+        <View style={styles.challengeMetric}>
+          <Text style={styles.challengeMetricLabel}>{isArabic ? 'Reward' : 'Reward'}</Text>
+          <Text style={styles.challengeMetricValue}>
+            {item.rewardBadgeName || (item.rewardPoints ? `${item.rewardPoints} pts` : 'Bragging rights')}
+          </Text>
+        </View>
+      </View>
+
+      {joined ? (
+        <View style={styles.challengeProgressTrack}>
+          <View style={[styles.challengeProgressFill, { width: `${Math.round(progress * 100)}%` }]} />
+        </View>
+      ) : null}
+
+      <View style={[styles.challengeFooter, isArabic ? rtlRow : ltrRow]}>
+        <Text style={[styles.challengeMeta, isArabic ? rtlText : ltrText]} numberOfLines={1}>
+          {[dateRange, item.participantCount != null ? `${item.participantCount} joined` : null].filter(Boolean).join(' · ')}
+        </Text>
+        <Pressable
+          style={[styles.challengeJoinButton, joined && styles.challengeJoinButtonActive]}
+          onPress={handleJoin}
+          disabled={joined || pending}
+        >
+          {pending ? (
+            <ActivityIndicator size="small" color="#7A4D00" />
+          ) : (
+            <>
+              <Ionicons name={joined ? 'checkmark-circle' : 'add-circle-outline'} size={15} color={joined ? '#fff' : '#7A4D00'} />
+              <Text style={[styles.challengeJoinText, joined && styles.challengeJoinTextActive]}>
+                {joined ? (isArabic ? 'Joined' : 'Joined') : isArabic ? 'Join' : 'Join'}
+              </Text>
+            </>
+          )}
+        </Pressable>
+      </View>
+    </View>
+  );
+});
+
 const SuggestedHikersRail = memo(function SuggestedHikersRail({
   hikers,
   isArabic,
@@ -862,6 +1092,7 @@ export function ActivityScreen() {
   const [searchQuery, setSearchQuery] = useState('');
   const [remoteRecaps, setRemoteRecaps] = useState<FeedItem[]>([]);
   const [remoteMeetups, setRemoteMeetups] = useState<FeedItem[]>([]);
+  const [remoteChallenges, setRemoteChallenges] = useState<FeedItem[]>([]);
   const [localFeedItems, setLocalFeedItems] = useState<FeedItem[]>([]);
   const [feedError, setFeedError] = useState('');
   const [isFeedLoading, setIsFeedLoading] = useState(false);
@@ -870,13 +1101,14 @@ export function ActivityScreen() {
   const [pendingSuggestionId, setPendingSuggestionId] = useState<string | null>(null);
   const [calendarVisible, setCalendarVisible] = useState(false);
   const [currentTimeMs, setCurrentTimeMs] = useState(() => Date.now());
+  const [feedRefreshTick, setFeedRefreshTick] = useState(0);
 
   const normalizedQuery = useMemo(() => normalize(searchQuery), [searchQuery]);
 
   const feedData = useMemo(() => {
-    return [...localFeedItems, ...remoteMeetups, ...(isAuthenticated ? remoteRecaps : [])]
+    return [...localFeedItems, ...remoteChallenges, ...remoteMeetups, ...(isAuthenticated ? remoteRecaps : [])]
       .filter((item) => isUpcomingPlan(item, currentTimeMs));
-  }, [currentTimeMs, isAuthenticated, localFeedItems, remoteMeetups, remoteRecaps]);
+  }, [currentTimeMs, isAuthenticated, localFeedItems, remoteChallenges, remoteMeetups, remoteRecaps]);
 
   const refreshMeetups = useCallback(async () => {
     try {
@@ -891,12 +1123,29 @@ export function ActivityScreen() {
     }
   }, []);
 
+  const refreshChallenges = useCallback(async () => {
+    try {
+      const [publicChallenges, myChallenges] = await Promise.all([
+        listChallenges().catch(() => [] as Challenge[]),
+        isAuthenticated ? getMyChallenges().catch(() => [] as Challenge[]) : Promise.resolve([] as Challenge[]),
+      ]);
+      const merged = new Map<string, Challenge>();
+      publicChallenges.forEach((challenge) => merged.set(challenge.id, challenge));
+      myChallenges.forEach((challenge) => merged.set(challenge.id, { ...merged.get(challenge.id), ...challenge }));
+      setRemoteChallenges([...merged.values()].map(mapChallengeToFeedItem));
+    } catch {
+      setRemoteChallenges([]);
+    }
+  }, [isAuthenticated]);
+
   useFocusEffect(
     useCallback(() => {
       setCurrentTimeMs(Date.now());
-      setLocalFeedItems(getLocalFeedItems());
+      setLocalFeedItems(getLocalFeedItems().filter((item) => item.kind !== 'recap' || item.sourceType !== 'media'));
+      setFeedRefreshTick((tick) => tick + 1);
       void refreshMeetups();
-    }, [refreshMeetups]),
+      void refreshChallenges();
+    }, [refreshChallenges, refreshMeetups]),
   );
 
   useEffect(() => {
@@ -976,7 +1225,7 @@ export function ActivityScreen() {
 
     void loadFeed();
     return () => { cancelled = true; };
-  }, [isAuthenticated, isArabic]);
+  }, [feedRefreshTick, isAuthenticated, isArabic]);
 
   useEffect(() => {
     if (!isAuthenticated || !user?.id) {
@@ -1028,7 +1277,25 @@ export function ActivityScreen() {
   const updateRecap = useCallback((id: string, updater: (item: RecapItem) => RecapItem) => {
     const updateItems = (items: FeedItem[]) => items.map((item) => (item.kind === 'recap' && item.id === id ? updater(item) : item));
     setRemoteRecaps(updateItems);
+    setLocalFeedItems(updateItems);
   }, []);
+
+  const handleJoinChallenge = useCallback(
+    async (item: ChallengeItem) => {
+      if (!isAuthenticated) {
+        navigation.navigate('Auth', { mode: 'signin' });
+        return;
+      }
+
+      try {
+        await joinChallenge(item.id);
+        await refreshChallenges();
+      } catch (error) {
+        Alert.alert(isArabic ? 'تعذر الانضمام' : 'Unable to join challenge', error instanceof Error ? error.message : 'Please try again.');
+      }
+    },
+    [isArabic, isAuthenticated, navigation, refreshChallenges],
+  );
 
   const handleToggleLike = useCallback(
     async (item: RecapItem) => {
@@ -1045,6 +1312,12 @@ export function ActivityScreen() {
           await (wasLiked ? unlikeReview(item.id) : likeReview(item.id));
         } else if (item.sourceType === 'activity' && item.activityId) {
           await (wasLiked ? unlikeActivity(item.activityId) : likeActivity(item.activityId));
+        } else if (item.sourceType === 'media') {
+          const status = await votePhoto(item.photoId || item.id, item.photoType ?? 'media', wasLiked ? 0 : 1);
+          updateRecap(item.id, (current) => ({
+            ...current,
+            likes: Number(status.helpful_score ?? current.likes),
+          }));
         }
       } catch (error) {
         updateRecap(item.id, (current) => ({
@@ -1052,7 +1325,12 @@ export function ActivityScreen() {
           isLiked: wasLiked,
           likes: Math.max(0, current.likes + (wasLiked ? 1 : -1)),
         }));
-        Alert.alert(isArabic ? 'تعذر الإعجاب' : 'Unable to like', error instanceof Error ? error.message : 'Please try again.');
+        Alert.alert(
+          item.sourceType === 'media'
+            ? (isArabic ? 'تعذر التصويت' : 'Unable to upvote')
+            : (isArabic ? 'تعذر الإعجاب' : 'Unable to like'),
+          error instanceof Error ? error.message : 'Please try again.',
+        );
       }
     },
     [isArabic, updateRecap],
@@ -1141,6 +1419,10 @@ export function ActivityScreen() {
 
   const handleOpenRecap = useCallback(
     (item: RecapItem) => {
+      if (item.sourceType === 'media') {
+        return;
+      }
+
       if (item.completionDraft) {
         navigation.navigate('ActivityShare', { draft: item.completionDraft });
         return;
@@ -1188,6 +1470,7 @@ export function ActivityScreen() {
         onOpenRecap={handleOpenRecap}
         onOpenPlan={handleOpenPlan}
         onOpenProfile={handleOpenProfile}
+        onJoinChallenge={handleJoinChallenge}
         onToggleLike={handleToggleLike}
         onSendComment={handleSendComment}
         onToggleFollow={handleToggleFollow}
@@ -1195,7 +1478,7 @@ export function ActivityScreen() {
         followedUsers={followedUsers}
       />
     ),
-    [followedUsers, handleDeleteRecap, handleOpenPlan, handleOpenProfile, handleOpenRecap, handleOpenTrail, handleSendComment, handleToggleFollow, handleToggleLike, isArabic, user?.id],
+    [followedUsers, handleDeleteRecap, handleJoinChallenge, handleOpenPlan, handleOpenProfile, handleOpenRecap, handleOpenTrail, handleSendComment, handleToggleFollow, handleToggleLike, isArabic, user?.id],
   );
 
   const keyExtractor = useCallback((item: FeedItem) => item.id, []);
@@ -1837,6 +2120,61 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#2C2418',
   },
+  natureSightingCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 9,
+    borderRadius: 16,
+    padding: 10,
+    backgroundColor: '#EAF4EE',
+    borderWidth: 1,
+    borderColor: '#D7E9DD',
+  },
+  natureSightingIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFFFFF',
+  },
+  natureSightingCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  natureSightingEyebrow: {
+    fontSize: 10,
+    fontWeight: '900',
+    color: '#5D806A',
+    textTransform: 'uppercase',
+  },
+  natureSightingName: {
+    marginTop: 2,
+    fontSize: 13,
+    fontWeight: '900',
+    color: '#2F6B4F',
+  },
+  natureSightingMeta: {
+    marginTop: 1,
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#6B7F70',
+  },
+  natureSightingPill: {
+    minWidth: 38,
+    minHeight: 26,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 9,
+    backgroundColor: '#FFFFFF',
+  },
+  natureSightingPillText: {
+    color: '#2F6B4F',
+    fontSize: 11,
+    fontWeight: '900',
+  },
   cardFooter: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1956,6 +2294,132 @@ const styles = StyleSheet.create({
   },
 
   // ─── Meetup cover ──────────────────────────────────────────────────────────
+  challengeCard: {
+    marginBottom: 16,
+    borderRadius: 22,
+    padding: 16,
+    backgroundColor: '#FFF7E3',
+    borderWidth: 1,
+    borderColor: '#E8D39A',
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowOffset: { width: 0, height: 6 },
+    shadowRadius: 14,
+    elevation: 2,
+  },
+  challengeHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 11,
+  },
+  challengeIconWrap: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F1D27A',
+  },
+  challengeHeaderCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  challengeEyebrow: {
+    color: '#7A4D00',
+    fontSize: 10,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
+  challengeTitle: {
+    marginTop: 2,
+    color: '#2C2418',
+    fontSize: 18,
+    lineHeight: 23,
+    fontWeight: '900',
+  },
+  challengeDescription: {
+    marginTop: 12,
+    color: '#5C4A24',
+    fontSize: 13,
+    lineHeight: 19,
+    fontWeight: '700',
+  },
+  challengeMetricRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 14,
+  },
+  challengeMetric: {
+    flex: 1,
+    minWidth: 0,
+    borderRadius: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: '#FFFFFF',
+  },
+  challengeMetricLabel: {
+    color: '#9A7A2B',
+    fontSize: 9,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
+  challengeMetricValue: {
+    marginTop: 3,
+    color: '#2C2418',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  challengeProgressTrack: {
+    height: 7,
+    marginTop: 13,
+    borderRadius: 999,
+    overflow: 'hidden',
+    backgroundColor: '#E6D6A8',
+  },
+  challengeProgressFill: {
+    height: '100%',
+    borderRadius: 999,
+    backgroundColor: '#7A4D00',
+  },
+  challengeFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    marginTop: 14,
+  },
+  challengeMeta: {
+    flex: 1,
+    minWidth: 0,
+    color: '#7D6A3A',
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  challengeJoinButton: {
+    minHeight: 34,
+    minWidth: 86,
+    borderRadius: 17,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#D7B95E',
+  },
+  challengeJoinButtonActive: {
+    backgroundColor: '#7A4D00',
+    borderColor: '#7A4D00',
+  },
+  challengeJoinText: {
+    color: '#7A4D00',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  challengeJoinTextActive: {
+    color: '#FFFFFF',
+  },
   meetupCover: {
     height: 280,
     position: 'relative',

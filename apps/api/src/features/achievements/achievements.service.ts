@@ -144,6 +144,7 @@ export async function getAllAchievements(userId?: string): Promise<AchievementWi
      LEFT JOIN user_achievements ua
        ON ua.achievement_id = a.id
       AND ua.user_id = $1::uuid
+     WHERE COALESCE(a.is_active, true) = true
      ORDER BY a.category ASC, a.points ASC, a.created_at ASC`,
     [userId ?? null]
   );

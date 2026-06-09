@@ -93,6 +93,10 @@ function getNavigationSessionId(notification: AppNotification): string | null {
   return asString(notification.data.navigation_session_id);
 }
 
+function getConversationId(notification: AppNotification): string | null {
+  return asString(notification.data.conversation_id);
+}
+
 function isNavigationAlert(notification: AppNotification): boolean {
   return asString(notification.data.notification_kind) === 'navigation_off_track' || Boolean(getNavigationSessionId(notification));
 }
@@ -224,6 +228,23 @@ export function NotificationsScreen() {
   }, []);
 
   const openNotificationDestination = useCallback(async (notification: AppNotification) => {
+    if (notification.type === 'sos_alert') {
+      const conversationId = getConversationId(notification);
+      if (conversationId) {
+        navigation.navigate('ActivityThread', {
+          conversationId,
+          contextType: 'safety',
+          contextId: asString(notification.entity?.id) ?? asString(notification.data.sos_event_id) ?? undefined,
+          contextTitle: notification.title,
+          contextSubtitle: notification.body,
+        });
+        return;
+      }
+
+      navigation.navigate('AppTabs', { screen: 'Activity' });
+      return;
+    }
+
     if (notification.type === 'danger_alert') {
       const trailId = getTrailId(notification);
       const activityId = getActivityId(notification);

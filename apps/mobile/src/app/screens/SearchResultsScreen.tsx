@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, FlatList, Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { Ionicons } from '@expo/vector-icons';
@@ -10,6 +10,7 @@ import {
   type GeneratedTrailSuggestion,
   type TrailSearchOrGenerateResult,
 } from '../api/trailsApi';
+import { searchProfiles, type Profile } from '../api/profilesApi';
 import { AnimatedScreen } from '../components/AnimatedUI';
 
 type SearchResultsNavigationProp = StackNavigationProp<RootStackParamList, 'SearchResults'>;
@@ -25,7 +26,9 @@ export function SearchResultsScreen() {
   const navigation = useNavigation<SearchResultsNavigationProp>();
   const route = useRoute<SearchResultsRouteProp>();
   const query = route.params?.query?.trim() ?? '';
+  const mode = route.params?.mode ?? 'trail';
   const [result, setResult] = useState<TrailSearchOrGenerateResult | null>(null);
+  const [profileResults, setProfileResults] = useState<Profile[] | null>(null);
   const [isLoading, setIsLoading] = useState(Boolean(query));
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -36,21 +39,30 @@ export function SearchResultsScreen() {
       if (!query) {
         setIsLoading(false);
         setResult(null);
+        setProfileResults(null);
         return;
       }
 
       setIsLoading(true);
       setErrorMessage(null);
       setResult(null);
+      setProfileResults(null);
 
       try {
-        const nextResult = await searchOrGenerateTrail(query);
-        if (!cancelled) {
-          setResult(nextResult);
+        if (mode === 'people') {
+          const profiles = await searchProfiles(query);
+          if (!cancelled) {
+            setProfileResults(profiles);
+          }
+        } else {
+          const nextResult = await searchOrGenerateTrail(query);
+          if (!cancelled) {
+            setResult(nextResult);
+          }
         }
       } catch (error) {
         if (!cancelled) {
-          setErrorMessage(error instanceof Error ? error.message : 'Unable to search trails.');
+          setErrorMessage(error instanceof Error ? error.message : 'Unable to search.');
         }
       } finally {
         if (!cancelled) {
@@ -64,7 +76,7 @@ export function SearchResultsScreen() {
     return () => {
       cancelled = true;
     };
-  }, [query]);
+  }, [query, mode]);
 
   const existingTrails = result?.existing_trails ?? [];
   const generatedTrail = result?.generated_trail ?? null;
@@ -88,24 +100,49 @@ export function SearchResultsScreen() {
     </Pressable>
   );
 
+  const renderProfile = ({ item }: { item: Profile }) => (
+    <Pressable
+      style={styles.resultCard}
+      onPress={() => navigation.navigate('PublicProfile', { profileId: item.id })}
+    >
+      <View style={styles.resultIcon}>
+        {item.avatar_url ? (
+          <Image source={{ uri: item.avatar_url }} style={styles.profileAvatar} />
+        ) : (
+          <Ionicons name="person-circle-outline" size={24} color="#630E13" />
+        )}
+      </View>
+      <View style={styles.resultCopy}>
+        <Text style={styles.resultTitle}>{item.full_name}</Text>
+        {item.location ? <Text style={styles.resultMeta}>{item.location}</Text> : null}
+        {item.bio ? <Text style={styles.resultLabels} numberOfLines={2}>{item.bio}</Text> : null}
+      </View>
+      <Ionicons name="chevron-forward" size={18} color="#8A7A6A" />
+    </Pressable>
+  );
+
   return (
     <AnimatedScreen style={styles.container}>
       <View style={styles.header}>
         <Pressable style={styles.backButton} onPress={() => navigation.goBack()}>
           <Ionicons name="chevron-back" size={20} color="#2C2418" />
         </Pressable>
-        <Text style={styles.title}>AI trail search</Text>
+        <Text style={styles.title}>{mode === 'people' ? 'People search' : 'AI trail search'}</Text>
       </View>
 
       {!query ? (
         <View style={styles.stateCard}>
-          <Text style={styles.stateTitle}>Describe a trail</Text>
-          <Text style={styles.stateText}>Search from Explore with a prompt like "easy 5km hike with water near Ramallah".</Text>
+          <Text style={styles.stateTitle}>{mode === 'people' ? 'Search people' : 'Describe a trail'}</Text>
+          <Text style={styles.stateText}>
+            {mode === 'people'
+              ? 'Search people by name, bio, or location.'
+              : 'Search from Explore with a prompt like "easy 5km hike with water near Ramallah".'}
+          </Text>
         </View>
       ) : isLoading ? (
         <View style={styles.stateCard}>
           <ActivityIndicator color="#630E13" />
-          <Text style={styles.stateTitle}>Finding trail options...</Text>
+          <Text style={styles.stateTitle}>{mode === 'people' ? 'Looking for people...' : 'Finding trail options...'}</Text>
           <Text style={styles.stateText}>{query}</Text>
         </View>
       ) : errorMessage ? (
@@ -113,6 +150,20 @@ export function SearchResultsScreen() {
           <Text style={styles.stateTitle}>Search failed</Text>
           <Text style={styles.stateText}>{errorMessage}</Text>
         </View>
+      ) : mode === 'people' ? (
+        profileResults?.length ? (
+          <FlatList
+            data={profileResults}
+            keyExtractor={(item) => item.id}
+            renderItem={renderProfile}
+            contentContainerStyle={styles.listContent}
+          />
+        ) : (
+          <View style={styles.stateCard}>
+            <Text style={styles.stateTitle}>No users found</Text>
+            <Text style={styles.stateText}>Try a different name, bio text, or location.</Text>
+          </View>
+        )
       ) : existingTrails.length ? (
         <FlatList
           data={existingTrails}
@@ -170,6 +221,7 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   resultIcon: { width: 38, height: 38, borderRadius: 14, backgroundColor: '#F7EBE8', alignItems: 'center', justifyContent: 'center' },
+  profileAvatar: { width: 36, height: 36, borderRadius: 12 },
   resultCopy: { flex: 1 },
   resultTitle: { color: '#2C2418', fontSize: 16, fontWeight: '900' },
   resultMeta: { marginTop: 4, color: '#6B5D4E', fontSize: 12, fontWeight: '700', textTransform: 'capitalize' },

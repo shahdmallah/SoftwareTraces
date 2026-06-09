@@ -1,27 +1,75 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router';
 import { Pause, Play, Square, AlertCircle, Navigation2, WifiOff, Satellite } from 'lucide-react';
 import { MapboxTrailMap } from '../components/MapboxTrailMap';
 import { sendSosAlert, startActivity, updateActivityStatus, type Activity } from '../api/activities';
+import { checkNavigationPosition, endNavigationSession, startNavigationSession } from '../api/navigation';
 import { getAccessToken } from '../api/client';
 
 export function RecordingPage() {
+  const [searchParams] = useSearchParams();
+  const trailId = searchParams.get('trailId');
   const [activity, setActivity] = useState<Activity | null>(null);
+  const [navigationSessionId, setNavigationSessionId] = useState<string | null>(null);
+  const [navigationInstruction, setNavigationInstruction] = useState('');
   const [isPaused, setIsPaused] = useState(false);
   const [routePoints, setRoutePoints] = useState<[number, number][]>([]);
   const [errorMessage, setErrorMessage] = useState('');
+  const watchIdRef = useRef<number | null>(null);
+  const navigationSessionIdRef = useRef<string | null>(null);
   const isGuest = !getAccessToken();
 
   useEffect(() => {
+    navigationSessionIdRef.current = navigationSessionId;
+  }, [navigationSessionId]);
+
+  useEffect(() => {
     if (!isGuest) {
-      startActivity()
+      startActivity(trailId ?? undefined)
         .then(setActivity)
         .catch((error) => setErrorMessage(error instanceof Error ? error.message : 'Unable to start activity.'));
+
+      if (trailId) {
+        startNavigationSession(trailId)
+          .then((session) => setNavigationSessionId(session.id))
+          .catch(() => undefined);
+      }
     }
+  }, [isGuest, trailId]);
+
+  useEffect(() => {
+    if (!navigator.geolocation) return;
 
     navigator.geolocation.getCurrentPosition((position) => {
       setRoutePoints([[position.coords.longitude, position.coords.latitude]]);
     });
-  }, [isGuest]);
+
+    watchIdRef.current = navigator.geolocation.watchPosition(
+      (position) => {
+        const point: [number, number] = [position.coords.longitude, position.coords.latitude];
+        setRoutePoints((current) => [...current, point]);
+
+        const sessionId = navigationSessionIdRef.current;
+        if (sessionId) {
+          void checkNavigationPosition(sessionId, {
+            latitude: position.coords.latitude,
+            longitude: position.coords.longitude,
+            heading: position.coords.heading,
+          })
+            .then((result) => {
+              if (result.instruction) setNavigationInstruction(result.instruction);
+            })
+            .catch(() => undefined);
+        }
+      },
+      () => undefined,
+      { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 },
+    );
+
+    return () => {
+      if (watchIdRef.current != null) navigator.geolocation.clearWatch(watchIdRef.current);
+    };
+  }, []);
 
   const handleTogglePause = async () => {
     const nextPaused = !isPaused;
@@ -32,6 +80,7 @@ export function RecordingPage() {
   const handleStop = async () => {
     if (!confirm('Stop recording? Your activity will be saved.')) return;
     if (activity?.id) await updateActivityStatus(activity.id, 'completed').catch(() => undefined);
+    if (navigationSessionId) await endNavigationSession(navigationSessionId).catch(() => undefined);
   };
 
   const handleSos = async () => {
@@ -58,6 +107,7 @@ export function RecordingPage() {
               <div>
                 <h3 className="font-semibold text-foreground">{isPaused ? 'Paused' : isGuest ? 'Preview recording' : 'Recording'}</h3>
                 <p className="text-xs text-secondary">{activity?.title || (isGuest ? 'Sign in to save this activity' : 'Live activity')}</p>
+                {navigationInstruction && <p className="text-xs text-primary mt-1">{navigationInstruction}</p>}
               </div>
             </div>
             <div className="flex items-center gap-2">
@@ -65,6 +115,12 @@ export function RecordingPage() {
                 <Satellite className="w-3 h-3" />
                 <span className="text-xs font-medium">GPS</span>
               </div>
+              {navigationSessionId && (
+                <div className="flex items-center gap-1 px-2 py-1 bg-primary/10 text-primary rounded-lg">
+                  <Navigation2 className="w-3 h-3" />
+                  <span className="text-xs font-medium">Nav</span>
+                </div>
+              )}
               <div className="flex items-center gap-1 px-2 py-1 bg-muted/20 rounded-lg">
                 <WifiOff className="w-3 h-3 text-muted" />
                 <span className="text-xs text-muted">Offline-ready</span>
@@ -78,42 +134,15 @@ export function RecordingPage() {
       <div className="flex-1 relative">
         <MapboxTrailMap routeCoordinates={routePoints} heightClassName="h-full" onMapClick={(point) => setRoutePoints((prev) => [...prev, point])} />
 
-        <div className="absolute top-4 right-4 z-10">
-          <button className="p-3 bg-card border border-border rounded-xl shadow-lg hover:bg-muted/20 transition-colors">
-            <Navigation2 className="w-5 h-5 text-primary" />
+        <div className="absolute bottom-24 left-1/2 -translate-x-1/2 flex items-center gap-4">
+          <button onClick={() => void handleTogglePause()} className="w-14 h-14 rounded-full bg-card border border-border flex items-center justify-center shadow-lg">
+            {isPaused ? <Play className="w-6 h-6 text-primary" /> : <Pause className="w-6 h-6 text-primary" />}
           </button>
-        </div>
-
-        <div className="absolute bottom-4 left-4 right-4 z-10 space-y-3">
-          <div className="bg-card rounded-xl border border-border p-6 shadow-xl">
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-              <div className="text-center"><p className="text-3xl font-semibold text-foreground mb-1">Live</p><p className="text-sm text-secondary">Duration</p></div>
-              <div className="text-center"><p className="text-3xl font-semibold text-foreground mb-1">{routePoints.length}</p><p className="text-sm text-secondary">Points</p></div>
-              <div className="text-center"><p className="text-3xl font-semibold text-foreground mb-1">0</p><p className="text-sm text-secondary">Elevation (m)</p></div>
-              <div className="text-center"><p className="text-3xl font-semibold text-foreground mb-1">0.0</p><p className="text-sm text-secondary">Avg Speed</p></div>
-              <div className="text-center"><p className="text-3xl font-semibold text-foreground mb-1">0.0</p><p className="text-sm text-secondary">Max Speed</p></div>
-            </div>
-          </div>
-
-          <div className="flex gap-3">
-            <button
-              onClick={handleTogglePause}
-              className={`flex-1 flex items-center justify-center gap-3 px-6 py-4 rounded-xl font-semibold transition-colors ${
-                isPaused ? 'bg-success text-success-foreground hover:bg-success/90' : 'bg-accent text-accent-foreground hover:bg-accent/90'
-              }`}
-            >
-              {isPaused ? <Play className="w-6 h-6" /> : <Pause className="w-6 h-6" />}
-              <span>{isPaused ? 'Resume' : 'Pause'}</span>
-            </button>
-            <button onClick={handleStop} className="flex-1 flex items-center justify-center gap-3 px-6 py-4 bg-destructive text-destructive-foreground rounded-xl font-semibold hover:bg-destructive/90 transition-colors">
-              <Square className="w-6 h-6" />
-              <span>Finish</span>
-            </button>
-          </div>
-
-          <button onClick={handleSos} className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-card border-2 border-destructive/50 text-destructive rounded-xl font-semibold hover:bg-destructive/10 transition-colors">
-            <AlertCircle className="w-5 h-5" />
-            <span>Emergency SOS</span>
+          <button onClick={() => void handleStop()} className="w-16 h-16 rounded-full bg-destructive text-white flex items-center justify-center shadow-lg">
+            <Square className="w-7 h-7" />
+          </button>
+          <button onClick={() => void handleSos()} className="w-14 h-14 rounded-full bg-destructive/10 border border-destructive flex items-center justify-center shadow-lg">
+            <AlertCircle className="w-6 h-6 text-destructive" />
           </button>
         </div>
       </div>

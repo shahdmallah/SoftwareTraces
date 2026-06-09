@@ -19,6 +19,8 @@ import { searchTrailsByCriteria } from "../../services/trailSearchService";
 import { verifyPhoto } from "../../services/photoVerificationService";
 import { updateUserStats } from "../achievements/achievements.service";
 import { findSimilarPublicTrails } from "./duplicateTrail.service";
+import { detectCheckpointsOnRoute, sampleRoutePoints } from "./access.controller";
+import { attachApprovedTrailImages } from "./trailPhotoVisibility";
 
 const calculateTrailStatsBodySchema = z.object({
   coordinates: z.array(z.tuple([z.number(), z.number()])).min(2),
@@ -53,6 +55,7 @@ const createTrailBodySchema = z.object({
   status: z.enum(["draft", "published"]).optional().default("draft"),
   visibility: z.enum(["public", "private"]).optional(),
   confirm_duplicate: z.boolean().optional(),
+  confirm_hazard: z.boolean().optional(),
   coordinates: z.array(z.tuple([z.number(), z.number()])).min(2),
   stats: z.object({
     length_meters: z.number().nonnegative(),
@@ -82,6 +85,8 @@ const updatePhotoCaptionBodySchema = z.object({
 const natureSightingPhotoTypeSchema = z.enum(["trail_photo", "review_photo", "media", "activity_media"]);
 
 const natureSightingClassificationSchema = z.object({
+  hasOrganism: z.boolean().optional(),
+  noOrganismReason: z.string().trim().optional(),
   commonName: z.string().trim().optional(),
   scientificName: z.string().trim().optional(),
   shortDescription: z.string().trim().optional(),
@@ -102,7 +107,7 @@ const createNatureSightingBodySchema = z.object({
   longitude: z.coerce.number().min(-180).max(180).nullable().optional(),
   language: z.enum(["en", "ar"]).optional().default("en"),
   source: z.string().trim().optional().default("google-ai"),
-  category: z.string().trim().optional().default("wildlife"),
+  category: z.string().trim().nullable().optional(),
   classification: natureSightingClassificationSchema,
 }).refine((body) => !body.photo_id || Boolean(body.photo_type), {
   message: "photo_type is required when photo_id is provided",
@@ -111,6 +116,39 @@ const createNatureSightingBodySchema = z.object({
   message: "photo_id is required when photo_type is provided",
   path: ["photo_id"],
 });
+
+export type CreateNatureSightingInput = z.input<typeof createNatureSightingBodySchema>;
+
+const nonOrganismNames = new Set([
+  "unknown organism",
+  "no organism detected",
+  "no species detected",
+  "not detected",
+  "none",
+  "n/a",
+]);
+
+function hasDetectedNatureSpecies(classification: z.infer<typeof natureSightingClassificationSchema>): boolean {
+  if (classification.hasOrganism === false) {
+    return false;
+  }
+
+  const commonName = classification.commonName?.trim().toLowerCase() ?? "";
+  const scientificName = classification.scientificName?.trim() ?? "";
+
+  if (nonOrganismNames.has(commonName)) {
+    return false;
+  }
+
+  return Boolean(commonName || scientificName);
+}
+
+const allowedNatureSightingCategories = new Set(["plant", "animal", "fungus", "other"]);
+
+function normalizeNatureSightingCategory(value: string | null | undefined): string | null {
+  const normalized = value?.trim().toLowerCase();
+  return normalized && allowedNatureSightingCategories.has(normalized) ? normalized : null;
+}
 
 const elevationProfileQuerySchema = z.object({
   points: z.coerce.number().int().min(10).max(200).optional().default(50),
@@ -502,7 +540,7 @@ export async function getNearbyTrails(req: Request, res: Response): Promise<void
     console.log("[getNearbyTrails] Step 3: Query succeeded, rows:", result.rows.length);
 
     console.log("[getNearbyTrails] Step 4: Formatting results...");
-    const formattedTrails = result.rows.map(formatTrailForApp);
+    const formattedTrails = await attachApprovedTrailImages(result.rows.map(formatTrailForApp));
 
     console.log("[getNearbyTrails] Step 5: Sending response...");
     res.json({ data: formattedTrails });
@@ -552,7 +590,7 @@ export async function searchTrails(req: Request, res: Response): Promise<void> {
     console.log("[searchTrails] Step 3: Query succeeded, rows:", result.rows.length);
 
     console.log("[searchTrails] Step 4: Formatting results...");
-    const formattedTrails = result.rows.map(formatTrailForApp);
+    const formattedTrails = await attachApprovedTrailImages(result.rows.map(formatTrailForApp));
 
     console.log("[searchTrails] Step 5: Sending response...");
     res.json({
@@ -591,7 +629,7 @@ export async function getAllTrails(req: Request, res: Response): Promise<void> {
     console.log("[getAllTrails] Step 3: Query succeeded, rows:", result.rows.length);
 
     console.log("[getAllTrails] Step 4: Formatting results...");
-    const formattedTrails = result.rows.map(formatTrailForApp);
+    const formattedTrails = await attachApprovedTrailImages(result.rows.map(formatTrailForApp));
 
     console.log("[getAllTrails] Step 5: Sending response...");
     res.json({ data: formattedTrails });
@@ -628,7 +666,7 @@ export async function getTrailById(req: Request, res: Response): Promise<void> {
     }
 
     console.log("[getTrailById] Step 4: Formatting result...");
-    const formattedTrail = formatTrailForApp(trailResult.rows[0]);
+    const [formattedTrail] = await attachApprovedTrailImages([formatTrailForApp(trailResult.rows[0])]);
 
     console.log("[getTrailById] Step 5: Sending response...");
     res.json({ data: formattedTrail });
@@ -922,9 +960,20 @@ export async function createTrail(req: Request, res: Response): Promise<void> {
       tags,
       status,
       visibility,
+      confirm_hazard,
       coordinates,
       stats,
     } = createTrailBodySchema.parse(req.body);
+
+    const routeWarnings = await detectCheckpointsOnRoute(sampleRoutePoints(coordinates, 300));
+
+    if (routeWarnings.length > 0 && !confirm_hazard) {
+      res.status(400).json({
+        error: "Route passes through a dangerous or settlement area",
+        warnings: routeWarnings,
+      });
+      return;
+    }
 
     if (!Array.isArray(coordinates) || coordinates.length < 2) {
       throw new Error("Coordinates must contain at least 2 points");
@@ -988,13 +1037,10 @@ export async function createTrail(req: Request, res: Response): Promise<void> {
       features_ar,
       tags,
       difficulty,
-      length_km,
       length_meters,
-      estimated_duration_min,
-      elevation_gain_meters,
       estimated_duration_minutes,
+      elevation_gain_meters,
       start_point,
-      end_point,
       geometry,
       user_id,
       is_active,
@@ -1002,12 +1048,9 @@ export async function createTrail(req: Request, res: Response): Promise<void> {
     ) VALUES (
       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
       $11, $12, $13, $14, $15, $16,
-      ST_GeomFromText($17, 4326),
-      ST_GeomFromText($18, 4326),
-      ST_GeogFromText($19),
-      $20,
-      $21,
-      $22
+      $17,
+      $18,
+      $19
     ) RETURNING id`;
 
     const queryValues = [
@@ -1022,13 +1065,10 @@ export async function createTrail(req: Request, res: Response): Promise<void> {
       trailFeaturesAr,
       tags,
       stats.difficulty,
-      Number((stats.length_meters / 1000).toFixed(3)),
       Math.round(stats.length_meters),
       Math.round(stats.estimated_duration_minutes),
       stats.elevation_gain_meters,
-      Math.round(stats.estimated_duration_minutes),
       `POINT(${startLng} ${startLat})`,
-      `POINT(${endLng} ${endLat})`,
       linestring,
       userId,
       true,
@@ -1048,7 +1088,11 @@ export async function createTrail(req: Request, res: Response): Promise<void> {
     );
     const formattedTrail = formatTrailForApp(createdTrail.rows[0]);
 
-    res.status(201).json({ data: formattedTrail, duplicate_warning: duplicateWarning });
+    res.status(201).json({
+      data: formattedTrail,
+      duplicate_warning: duplicateWarning,
+      ...(routeWarnings.length > 0 ? { route_warnings: routeWarnings } : {}),
+    });
   } catch (error) {
     console.error("[createTrail] error message:", error instanceof Error ? error.message : error);
     console.error("[createTrail] error stack:", error instanceof Error ? error.stack : undefined);
@@ -1085,6 +1129,8 @@ export async function getTrailReviews(req: Request, res: Response): Promise<void
        ) AS photos
      FROM trail_reviews tr
      LEFT JOIN review_photos rp ON rp.review_id = tr.id
+       AND rp.approved_for_trail_page = true
+       AND COALESCE(rp.manual_review_required, false) = false
      WHERE tr.trail_id = $1
      GROUP BY tr.id
      ORDER BY tr.created_at DESC`,
@@ -2009,12 +2055,12 @@ export async function getSavedTrails(req: Request, res: Response): Promise<void>
 
     const pages = total === 0 ? 0 : Math.ceil(total / limit);
     console.log("[getSavedTrails] 5. Query successful, returned", result.rows.length, "trails");
-    const formattedResults = result.rows.map((row) => ({
+    const formattedResults = await attachApprovedTrailImages(result.rows.map((row) => ({
       ...formatTrailForApp(row),
       saved_id: row.saved_id,
       notes: row.notes,
       saved_at: row.saved_at,
-    }));
+    })));
 
     res.json({
       data: formattedResults,
@@ -2227,6 +2273,7 @@ export async function getTrailPhotos(req: Request, res: Response): Promise<void>
          p.full_name AS uploaded_by,
          rp.user_id,
          NULL::uuid AS uploader_id,
+         NULL::uuid AS trip_id,
          'review' AS source,
          rp.approved_for_trail_page,
          rp.manual_review_required,
@@ -2238,6 +2285,8 @@ export async function getTrailPhotos(req: Request, res: Response): Promise<void>
        JOIN trail_reviews tr ON tr.id = rp.review_id
        LEFT JOIN profiles p ON rp.user_id = p.id
        WHERE tr.trail_id = $1::uuid
+         AND rp.approved_for_trail_page = true
+         AND COALESCE(rp.manual_review_required, false) = false
 
        UNION ALL
 
@@ -2252,6 +2301,7 @@ export async function getTrailPhotos(req: Request, res: Response): Promise<void>
          p.full_name AS uploaded_by,
          tp.user_id,
          NULL::uuid AS uploader_id,
+         NULL::uuid AS trip_id,
          'direct' AS source,
          tp.approved_for_trail_page,
          tp.manual_review_required,
@@ -2262,6 +2312,8 @@ export async function getTrailPhotos(req: Request, res: Response): Promise<void>
        FROM trail_photos tp
        LEFT JOIN profiles p ON tp.user_id = p.id
        WHERE tp.trail_id = $1::uuid
+         AND tp.approved_for_trail_page = true
+         AND COALESCE(tp.manual_review_required, false) = false
 
        UNION ALL
 
@@ -2276,6 +2328,7 @@ export async function getTrailPhotos(req: Request, res: Response): Promise<void>
          p.full_name AS uploaded_by,
          m.uploader_id AS user_id,
          m.uploader_id,
+         m.trip_id,
          'media' AS source,
          m.approved_for_trail_page,
          m.manual_review_required,
@@ -2287,6 +2340,8 @@ export async function getTrailPhotos(req: Request, res: Response): Promise<void>
        LEFT JOIN profiles p ON m.uploader_id = p.id
        WHERE m.trip_id = $1::uuid
          AND m.is_public = true
+         AND m.approved_for_trail_page = true
+         AND COALESCE(m.manual_review_required, false) = false
 
        UNION ALL
 
@@ -2301,6 +2356,7 @@ export async function getTrailPhotos(req: Request, res: Response): Promise<void>
          p.full_name AS uploaded_by,
          am.user_id,
          NULL::uuid AS uploader_id,
+         NULL::uuid AS trip_id,
          'activity_media' AS source,
          am.approved_for_trail_page,
          am.manual_review_required,
@@ -2313,6 +2369,8 @@ export async function getTrailPhotos(req: Request, res: Response): Promise<void>
        LEFT JOIN profiles p ON am.user_id = p.id
        WHERE a.trail_id = $1::uuid
          AND a.is_public = true
+         AND am.approved_for_trail_page = true
+         AND COALESCE(am.manual_review_required, false) = false
 
        ORDER BY is_primary DESC, created_at DESC`,
       [trailId]
@@ -2339,6 +2397,7 @@ export async function getTrailPhotos(req: Request, res: Response): Promise<void>
         uploaded_by: photo.uploaded_by,
         user_id: photo.user_id,
         uploader_id: photo.uploader_id,
+        trip_id: photo.trip_id ?? null,
         source: photo.source,
         approved_for_trail_page: photo.approved_for_trail_page,
         manual_review_required: photo.manual_review_required,
@@ -2529,10 +2588,15 @@ async function saveNatureSighting(
   routeTrailId?: string | null
 ) {
   const classification = body.classification;
+  if (!hasDetectedNatureSpecies(classification)) {
+    throw new HttpError(422, classification.noOrganismReason || "No plant, animal, fungus, or other organism was detected in this photo");
+  }
+
   const confidenceLevel = typeof classification.confidenceLevel === "number" ? classification.confidenceLevel : null;
   const confidence = confidenceLevel === null ? null : confidenceLevel > 1 ? confidenceLevel / 100 : confidenceLevel;
   const commonName = classification.commonName?.trim() || null;
   const scientificName = classification.scientificName?.trim() || null;
+  const category = normalizeNatureSightingCategory(body.category);
   const photoId = body.photo_id ?? null;
   const photoType = body.photo_type ?? null;
   const mediaLink = await resolveNatureSightingMediaLink(userId, photoType, photoId);
@@ -2624,7 +2688,7 @@ async function saveNatureSighting(
       userId,
       latitude,
       longitude,
-      body.category,
+      category,
       scientificName,
       commonName,
       confidence,
@@ -2640,6 +2704,15 @@ async function saveNatureSighting(
   );
 
   return formatNatureSighting(result.rows[0]);
+}
+
+export async function saveNatureSightingForUser(
+  userId: string,
+  input: CreateNatureSightingInput,
+  routeTrailId?: string | null
+) {
+  const body = createNatureSightingBodySchema.parse(input);
+  return saveNatureSighting(userId, body, routeTrailId);
 }
 
 export async function createNatureSighting(req: Request, res: Response): Promise<void> {

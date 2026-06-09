@@ -37,6 +37,19 @@ export async function getMe() {
   return response.user;
 }
 
-export function logout() {
-  setAccessToken(null);
+export async function refresh(refreshToken: string) {
+  const response = await apiRequest<{ token: string }>('/api/auth/refresh', {
+    method: 'POST',
+    body: JSON.stringify({ refreshToken }),
+  });
+  setAccessToken(response.token);
+  return response;
+}
+
+export async function logout() {
+  try {
+    await apiRequest<void>('/api/auth/logout', { method: 'POST' });
+  } finally {
+    setAccessToken(null);
+  }
 }

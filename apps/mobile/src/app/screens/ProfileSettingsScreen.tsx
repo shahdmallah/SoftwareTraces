@@ -93,7 +93,9 @@ export function ProfileSettingsScreen() {
     }
     if (route.params.settingId === 's5') {
       return [
+        { id: 'recommendations', labelEn: 'Trail recommendations', labelAr: 'تفضيلات التوصيات', active: false, onPress: () => navigation.navigate('RecommendationPreferences') },
         { id: 'notifications', labelEn: 'Notifications', labelAr: 'الإشعارات', active: false, onPress: () => navigation.navigate('Notifications') },
+        { id: 'safetyCenter', labelEn: 'SOS & emergency contacts', labelAr: 'SOS & emergency contacts', active: false, onPress: () => navigation.navigate('SafetyCenter') },
         { id: 'support', labelEn: 'Support & help', labelAr: 'الدعم والمساعدة', active: false, onPress: () => navigation.navigate('SupportHelp') },
         { id: 'reportIssue', labelEn: 'Report issue', labelAr: 'الإبلاغ عن مشكلة', active: false, onPress: () => navigation.navigate('ReportIssue') },
         { id: 'legal', labelEn: 'Legal', labelAr: 'الشروط والخصوصية', active: false, onPress: () => navigation.navigate('Legal') },

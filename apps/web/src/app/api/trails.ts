@@ -185,6 +185,14 @@ export async function getNearbyTrails(params: { lat: number; lng: number; radius
   return response.data.map(normalizeTrail);
 }
 
+export async function getMyTrails(page = 1, limit = 50) {
+  const response = await apiRequest<Envelope<Trail[]>>('/api/trails/mine', {}, { page, limit });
+  return {
+    trails: response.data.map(normalizeTrail),
+    pagination: response.pagination,
+  };
+}
+
 export async function getTrailById(id: string) {
   const response = await apiRequest<Envelope<Trail>>(`/api/trails/${id}`);
   return normalizeTrail(response.data);
@@ -291,4 +299,53 @@ export async function unsaveTrail(id: string) {
     method: 'DELETE',
     body: JSON.stringify({ list_type: 'favorites' }),
   });
+}
+
+export async function createTrailReview(
+  trailId: string,
+  payload: { rating: number; content: string; title?: string; photos?: File[] },
+) {
+  if (payload.photos?.length) {
+    const formData = new FormData();
+    formData.append('rating', String(payload.rating));
+    formData.append('content', payload.content);
+    if (payload.title) formData.append('title', payload.title);
+    payload.photos.forEach((photo) => formData.append('photos', photo));
+    const response = await apiRequest<Envelope<TrailReview>>(`/api/trails/${trailId}/reviews`, {
+      method: 'POST',
+      body: formData,
+    });
+    return response.data;
+  }
+
+  const response = await apiRequest<Envelope<TrailReview>>(`/api/trails/${trailId}/reviews`, {
+    method: 'POST',
+    body: JSON.stringify({
+      rating: payload.rating,
+      content: payload.content,
+      ...(payload.title ? { title: payload.title } : {}),
+    }),
+  });
+  return response.data;
+}
+
+export async function addTrailCondition(
+  trailId: string,
+  payload: { condition_type: string; severity?: string; description?: string },
+) {
+  const response = await apiRequest<Envelope<TrailCondition>>(`/api/trails/${trailId}/conditions`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+  return response.data;
+}
+
+export async function uploadTrailPhoto(trailId: string, file: File) {
+  const formData = new FormData();
+  formData.append('photo', file);
+  const response = await apiRequest<Envelope<{ id: string; url: string }>>(`/api/trails/${trailId}/photos`, {
+    method: 'POST',
+    body: formData,
+  });
+  return response.data;
 }

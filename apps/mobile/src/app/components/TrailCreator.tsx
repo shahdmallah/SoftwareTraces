@@ -11,6 +11,7 @@ import {
   analyzeTrailRoute,
   checkDuplicateTrail,
   createTrail,
+  parseTrailDescription,
   uploadTrailPhoto,
   publishTrail,
   type GeneratedTrailSuggestion,
@@ -18,6 +19,7 @@ import {
   type TrailAnalysisResponse,
   type TrailStatsResponse,
 } from '../api/trailsApi';
+import { ApiError } from '../api/client';
 import { setTrailRouteCoordinates } from '../state/trailRoutes';
 import { translateTrailContentToArabic } from '../utils/translateTrailContent';
 
@@ -37,6 +39,7 @@ type SaveTrailBody = {
   status?: 'draft' | 'published';
   visibility?: 'public' | 'private';
   confirm_duplicate?: boolean;
+  confirm_hazard?: boolean;
   coordinates: LngLat[];
   stats: TrailStatsResponse;
 };
@@ -261,6 +264,249 @@ function getPathDistanceMeters(points: LngLat[]) {
   }, 0);
 }
 
+const GPS_MIN_MOVEMENT_METERS = 6;
+const GPS_MAX_ACCURACY_METERS = 35;
+const GPS_SPIKE_DISTANCE_METERS = 90;
+const GPS_SPIKE_RETURN_METERS = 45;
+const GPS_SIMPLIFY_TOLERANCE_METERS = 7;
+const ROUTE_REVISIT_DISTANCE_METERS = 22;
+const ROUTE_REVISIT_PATH_METERS = 180;
+
+function isValidCoordinate(point: LngLat) {
+  const [lng, lat] = point;
+  return Number.isFinite(lng) && Number.isFinite(lat) && Math.abs(lng) <= 180 && Math.abs(lat) <= 90;
+}
+
+function projectToMeters(point: LngLat, origin: LngLat) {
+  const metersPerDegreeLat = 111320;
+  const metersPerDegreeLng = metersPerDegreeLat * Math.cos((origin[1] * Math.PI) / 180);
+
+  return {
+    x: (point[0] - origin[0]) * metersPerDegreeLng,
+    y: (point[1] - origin[1]) * metersPerDegreeLat,
+  };
+}
+
+function estimateWalkingDurationSeconds(distanceMeters: number) {
+  const walkingMetersPerSecond = 1.2;
+  return Math.max(60, Math.round(distanceMeters / walkingMetersPerSecond));
+}
+
+function getPerpendicularDistanceMeters(point: LngLat, start: LngLat, end: LngLat) {
+  const projectedPoint = projectToMeters(point, start);
+  const projectedEnd = projectToMeters(end, start);
+  const segmentLengthSquared = projectedEnd.x * projectedEnd.x + projectedEnd.y * projectedEnd.y;
+
+  if (segmentLengthSquared === 0) {
+    return getDistanceMeters(point, start);
+  }
+
+  const t = Math.max(0, Math.min(1, (projectedPoint.x * projectedEnd.x + projectedPoint.y * projectedEnd.y) / segmentLengthSquared));
+  const projection = {
+    x: projectedEnd.x * t,
+    y: projectedEnd.y * t,
+  };
+  const deltaX = projectedPoint.x - projection.x;
+  const deltaY = projectedPoint.y - projection.y;
+
+  return Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+}
+
+function simplifyRouteSection(points: LngLat[], startIndex: number, endIndex: number, toleranceMeters: number, keep: boolean[]) {
+  if (endIndex <= startIndex + 1) {
+    return;
+  }
+
+  let farthestIndex = -1;
+  let farthestDistance = 0;
+
+  for (let index = startIndex + 1; index < endIndex; index += 1) {
+    const distance = getPerpendicularDistanceMeters(points[index], points[startIndex], points[endIndex]);
+    if (distance > farthestDistance) {
+      farthestDistance = distance;
+      farthestIndex = index;
+    }
+  }
+
+  if (farthestIndex !== -1 && farthestDistance > toleranceMeters) {
+    keep[farthestIndex] = true;
+    simplifyRouteSection(points, startIndex, farthestIndex, toleranceMeters, keep);
+    simplifyRouteSection(points, farthestIndex, endIndex, toleranceMeters, keep);
+  }
+}
+
+function simplifyRouteCoordinates(points: LngLat[], toleranceMeters: number) {
+  if (points.length <= 2) {
+    return points;
+  }
+
+  const keep = points.map(() => false);
+  keep[0] = true;
+  keep[points.length - 1] = true;
+  simplifyRouteSection(points, 0, points.length - 1, toleranceMeters, keep);
+
+  return points.filter((_, index) => keep[index]);
+}
+
+function sampleRouteForShapeChecks(points: LngLat[]) {
+  if (points.length <= 2) {
+    return points;
+  }
+
+  const sampled: LngLat[] = [points[0]];
+  let lastKept = points[0];
+
+  for (let index = 1; index < points.length - 1; index += 1) {
+    const point = points[index];
+    if (getDistanceMeters(lastKept, point) >= 18) {
+      sampled.push(point);
+      lastKept = point;
+    }
+  }
+
+  const lastPoint = points[points.length - 1];
+  if (getDistanceMeters(sampled[sampled.length - 1], lastPoint) > 0) {
+    sampled.push(lastPoint);
+  }
+
+  if (sampled.length <= 420) {
+    return sampled;
+  }
+
+  const stride = Math.ceil(sampled.length / 420);
+  return sampled.filter((_, index) => index === 0 || index === sampled.length - 1 || index % stride === 0);
+}
+
+function getCumulativeDistances(points: LngLat[]) {
+  const distances = [0];
+
+  for (let index = 1; index < points.length; index += 1) {
+    distances[index] = distances[index - 1] + getDistanceMeters(points[index - 1], points[index]);
+  }
+
+  return distances;
+}
+
+function findClosestWaypointIndex(point: LngLat, waypoints: LngLat[]) {
+  let closestIndex = -1;
+  let closestDistance = Number.POSITIVE_INFINITY;
+
+  waypoints.forEach((waypoint, index) => {
+    const distance = getDistanceMeters(point, waypoint);
+    if (distance < closestDistance) {
+      closestDistance = distance;
+      closestIndex = index;
+    }
+  });
+
+  return closestDistance <= 70 ? closestIndex : -1;
+}
+
+function getRouteBacktrackIssue(routeCoordinates: LngLat[], waypoints: LngLat[], allowLoop: boolean) {
+  const sampled = sampleRouteForShapeChecks(routeCoordinates);
+  const cumulativeDistances = getCumulativeDistances(sampled);
+  const minIndexGap = Math.max(6, Math.floor(sampled.length * 0.04));
+
+  for (let index = 0; index < sampled.length; index += 1) {
+    for (let nextIndex = index + minIndexGap; nextIndex < sampled.length; nextIndex += 1) {
+      if (allowLoop && index <= 2 && nextIndex >= sampled.length - 3) {
+        continue;
+      }
+
+      const pathDistance = cumulativeDistances[nextIndex] - cumulativeDistances[index];
+      if (pathDistance < ROUTE_REVISIT_PATH_METERS) {
+        continue;
+      }
+
+      if (getDistanceMeters(sampled[index], sampled[nextIndex]) <= ROUTE_REVISIT_DISTANCE_METERS) {
+        const waypointIndex = findClosestWaypointIndex(sampled[index], waypoints);
+        const waypointText = waypointIndex >= 0 ? ` near waypoint ${waypointIndex + 1}` : '';
+        return `This route doubles back${waypointText}. Try removing that point or placing it on the trail you want to follow.`;
+      }
+    }
+  }
+
+  return null;
+}
+
+function hasSegmentIntersection(a: LngLat, b: LngLat, c: LngLat, d: LngLat) {
+  const origin = a;
+  const pointA = projectToMeters(a, origin);
+  const pointB = projectToMeters(b, origin);
+  const pointC = projectToMeters(c, origin);
+  const pointD = projectToMeters(d, origin);
+  const cross = (left: typeof pointA, middle: typeof pointA, right: typeof pointA) =>
+    (middle.x - left.x) * (right.y - left.y) - (middle.y - left.y) * (right.x - left.x);
+  const first = cross(pointA, pointB, pointC);
+  const second = cross(pointA, pointB, pointD);
+  const third = cross(pointC, pointD, pointA);
+  const fourth = cross(pointC, pointD, pointB);
+
+  return first * second < 0 && third * fourth < 0;
+}
+
+function getRouteShapeIssue(routeCoordinates: LngLat[], waypoints: LngLat[], allowLoop: boolean) {
+  const waypointDistance = getPathDistanceMeters(waypoints);
+  const routeDistance = getPathDistanceMeters(routeCoordinates);
+
+  if (waypointDistance > 0 && routeDistance > Math.max(waypointDistance * 3.5, waypointDistance + 1500)) {
+    return 'This route is much longer than the points you selected. One waypoint may be off the natural walking path.';
+  }
+
+  const backtrackIssue = getRouteBacktrackIssue(routeCoordinates, waypoints, allowLoop);
+  if (backtrackIssue) {
+    return backtrackIssue;
+  }
+
+  const sampled = sampleRouteForShapeChecks(routeCoordinates);
+  for (let index = 0; index < sampled.length - 3; index += 1) {
+    for (let nextIndex = index + 2; nextIndex < sampled.length - 1; nextIndex += 1) {
+      if (allowLoop && index === 0 && nextIndex >= sampled.length - 3) {
+        continue;
+      }
+
+      if (hasSegmentIntersection(sampled[index], sampled[index + 1], sampled[nextIndex], sampled[nextIndex + 1])) {
+        return 'This route crosses over itself. Try moving or deleting the waypoint that causes the crossing.';
+      }
+    }
+  }
+
+  return null;
+}
+
+function cleanRecordedRouteCoordinates(points: LngLat[]) {
+  const validPoints = points.filter(isValidCoordinate);
+  if (validPoints.length <= 2) {
+    return validPoints;
+  }
+
+  const withoutTinyMoves = validPoints.reduce<LngLat[]>((cleaned, point) => {
+    const previous = cleaned[cleaned.length - 1];
+    if (previous && getDistanceMeters(previous, point) < GPS_MIN_MOVEMENT_METERS) {
+      return cleaned;
+    }
+
+    cleaned.push(point);
+    return cleaned;
+  }, []);
+
+  const withoutSpikes = withoutTinyMoves.filter((point, index) => {
+    if (index === 0 || index === withoutTinyMoves.length - 1) {
+      return true;
+    }
+
+    const previous = withoutTinyMoves[index - 1];
+    const next = withoutTinyMoves[index + 1];
+    const previousDistance = getDistanceMeters(previous, point);
+    const nextDistance = getDistanceMeters(point, next);
+    const returnDistance = getDistanceMeters(previous, next);
+
+    return !(previousDistance > GPS_SPIKE_DISTANCE_METERS && nextDistance > GPS_SPIKE_DISTANCE_METERS && returnDistance < GPS_SPIKE_RETURN_METERS);
+  });
+
+  return simplifyRouteCoordinates(withoutSpikes, GPS_SIMPLIFY_TOLERANCE_METERS);
+}
+
 function confirmDuplicateTrail(warning: DuplicateTrailWarning) {
   const strongestMatch = warning.matches[0];
   const matchName = strongestMatch?.name ?? 'an existing public trail';
@@ -278,12 +524,46 @@ function confirmDuplicateTrail(warning: DuplicateTrailWarning) {
   });
 }
 
+function formatHazardWarningItem(warning: unknown) {
+  if (typeof warning === 'string') {
+    return warning;
+  }
+
+  if (warning && typeof warning === 'object') {
+    const item = warning as Record<string, unknown>;
+    return String(item.warning_en ?? item.warning ?? item.message ?? JSON.stringify(item));
+  }
+
+  return String(warning);
+}
+
+function confirmHazardWarning(warnings: unknown[]) {
+  const messages = warnings.slice(0, 5).map(formatHazardWarningItem).filter(Boolean);
+  const messageText = messages.length > 0
+    ? `This route passes through hazardous or settlement areas.\n\n${messages.join('\n')}\n\nProceed anyway?`
+    : 'This route passes through hazardous or settlement areas.\n\nProceed anyway?';
+
+  return new Promise<boolean>((resolve) => {
+    Alert.alert(
+      'Route hazard warning',
+      messageText,
+      [
+        { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+        { text: 'Create anyway', style: 'destructive', onPress: () => resolve(true) },
+      ],
+      { cancelable: true },
+    );
+  });
+}
+
 function buildDirectionsUrl(waypoints: LngLat[]) {
   const coordinates = waypoints.map(([lng, lat]) => `${lng},${lat}`).join(';');
   const params = new URLSearchParams({
     access_token: MAPBOX_ACCESS_TOKEN,
+    alternatives: 'true',
     geometries: 'geojson',
     overview: 'full',
+    steps: 'false',
   });
 
   return `https://api.mapbox.com/directions/v5/mapbox/walking/${coordinates}?${params.toString()}`;
@@ -370,6 +650,7 @@ export function TrailCreator({
   const [recordingStartedAt, setRecordingStartedAt] = useState<number | null>(null);
   const [isMapReady, setIsMapReady] = useState(false);
   const [isTrailInfoCollapsed, setIsTrailInfoCollapsed] = useState(false);
+  const [isParsingDescription, setIsParsingDescription] = useState(false);
 
   const [zoomLevel, setZoomLevel] = useState(initialZoom);
   const [pitch, setPitch] = useState(0); // 0 for 2D, 45 for 3D
@@ -441,6 +722,43 @@ export function TrailCreator({
       return alreadyExists ? current : [...current, nextFeature];
     });
     setFeatureDraft('');
+  };
+
+  const handleParseDescription = async () => {
+    const source = description.trim();
+    if (!source) {
+      Alert.alert('Add a description first', 'Write a rough trail description, then parse it for suggestions.');
+      return;
+    }
+
+    setIsParsingDescription(true);
+    try {
+      const parsed = await parseTrailDescription(source);
+      if (parsed.name_suggestion) {
+        setName((current) => current.trim() || parsed.name_suggestion);
+      }
+      if (parsed.description_suggestion) {
+        setDescription(parsed.description_suggestion);
+        lastAiDescriptionRef.current = parsed.description_suggestion;
+      }
+      if (parsed.region) {
+        setRegion((current) => current.trim() || parsed.region || current);
+      }
+      if (parsed.labels?.length) {
+        setFeatures((current) => Array.from(new Set([...current, ...parsed.labels])));
+      }
+      if (parsed.length_km && stats) {
+        setStats({
+          ...stats,
+          length_meters: parsed.length_km * 1000,
+          estimated_duration_minutes: parsed.duration_minutes ?? stats.estimated_duration_minutes,
+        });
+      }
+    } catch (error) {
+      Alert.alert('Unable to parse description', error instanceof Error ? error.message : 'Please try again.');
+    } finally {
+      setIsParsingDescription(false);
+    }
   };
 
   const removeFeature = (featureToRemove: string) => {
@@ -614,11 +932,15 @@ export function TrailCreator({
           timeInterval: 2500,
         },
         (location) => {
+          if (location.coords.accuracy !== null && location.coords.accuracy > GPS_MAX_ACCURACY_METERS) {
+            return;
+          }
+
           const nextCoordinate: LngLat = [location.coords.longitude, location.coords.latitude];
 
           setRouteCoordinates((currentPath) => {
             const previousCoordinate = currentPath[currentPath.length - 1];
-            if (previousCoordinate && getDistanceMeters(previousCoordinate, nextCoordinate) < 5) {
+            if (previousCoordinate && getDistanceMeters(previousCoordinate, nextCoordinate) < GPS_MIN_MOVEMENT_METERS) {
               return currentPath;
             }
 
@@ -676,12 +998,22 @@ export function TrailCreator({
 
     try {
       const elapsedSeconds = recordingStartedAt ? Math.max(60, Math.round((Date.now() - recordingStartedAt) / 1000)) : Math.max(60, routeCoordinates.length * 5);
+      const cleanedRouteCoordinates = cleanRecordedRouteCoordinates(routeCoordinates);
+
+      if (cleanedRouteCoordinates.length < 2) {
+        throw new Error('The recording only captured noisy GPS points. Try recording again with a clearer location signal.');
+      }
+
+      setRouteCoordinates(cleanedRouteCoordinates);
+      setStartCoordinate(cleanedRouteCoordinates[0]);
+      setEndCoordinate(cleanedRouteCoordinates[cleanedRouteCoordinates.length - 1]);
+      const cleanedDistanceMeters = getPathDistanceMeters(cleanedRouteCoordinates);
 
       try {
-        const analysis = await analyzeTrailRoute({ coordinates: routeCoordinates });
+        const analysis = await analyzeTrailRoute({ coordinates: cleanedRouteCoordinates });
         applyRouteAnalysis(analysis);
       } catch {
-        setStats(toFallbackStats(recordedDistanceMeters, elapsedSeconds));
+        setStats(toFallbackStats(cleanedDistanceMeters, elapsedSeconds));
         setFeatures([]);
       }
 
@@ -755,22 +1087,36 @@ export function TrailCreator({
       }
 
       const json = (await res.json()) as DirectionsResponse;
-      const route = json.routes?.[0];
-      const geometryCoordinates = route?.geometry?.coordinates;
+      const routes = json.routes ?? [];
+      const selectedRoute = routes.find((candidate) => {
+        const coordinates = candidate.geometry?.coordinates;
+        return Boolean(coordinates && coordinates.length >= 2 && !getRouteShapeIssue(coordinates, waypoints, isLoop));
+      });
+      const route = selectedRoute ?? routes[0];
+      const geometryCoordinates = selectedRoute?.geometry?.coordinates;
 
-      if (!route || !geometryCoordinates || geometryCoordinates.length < 2) {
+      if (!route) {
         throw new Error('No route was returned for those points.');
       }
 
-      setRouteCoordinates(geometryCoordinates);
+      const finalCoordinates = geometryCoordinates && geometryCoordinates.length >= 2 ? geometryCoordinates : waypoints;
+      const usedTappedPathFallback = finalCoordinates === waypoints;
+      const finalDistanceMeters = usedTappedPathFallback ? getPathDistanceMeters(finalCoordinates) : route.distance;
+      const finalDurationSeconds = usedTappedPathFallback ? estimateWalkingDurationSeconds(finalDistanceMeters) : route.duration;
+
+      if (usedTappedPathFallback) {
+        setSaveSuccess('Mapbox walking snapped to a road detour, so this trail is using your tapped hiking path instead.');
+      }
+
+      setRouteCoordinates(finalCoordinates);
       setIsDrawing(false);
       setIsFinished(true);
 
       try {
-        const analysis = await analyzeTrailRoute({ coordinates: geometryCoordinates });
+        const analysis = await analyzeTrailRoute({ coordinates: finalCoordinates });
         applyRouteAnalysis(analysis);
       } catch {
-        setStats(toFallbackStats(route.distance, route.duration));
+        setStats(toFallbackStats(finalDistanceMeters, finalDurationSeconds));
         setFeatures([]);
       }
     } catch (e) {
@@ -820,6 +1166,7 @@ export function TrailCreator({
         region: region.trim() || undefined,
         features,
       });
+      const createStatus = status === 'published' ? 'draft' : status;
       const payload: SaveTrailBody = {
         name: name.trim(),
         nameAr: translatedTrail.nameAr,
@@ -830,13 +1177,35 @@ export function TrailCreator({
         features,
         featuresAr: translatedTrail.featuresAr,
         tags: features,
-        status: 'draft',
+        status: createStatus,
         visibility: status === 'published' ? 'public' : 'private',
         confirm_duplicate: confirmedDuplicate,
         coordinates: routeCoordinates,
         stats,
       };
-      const json = await createTrail(payload);
+
+      let json;
+      try {
+        json = await createTrail(payload);
+      } catch (error) {
+        const errorPayload = error instanceof ApiError ? error.payload as { warnings?: unknown[] } | undefined : undefined;
+        if (
+          error instanceof ApiError &&
+          error.status === 400 &&
+          Array.isArray(errorPayload?.warnings) &&
+          errorPayload.warnings.length > 0
+        ) {
+          const shouldProceed = await confirmHazardWarning(errorPayload.warnings);
+          if (!shouldProceed) {
+            return;
+          }
+
+          payload.confirm_hazard = true;
+          json = await createTrail(payload);
+        } else {
+          throw error;
+        }
+      }
       if (trailImage) {
         try {
           await uploadTrailPhoto(json.data.id, trailImage);
@@ -851,8 +1220,10 @@ export function TrailCreator({
       }
 
       setTrailRouteCoordinates(json.data.id, routeCoordinates);
-      setSaveSuccess(status === 'published' ? 'Published!' : 'Draft saved!');
       onSaved?.({ ...payload, id: json.data.id, status });
+      if (status === 'draft') {
+        setSaveSuccess('Draft saved!');
+      }
     } catch (e) {
       setSaveError(e instanceof Error ? e.message : status === 'published' ? 'Failed to publish trail.' : 'Failed to save draft.');
     } finally {
@@ -1169,7 +1540,21 @@ export function TrailCreator({
                     />
                   </View>
                   <View style={styles.formRow}>
-                    <Text style={styles.inputLabel}>Description</Text>
+                    <View style={styles.labelRow}>
+                      <Text style={styles.inputLabel}>Description</Text>
+                      <Pressable
+                        style={[styles.parseDescriptionButton, isParsingDescription && styles.disabledButton]}
+                        onPress={() => void handleParseDescription()}
+                        disabled={isParsingDescription}
+                      >
+                        {isParsingDescription ? (
+                          <ActivityIndicator size="small" color="#630E13" />
+                        ) : (
+                          <Ionicons name="sparkles-outline" size={14} color="#630E13" />
+                        )}
+                        <Text style={styles.parseDescriptionText}>Parse with AI</Text>
+                      </Pressable>
+                    </View>
                     <TextInput
                       value={description}
                       onChangeText={setDescription}
@@ -1236,6 +1621,8 @@ export function TrailCreator({
                       )}
                     </View>
                   </View>
+
+                  
 
                   <View style={styles.formRow}>
                     <Text style={styles.inputLabel}>Trail photo</Text>
@@ -1516,6 +1903,20 @@ const styles = StyleSheet.create({
 
   formRow: { marginTop: 10 },
   inputLabel: { fontSize: 12, fontWeight: '900', color: '#2C2418', marginBottom: 6 },
+  labelRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 },
+  parseDescriptionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: '#F7EBE8',
+  },
+  disabledButton: {
+    opacity: 0.65,
+  },
+  parseDescriptionText: { fontSize: 11, fontWeight: '800', color: '#630E13' },
   input: {
     backgroundColor: '#fff',
     borderRadius: 14,
@@ -1632,6 +2033,7 @@ const styles = StyleSheet.create({
   featureChipTextSelected: {
     color: '#fff',
   },
+  
   emptyFeaturesBox: {
     width: '100%',
     paddingVertical: 12,

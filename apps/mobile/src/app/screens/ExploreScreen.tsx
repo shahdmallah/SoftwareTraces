@@ -23,7 +23,7 @@ import { useLanguage } from '../contexts/LanguageContext';
 import { getTrailSafety, type TrailSafety } from '../api/safetyApi';
 import { downloadOfflineMap } from '../api/offlineApi';
 import { RootStackParamList } from '../navigation/types';
-import { getOfflineMapPacks, saveOfflineMapPack } from '../state/offlineMaps';
+import { getOfflineMapPacks, saveOfflineMapPack, type OfflineMapPack } from '../state/offlineMaps';
 import { useOwnedTrails } from '../state/ownedTrails';
 import { theme } from '../theme';
 import { ltrRow, ltrText, rtlRow, rtlText } from '../utils/direction';
@@ -131,6 +131,44 @@ function isExploreVisibleTrail(trail: Trail, localDraftIds: Set<string>) {
   return trail.isPublic !== false;
 }
 
+function buildTrailFromOfflinePack(pack: OfflineMapPack): Trail {
+  if (pack.trail) {
+    return {
+      ...pack.trail,
+      coordinates: pack.coordinates ?? pack.trail.coordinates,
+      routeCoordinates: pack.routeCoordinates?.length ? pack.routeCoordinates : pack.trail.routeCoordinates,
+    };
+  }
+
+  return {
+    id: pack.trailId,
+    name: pack.trailName,
+    nameAr: pack.trailNameAr || pack.trailName,
+    region: pack.region ?? '',
+    regionAr: pack.regionAr ?? pack.region ?? '',
+    description: '',
+    descriptionAr: '',
+    distance: 0,
+    duration: '',
+    elevationGain: 0,
+    elevationMin: 0,
+    elevationMax: 0,
+    difficulty: 'Easy',
+    rating: 0,
+    reviews: 0,
+    image: '',
+    images: [],
+    features: [],
+    featuresAr: [],
+    hasCheckpoint: false,
+    coordinates: pack.coordinates ?? [31.78, 35.24],
+    routeCoordinates: pack.routeCoordinates,
+    mapX: 0,
+    mapY: 0,
+    tags: [],
+  };
+}
+
 export function ExploreScreen() {
   const navigation = useNavigation<ExploreNavigationProp>();
   const [search, setSearch] = useState('');
@@ -187,7 +225,19 @@ export function ExploreScreen() {
         }
       } catch (error) {
         if (!cancelled) {
-          setErrorMessage(error instanceof Error ? error.message : 'Unable to load trails right now.');
+          const offlinePacks = await getOfflineMapPacks().catch(() => [] as OfflineMapPack[]);
+          const offlineTrails = offlinePacks
+            .map(buildTrailFromOfflinePack)
+            .filter((trail) => isExploreVisibleTrail(trail, localDraftIds));
+
+          setFetchedTrails(offlineTrails);
+          setErrorMessage(
+            offlineTrails.length
+              ? isArabic
+                ? 'تعذر الاتصال بالخادم. نعرض المسارات المحفوظة على هذا الجهاز.'
+                : 'Unable to reach the API. Showing trails saved on this device.'
+              : error instanceof Error ? error.message : 'Unable to load trails right now.',
+          );
         }
       } finally {
         if (!cancelled) setIsLoading(false);
@@ -196,7 +246,7 @@ export function ExploreScreen() {
 
     const timeoutId = setTimeout(() => { void loadTrails(); }, 250);
     return () => { cancelled = true; clearTimeout(timeoutId); };
-  }, [difficulty, length, localDraftIds, refreshKey, search]);
+  }, [difficulty, isArabic, length, localDraftIds, refreshKey, search]);
 
   useEffect(() => {
     let cancelled = false;

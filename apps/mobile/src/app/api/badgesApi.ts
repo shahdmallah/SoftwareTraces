@@ -1,0 +1,32 @@
+import { apiRequest } from './client';
+
+type Envelope<T> = { data: T };
+
+export type Badge = {
+  id: string;
+  badge_id?: string;
+  code?: string;
+  name?: string;
+  name_ar?: string | null;
+  title?: string;
+  description?: string | null;
+  description_ar?: string | null;
+  category?: string | null;
+  badge_icon_url?: string | null;
+  icon_url?: string | null;
+  points?: number;
+  earned?: boolean;
+  earned_at?: string | null;
+  progress_current?: number;
+  progress_target?: number;
+};
+
+export async function getBadges() {
+  const response = await apiRequest<Envelope<Badge[]>>('/api/badges');
+  return response.data;
+}
+
+export async function getMyBadges() {
+  const response = await apiRequest<Envelope<Badge[]>>('/api/badges/me');
+  return response.data;
+}

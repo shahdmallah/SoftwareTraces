@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
 import { listConversations, markConversationRead, type Conversation } from '../api/messagesApi';
+import { searchProfiles, type Profile } from '../api/profilesApi';
 import { getFriendSuggestions, getMyFriends, type FriendSuggestion, type SocialProfile } from '../api/socialApi';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
@@ -81,6 +82,9 @@ export function ActivityMessagesScreen() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [contacts, setContacts] = useState<SocialProfile[]>([]);
   const [suggestions, setSuggestions] = useState<FriendSuggestion[]>([]);
+  const [peopleSearchResults, setPeopleSearchResults] = useState<Profile[]>([]);
+  const [isPeopleSearchLoading, setIsPeopleSearchLoading] = useState(false);
+  const [peopleSearchError, setPeopleSearchError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isConversationApiReady, setIsConversationApiReady] = useState(true);
 
@@ -120,6 +124,44 @@ export function ActivityMessagesScreen() {
     };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    const searchRemotePeople = async () => {
+      if (!normalizedQuery) {
+        setPeopleSearchResults([]);
+        setPeopleSearchError(null);
+        setIsPeopleSearchLoading(false);
+        return;
+      }
+
+      setIsPeopleSearchLoading(true);
+      setPeopleSearchError(null);
+
+      try {
+        const profiles = await searchProfiles(normalizedQuery, { page: 1, limit: 20 });
+        if (!cancelled) {
+          setPeopleSearchResults(profiles.filter((profile) => profile.id !== user?.id));
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setPeopleSearchError(error instanceof Error ? error.message : 'Unable to search people.');
+          setPeopleSearchResults([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setIsPeopleSearchLoading(false);
+        }
+      }
+    };
+
+    void searchRemotePeople();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [normalizedQuery, user?.id]);
+
   const filteredConversations = useMemo(
     () => conversations.filter((conversation) => matchesQuery(conversation, normalizedQuery, user?.id)),
     [conversations, normalizedQuery, user?.id],
@@ -150,10 +192,10 @@ export function ActivityMessagesScreen() {
     });
   };
 
-  const openDirect = (contact: SocialProfile | FriendSuggestion) => {
+  const openDirect = (contact: SocialProfile | FriendSuggestion | Profile) => {
     navigation.navigate('ActivityThread', {
       participantId: contact.id,
-      friendId: contact.id,
+      friendId: 'relationship' in contact && contact.relationship?.is_friend ? contact.id : undefined,
       participantName: contact.full_name,
       participantAvatar: contact.avatar_url,
       contextType: 'direct',
@@ -277,22 +319,58 @@ export function ActivityMessagesScreen() {
           <View style={[styles.sectionRow, isArabic ? rtlRow : ltrRow]}>
             <Text style={[styles.sectionTitle, isArabic ? rtlText : ltrText]}>{isArabic ? 'ابدأ محادثة مباشرة' : 'Start a direct chat'}</Text>
           </View>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={[styles.friendsRow, isArabic && styles.friendsRowRtl]}>
-            {filteredContacts.map((friend) => (
-              <ContactCard key={friend.id} contact={friend} isArabic={isArabic} onPress={() => openDirect(friend)} />
-            ))}
-            {filteredSuggestions.map((friend) => (
-              <ContactCard key={`suggestion-${friend.id}`} contact={friend} isArabic={isArabic} suggested onPress={() => openDirect(friend)} />
-            ))}
-            {!filteredContacts.length && !filteredSuggestions.length ? (
-              <View style={styles.inlineStateCard}>
-                <Ionicons name="people-outline" size={24} color="#8A7A6A" />
-                <Text style={[styles.inlineStateText, isArabic ? rtlText : ltrText]}>
-                  {isArabic ? 'لا يوجد أشخاص مطابقون.' : 'No matching people yet.'}
+          {normalizedQuery ? (
+            <View>
+              <View style={[styles.sectionRow, isArabic ? rtlRow : ltrRow]}>
+                <Text style={[styles.sectionTitle, isArabic ? rtlText : ltrText]}>
+                  {isArabic ? 'البحث عن الأشخاص' : 'Search all people'}
                 </Text>
+                {isPeopleSearchLoading ? (
+                  <ActivityIndicator color="#630E13" />
+                ) : null}
               </View>
-            ) : null}
-          </ScrollView>
+              {peopleSearchError ? (
+                <View style={styles.inlineStateCard}>
+                  <Text style={[styles.inlineStateText, isArabic ? rtlText : ltrText]}>{peopleSearchError}</Text>
+                </View>
+              ) : peopleSearchResults.length ? (
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={[styles.friendsRow, isArabic && styles.friendsRowRtl]}>
+                  {peopleSearchResults.map((profile) => (
+                    <ContactCard
+                      key={`search-${profile.id}`}
+                      contact={profile}
+                      isArabic={isArabic}
+                      onPress={() => openDirect(profile)}
+                    />
+                  ))}
+                </ScrollView>
+              ) : (
+                <View style={styles.inlineStateCard}>
+                  <Ionicons name="people-outline" size={24} color="#8A7A6A" />
+                  <Text style={[styles.inlineStateText, isArabic ? rtlText : ltrText]}>
+                    {isArabic ? 'لا يوجد أشخاص مطابقين.' : 'No matching people found.'}
+                  </Text>
+                </View>
+              )}
+            </View>
+          ) : (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={[styles.friendsRow, isArabic && styles.friendsRowRtl]}>
+              {filteredContacts.map((friend) => (
+                <ContactCard key={friend.id} contact={friend} isArabic={isArabic} onPress={() => openDirect(friend)} />
+              ))}
+              {filteredSuggestions.map((friend) => (
+                <ContactCard key={`suggestion-${friend.id}`} contact={friend} isArabic={isArabic} suggested onPress={() => openDirect(friend)} />
+              ))}
+              {!filteredContacts.length && !filteredSuggestions.length ? (
+                <View style={styles.inlineStateCard}>
+                  <Ionicons name="people-outline" size={24} color="#8A7A6A" />
+                  <Text style={[styles.inlineStateText, isArabic ? rtlText : ltrText]}>
+                    {isArabic ? 'لا يوجد أشخاص مطابقون.' : 'No matching people yet.'}
+                  </Text>
+                </View>
+              ) : null}
+            </ScrollView>
+          )}
         </AnimatedBlock>
       </ScrollView>
     </AnimatedScreen>
@@ -305,7 +383,7 @@ function ContactCard({
   suggested,
   onPress,
 }: {
-  contact: SocialProfile | FriendSuggestion;
+  contact: SocialProfile | FriendSuggestion | Profile;
   isArabic: boolean;
   suggested?: boolean;
   onPress: () => void;

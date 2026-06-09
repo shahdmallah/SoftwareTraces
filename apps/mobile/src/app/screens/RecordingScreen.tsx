@@ -31,6 +31,7 @@ const fallbackCenter: [number, number] = [35.24, 31.78];
 const SAFETY_ALERT_RADIUS_METERS = 5000;
 const SAFETY_ALERT_REFRESH_MS = 60000;
 const SAFETY_ALERT_REFRESH_DISTANCE_METERS = 250;
+const OFF_ROUTE_DISTANCE_METERS = 50;
 
 let Mapbox: MapboxModule | null = null;
 let mapboxLoadError: string | null = null;
@@ -133,7 +134,7 @@ function buildNavigationHint(
   const targetPoint = routeCoordinates[targetIndex];
   const distanceToTarget = Math.round(getDistanceMeters(currentLocation, targetPoint));
   const heading = toCompassDirection(getBearingDegrees(currentLocation, targetPoint));
-  const offRoute = nearestDistance != null && nearestDistance > 120;
+  const offRoute = nearestDistance != null && nearestDistance > OFF_ROUTE_DISTANCE_METERS;
 
   if (offRoute) {
     return `Navigation: Head ${heading} for about ${Math.max(distanceToTarget, 20)} m to rejoin the trail line.`;
@@ -218,6 +219,10 @@ export function RecordingScreen() {
   const navigationProgressPercent = session?.navigationProgressPercent ?? null;
   const navigationOffTrack = session?.navigationOffTrack ?? null;
   const navigationDeviationMeters = session?.navigationDeviationMeters ?? null;
+  const routeDeviationMeters = navigationDeviationMeters ?? nearestDistance;
+  const isFarOffRoute = routeDeviationMeters != null
+    ? routeDeviationMeters > OFF_ROUTE_DISTANCE_METERS
+    : navigationOffTrack === true;
   const routeCoordinates = trail?.routeCoordinates?.length ? trail.routeCoordinates : [];
   const navigationHint = useMemo(
     () => buildNavigationHint(currentLocation, routeCoordinates, nearestDistance),
@@ -692,13 +697,13 @@ export function RecordingScreen() {
 
               <Text style={styles.timerText}>{formatElapsed(elapsedMs)}</Text>
               <Text style={styles.timerCaption}>
-                {navigationOffTrack != null
-                  ? navigationOffTrack
-                    ? `${Math.round(navigationDeviationMeters ?? nearestDistance ?? 0)} m off route`
+                {routeDeviationMeters != null
+                  ? isFarOffRoute
+                    ? `${Math.round(routeDeviationMeters)} m off route`
                     : 'Navigation says you are on route'
                   : nearestDistance == null
                   ? 'Checking your trail position...'
-                  : nearestDistance <= 120
+                  : nearestDistance <= OFF_ROUTE_DISTANCE_METERS
                   ? 'You are on the route'
                   : `${Math.round(nearestDistance)} m off route`}
               </Text>
@@ -817,19 +822,29 @@ export function RecordingScreen() {
                     {navigationProgressPercent != null ? (
                       <View style={styles.metricChip}>
                         <Ionicons name="flag-outline" size={15} color="#630E13" />
-                        <Text style={styles.metricChipText}>{navigationProgressPercent}% trail progress</Text>
+                        <Text style={styles.metricChipText}>
+                          {isFarOffRoute ? 'Progress paused off route' : `${navigationProgressPercent}% trail progress`}
+                        </Text>
                       </View>
                     ) : null}
                     <View style={styles.metricChip}>
                       <Ionicons name="navigate-outline" size={15} color="#630E13" />
                       <Text style={styles.metricChipText}>
-                        {recordedPath.length > 1 ? `${recordedPath.length} points tracked` : 'Waiting for movement'}
+                        {isFarOffRoute
+                          ? 'Tracking paused off route'
+                          : recordedPath.length > 1
+                          ? `${recordedPath.length} points tracked`
+                          : 'Waiting for movement'}
                       </Text>
                     </View>
                     <View style={styles.metricChip}>
                       <Ionicons name="footsteps-outline" size={15} color="#630E13" />
                       <Text style={styles.metricChipText}>
-                        {isStepCountingAvailable === false ? 'Steps unavailable' : `${stepCount} steps`}
+                        {isStepCountingAvailable === false
+                          ? 'Steps unavailable'
+                          : isFarOffRoute
+                          ? 'Steps paused off route'
+                          : `${stepCount} steps`}
                       </Text>
                     </View>
                     <View style={styles.metricChip}>
@@ -840,13 +855,13 @@ export function RecordingScreen() {
 
                   <View style={styles.statusCard}>
                     <Text style={styles.statusTitle}>
-                      {navigationOffTrack != null
-                        ? navigationOffTrack
-                          ? `Navigation alert: ${Math.round(navigationDeviationMeters ?? nearestDistance ?? 0)} m off route`
+                      {routeDeviationMeters != null
+                        ? isFarOffRoute
+                          ? `Navigation alert: ${Math.round(routeDeviationMeters)} m off route`
                           : 'Navigation confirms you are on route'
                         : nearestDistance == null
                         ? 'Checking your trail position...'
-                        : nearestDistance <= 120
+                        : nearestDistance <= OFF_ROUTE_DISTANCE_METERS
                         ? 'You are on the trail preview'
                         : `You are about ${Math.round(nearestDistance)} m from the trail`}
                     </Text>

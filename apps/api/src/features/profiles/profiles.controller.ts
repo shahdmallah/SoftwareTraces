@@ -8,11 +8,11 @@ interface ProfileRow {
   id: string;
   user_id: string;
   full_name: string;
+  role: string;       
   avatar_url: string | null;
   bio: string | null;
   location: string | null;
 }
-
 interface ProfileStatsRow {
   total_reviews: string;
   total_photos: string;
@@ -104,6 +104,7 @@ async function getProfileByUserId(userId: string): Promise<ProfileRow> {
        id,
        user_id,
        full_name,
+       role,
        avatar_url,
        bio,
        location
@@ -113,11 +114,83 @@ async function getProfileByUserId(userId: string): Promise<ProfileRow> {
     [userId]
   );
 
+
   if (profileResult.rows.length === 0) {
     throw new Error("PROFILE_NOT_FOUND");
   }
 
   return profileResult.rows[0];
+}
+
+interface ProfileSearchRow {
+  id: string;
+  user_id: string;
+  full_name: string;
+  role: string;
+  avatar_url: string | null;
+  bio: string | null;
+  location: string | null;
+}
+
+export async function searchProfiles(req: Request, res: Response): Promise<void> {
+  try {
+    const q = String(req.query.q ?? "").trim();
+    const { page, limit, offset } = getPagination(req.query);
+    const searchTerm = `%${q}%`;
+
+    const [countResult, profilesResult] = await Promise.all([
+      pool.query<{ count: string }>(
+        `SELECT COUNT(*) AS count
+         FROM profiles
+         WHERE full_name ILIKE $1
+            OR bio ILIKE $1
+            OR location ILIKE $1`,
+        [searchTerm]
+      ),
+      pool.query<ProfileSearchRow>(
+        `SELECT
+           id,
+           user_id,
+           full_name,
+           role,
+           avatar_url,
+           bio,
+           location
+         FROM profiles
+         WHERE full_name ILIKE $1
+            OR bio ILIKE $1
+            OR location ILIKE $1
+         ORDER BY full_name ASC
+         LIMIT $2 OFFSET $3`,
+        [searchTerm, limit, offset]
+      ),
+    ]);
+
+    const total = Number(countResult.rows[0]?.count ?? 0);
+
+    res.json({
+      data: profilesResult.rows.map((row) => ({
+        id: row.id,
+        user_id: row.user_id,
+        full_name: row.full_name,
+        role: row.role,
+        avatar_url: row.avatar_url,
+        bio: row.bio,
+        location: row.location,
+      })),
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: total === 0 ? 0 : Math.ceil(total / limit),
+      },
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: "Internal server error",
+      details: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 export async function getProfile(req: Request, res: Response): Promise<void> {
@@ -263,6 +336,7 @@ export async function getProfile(req: Request, res: Response): Promise<void> {
         id: profile.id,
         user_id: profile.user_id,
         full_name: profile.full_name,
+        role: profile.role,
         avatar_url: profile.avatar_url,
         bio: profile.bio,
         location: profile.location,

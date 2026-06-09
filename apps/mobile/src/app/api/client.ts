@@ -14,11 +14,13 @@ export type ApiErrorPayload = {
 
 export class ApiError extends Error {
   status: number;
+  payload?: ApiErrorPayload;
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, payload?: ApiErrorPayload) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
+    this.payload = payload;
   }
 }
 
@@ -99,6 +101,7 @@ export async function apiRequest<T>(
     throw new ApiError(
       getErrorMessage(payload as ApiErrorPayload, 'Request failed.'),
       response.status,
+      payload as ApiErrorPayload,
     );
   }
 
@@ -136,6 +139,7 @@ export async function apiTextRequest(
     throw new ApiError(
       getErrorMessage(payload, 'Request failed.'),
       response.status,
+      payload,
     );
   }
 

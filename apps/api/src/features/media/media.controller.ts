@@ -7,6 +7,7 @@ import { HttpError } from "../../lib/httpError";
 import { requireAuth } from "../../middleware/auth";
 import { verifyPhoto } from "../../services/photoVerificationService";
 import { updateUserStats } from "../achievements/achievements.service";
+import { saveNatureSightingForUser, type CreateNatureSightingInput } from "../trails/trails.controller";
 
 const mediaBucket = "media";
 const validMediaMimeTypes = ["image/jpeg", "image/png", "image/gif", "image/webp"] as const;
@@ -137,6 +138,41 @@ function parseBoolean(value: unknown, defaultValue: boolean): boolean {
   throw new HttpError(400, "is_public must be a boolean");
 }
 
+function parseOptionalJsonObject(value: unknown, fieldName: string): Record<string, unknown> | null {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+
+  if (typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+
+  if (typeof value !== "string") {
+    throw new HttpError(400, `${fieldName} must be a JSON object`);
+  }
+
+  try {
+    const parsed = JSON.parse(value) as unknown;
+
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new HttpError(400, `${fieldName} must be a JSON object`);
+    }
+
+    return parsed as Record<string, unknown>;
+  } catch (error) {
+    if (error instanceof HttpError) {
+      throw error;
+    }
+
+    throw new HttpError(400, `${fieldName} must be valid JSON`);
+  }
+}
+
+function parseNatureSightingLanguage(value: unknown): "en" | "ar" {
+  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return normalized === "ar" ? "ar" : "en";
+}
+
 function sendMediaError(functionName: string, res: Response, error: unknown): void {
   console.log(`[media.${functionName}] error`, error);
 
@@ -163,7 +199,8 @@ export async function uploadMedia(req: Request & { file?: UploadedMediaFile }, r
       longitude: req.body.longitude,
       location_name: req.body.location_name,
       is_public: req.body.is_public,
-      trip_id: req.body.trip_id
+      trip_id: req.body.trip_id,
+      has_classification: Boolean(req.body.classification || req.body.nature_sighting_classification)
     });
 
     if (!isUuid(auth.sub)) {
@@ -192,6 +229,11 @@ export async function uploadMedia(req: Request & { file?: UploadedMediaFile }, r
     const locationName =
       typeof req.body.location_name === "string" && req.body.location_name.trim() !== "" ? req.body.location_name.trim() : null;
     const tripId = typeof req.body.trip_id === "string" && req.body.trip_id.trim() !== "" ? req.body.trip_id.trim() : null;
+    const natureSightingClassification = parseOptionalJsonObject(
+      req.body.classification ?? req.body.nature_sighting_classification,
+      "classification"
+    );
+    const natureSightingLanguage = parseNatureSightingLanguage(req.body.language ?? req.body.nature_sighting_language);
 
     if (tripId && !isUuid(tripId)) {
       throw new HttpError(400, "trip_id must be a valid UUID");
@@ -227,6 +269,34 @@ export async function uploadMedia(req: Request & { file?: UploadedMediaFile }, r
 
     const media = insertResult.rows[0];
     console.log("[media.uploadMedia] media row created", { media_id: media.id });
+    let natureSighting: unknown = null;
+
+    if (natureSightingClassification) {
+      try {
+        const sightingInput: CreateNatureSightingInput = {
+          trail_id: tripId,
+          photo_id: media.id,
+          photo_type: "media",
+          photo_url: publicUrl,
+          latitude,
+          longitude,
+          language: natureSightingLanguage,
+          classification: natureSightingClassification,
+        };
+
+        natureSighting = await saveNatureSightingForUser(auth.sub, sightingInput, tripId);
+        console.log("[media.uploadMedia] nature sighting saved", {
+          media_id: media.id,
+          trip_id: tripId,
+          sighting_id: (natureSighting as { id?: unknown } | null)?.id
+        });
+      } catch (sightingError) {
+        console.warn("[media.uploadMedia] nature sighting skipped but upload will continue", {
+          media_id: media.id,
+          error: sightingError instanceof Error ? sightingError.message : String(sightingError),
+        });
+      }
+    }
 
     try {
       console.log("[media.uploadMedia] verifying uploaded media photo", { media_id: media.id });
@@ -246,7 +316,7 @@ export async function uploadMedia(req: Request & { file?: UploadedMediaFile }, r
       data: {
         ...media,
         source: "media",
-        nature_sighting: null,
+        nature_sighting: natureSighting,
         location: {
           name: locationName,
           latitude: media.latitude,

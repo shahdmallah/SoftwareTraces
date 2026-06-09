@@ -38,6 +38,7 @@ export type Message = {
     avatar_url?: string | null;
   } | null;
   body: string;
+  metadata?: Record<string, unknown> | null;
   created_at: string;
   pending?: boolean;
   failed?: boolean;
@@ -63,9 +64,16 @@ export type StartConversationInput = {
   initial_message?: string;
 };
 
+export type TypingStatePayload = {
+  conversation_id: string;
+  user_id: string;
+  is_typing: boolean;
+};
+
 export type MessagesSocketHandlers = {
   onMessage?: (message: Message) => void;
   onConversation?: (conversation: Conversation) => void;
+  onTyping?: (payload: TypingStatePayload) => void;
   onError?: (error: unknown) => void;
   onOpen?: () => void;
 };
@@ -96,6 +104,9 @@ function normalizeMessage<T extends Record<string, unknown>>(payload: T): Messag
         }
       : null,
     body: String(payload.body ?? payload.content ?? ''),
+    metadata: payload.metadata && typeof payload.metadata === 'object'
+      ? payload.metadata as Record<string, unknown>
+      : null,
     created_at: String(payload.created_at ?? payload.createdAt ?? new Date().toISOString()),
     pending: payload.pending as boolean | undefined,
     failed: payload.failed as boolean | undefined,
@@ -230,6 +241,14 @@ export async function createMessagesSocket(
     }
   });
 
+  socket.on('typing:start', (payload: TypingStatePayload) => {
+    handlers.onTyping?.({ ...payload, is_typing: true });
+  });
+
+  socket.on('typing:stop', (payload: TypingStatePayload) => {
+    handlers.onTyping?.({ ...payload, is_typing: false });
+  });
+
   if (conversationId) {
     socket.emit('conversation:join', { conversationId }, (response: any) => {
       if (!response?.ok) {
@@ -239,4 +258,8 @@ export async function createMessagesSocket(
   }
 
   return socket as Socket;
+}
+
+export function emitTypingState(socket: Socket, conversationId: string, isTyping: boolean) {
+  socket.emit(isTyping ? 'typing:start' : 'typing:stop', { conversationId });
 }

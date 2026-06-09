@@ -7,6 +7,7 @@ import {
   getRiskColor,
   getTrailAlternativeRoute,
   getTrailAccess,
+  setTrailAccess,
   reportCheckpointStatus,
   suggestCheckpointRoute,
   type CheckpointRouteSuggestion,
@@ -29,6 +30,7 @@ type Props = {
   bottomInset?: number;
   onBack?: () => void;
   onRequireAuth?: () => void;
+  canEditTrailhead?: boolean;
 };
 
 type UserLocation = {
@@ -168,6 +170,7 @@ export function GettingThereSection({
   bottomInset = 0,
   onBack,
   onRequireAuth,
+  canEditTrailhead = false,
 }: Props) {
   const hasAutoLoadedRef = useRef(false);
   const [access, setAccess] = useState<TrailAccess | null>(null);
@@ -183,6 +186,7 @@ export function GettingThereSection({
   const [latestSuggestion, setLatestSuggestion] = useState<CheckpointRouteSuggestion | null>(null);
   const [previewingAlternativeId, setPreviewingAlternativeId] = useState<string | null>(null);
   const [expandedReportIds, setExpandedReportIds] = useState<Record<string, boolean>>({});
+  const [isSavingTrailhead, setIsSavingTrailhead] = useState(false);
 
   const routeCoordinates = useMemo(
     () => coordinatesFromGeometry(access?.driving_route.geometry),
@@ -311,6 +315,44 @@ export function GettingThereSection({
     hasAutoLoadedRef.current = true;
     void loadAccess();
   }, [autoLoad]);
+
+  const saveTrailheadFromLocation = async () => {
+    if (!canEditTrailhead) {
+      return;
+    }
+
+    setIsSavingTrailhead(true);
+    try {
+      const permission = await Location.requestForegroundPermissionsAsync();
+      if (permission.status !== 'granted') {
+        Alert.alert(
+          isArabic ? 'إذن الموقع مطلوب' : 'Location permission required',
+          isArabic ? 'اسمح بالوصول إلى الموقع لتحديد نقطة البداية.' : 'Allow location access to set the trailhead.',
+        );
+        return;
+      }
+
+      const position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      const nextAccess = await setTrailAccess(trailId, {
+        latitude: position.coords.latitude,
+        longitude: position.coords.longitude,
+        name: trailName || access?.trailhead.name || 'Main trailhead',
+        access_notes: 'Trailhead updated by trail owner.',
+      });
+      setAccess(nextAccess);
+      Alert.alert(
+        isArabic ? 'تم حفظ نقطة البداية' : 'Trailhead saved',
+        isArabic ? 'تم تحديث نقطة الوصول لهذا المسار.' : 'The access point for this trail was updated.',
+      );
+    } catch (error) {
+      Alert.alert(
+        isArabic ? 'تعذر حفظ نقطة البداية' : 'Unable to save trailhead',
+        error instanceof Error ? error.message : isArabic ? 'حاول مرة أخرى.' : 'Please try again.',
+      );
+    } finally {
+      setIsSavingTrailhead(false);
+    }
+  };
 
   const getDraft = (zone: TrailAccessDangerZone): ReportDraft => (
     reportDrafts[zone.id] ?? {
@@ -646,6 +688,22 @@ export function GettingThereSection({
                 <Text style={[styles.trailheadName, isArabic ? styles.rtlText : null]}>
                   {isArabic ? access.trailhead.name_ar || access.trailhead.name || 'بداية المسار' : access.trailhead.name || 'Trailhead'}
                 </Text>
+                {canEditTrailhead ? (
+                  <Pressable
+                    style={[styles.ownerTrailheadButton, isSavingTrailhead && styles.disabledButton]}
+                    onPress={() => void saveTrailheadFromLocation()}
+                    disabled={isSavingTrailhead}
+                  >
+                    {isSavingTrailhead ? (
+                      <ActivityIndicator size="small" color="#630E13" />
+                    ) : (
+                      <Ionicons name="pin-outline" size={16} color="#630E13" />
+                    )}
+                    <Text style={styles.ownerTrailheadButtonText}>
+                      {isArabic ? 'حفظ موقعي كنقطة بداية' : 'Save my location as trailhead'}
+                    </Text>
+                  </Pressable>
+                ) : null}
                 <Text style={[styles.coordinates, isArabic ? styles.rtlText : null]}>
                   {access.trailhead.latitude.toFixed(5)}, {access.trailhead.longitude.toFixed(5)}
                 </Text>
@@ -1244,6 +1302,22 @@ const styles = StyleSheet.create({
     color: '#2C2418',
     fontSize: 16,
     fontWeight: '900',
+  },
+  ownerTrailheadButton: {
+    marginTop: 10,
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: '#F7EBE8',
+  },
+  ownerTrailheadButtonText: {
+    color: '#630E13',
+    fontSize: 12,
+    fontWeight: '800',
   },
   coordinates: {
     marginTop: 3,

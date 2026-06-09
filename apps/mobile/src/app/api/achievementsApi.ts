@@ -28,6 +28,14 @@ export type UserAchievement = Achievement & {
   progress?: number;
 };
 
+export type LeaderboardEntry = {
+  user_id: string;
+  full_name: string;
+  avatar_url: string;
+  total_points: number;
+  achievements_count: number;
+};
+
 export async function getAchievements() {
   const response = await apiRequest<Envelope<Achievement[]>>('/api/achievements');
   return response.data;
@@ -47,5 +55,10 @@ export async function checkAchievements() {
   const response = await apiRequest<Envelope<UserAchievement[]>>('/api/achievements/check', {
     method: 'POST',
   });
+  return response.data;
+}
+
+export async function getLeaderboard(limit = 20) {
+  const response = await apiRequest<Envelope<LeaderboardEntry[]>>('/api/achievements/leaderboard', {}, { limit });
   return response.data;
 }

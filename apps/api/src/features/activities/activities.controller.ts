@@ -7,6 +7,7 @@ import { HttpError } from "../../lib/httpError";
 import { requireAuth } from "../../middleware/auth";
 import { verifyPhoto } from "../../services/photoVerificationService";
 import { updateUserStats } from "../achievements/achievements.service";
+import { createSosEvent } from "../sos/sos.service";
 
 interface StartActivityBody {
   trail_id?: string;
@@ -354,6 +355,27 @@ export async function shareActivity(req: Request, res: Response): Promise<void> 
     res.status(201).json({ data: postResult.rows[0] });
   } catch (error) {
     handleActivityError("shareActivity", error);
+  }
+}
+
+export async function deleteActivityPost(req: Request, res: Response): Promise<void> {
+  try {
+    const auth = requireAuth(req);
+    assertUuid(auth.sub, "Authenticated user", 401);
+    assertUuid(req.params.postId, "Post id");
+
+    const result = await pool.query(
+      "DELETE FROM activity_posts WHERE id = $1::uuid AND user_id = $2::uuid RETURNING id",
+      [req.params.postId, auth.sub]
+    );
+
+    if (!result.rows[0]) {
+      throw new HttpError(404, "Activity post not found");
+    }
+
+    res.json({ message: "Activity post deleted" });
+  } catch (error) {
+    handleActivityError("deleteActivityPost", error);
   }
 }
 
@@ -1165,18 +1187,18 @@ export async function sosAlert(req: Request, res: Response): Promise<void> {
       }
     }
 
-    console.log("[activities.sosAlert] inserting SOS event");
-    const result = await pool.query(
-      `
-      INSERT INTO sos_events (user_id, activity_id, latitude, longitude, message, occurred_at, status, created_at)
-      VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6::timestamptz, 'created', NOW())
-      RETURNING id, status, occurred_at
-      `,
-      [auth.sub, activity_id ?? null, latitude, longitude, typeof message === "string" ? message : null, occurred_at]
-    );
+    console.log("[activities.sosAlert] creating SOS lifecycle event");
+    const result = await createSosEvent({
+      userId: auth.sub,
+      activityId: activity_id ?? null,
+      latitude,
+      longitude,
+      message: typeof message === "string" ? message : null,
+      occurredAt: occurred_at,
+    });
 
-    console.log("[activities.sosAlert] returning created SOS event", { sos_id: result.rows[0]?.id });
-    res.status(201).json({ data: result.rows[0] });
+    console.log("[activities.sosAlert] returning SOS event", { sos_id: result.id });
+    res.status(201).json({ data: result });
   } catch (error) {
     handleActivityError("sosAlert", error);
   }

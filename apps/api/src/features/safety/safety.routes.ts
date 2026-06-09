@@ -1,10 +1,15 @@
 import { Router } from "express";
+import type { NextFunction, Request, Response } from "express";
+import jwt from "jsonwebtoken";
 import { z } from "zod";
+import { env } from "../../config/env";
 import { pool } from "../../db/pool";
 import { asyncHandler } from "../../lib/asyncHandler";
+import { HttpError } from "../../lib/httpError";
 import { authenticate } from "../../middleware/auth";
 import { updateUserStats } from "../achievements/achievements.service";
 import { createNotification } from "../notifications/notifications.service";
+import { requireAdmin } from "./admin";
 import {
   getCheckpointStatus,
   getSuggestedCheckpointRoutes,
@@ -56,6 +61,41 @@ interface SafetyIncidentRow {
 }
 
 const router = Router();
+const SAFETY_PUSH_WARNING_RADIUS_METERS = 500;
+
+function optionalAuthenticate(req: Request, _res: Response, next: NextFunction): void {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) {
+    next();
+    return;
+  }
+
+  if (!authHeader.startsWith("Bearer ")) {
+    next(new HttpError(401, "Missing bearer token"));
+    return;
+  }
+
+  try {
+    const token = authHeader.replace("Bearer ", "");
+    const payload = jwt.verify(token, env.JWT_SECRET);
+    if (
+      typeof payload !== "object" ||
+      payload === null ||
+      typeof payload.sub !== "string" ||
+      typeof payload.email !== "string"
+    ) {
+      throw new HttpError(401, "Invalid token payload");
+    }
+
+    req.auth = {
+      sub: payload.sub,
+      email: payload.email,
+    };
+    next();
+  } catch {
+    next(new HttpError(401, "Invalid token"));
+  }
+}
 
 router.post("/checkpoints/:checkpointId/report", authenticate, asyncHandler(reportCheckpointWait));
 router.get("/checkpoints/:id/status", asyncHandler(getCheckpointStatus));
@@ -82,6 +122,11 @@ const reportIncidentSchema = z.object({
   description: z.string().optional(),
 });
 
+const incidentModerationSchema = z.object({
+  status: z.enum(["pending", "active", "rejected", "resolved", "expired"]),
+  note: z.string().trim().max(1000).optional(),
+});
+
 function toNumber(value: string | number | null | undefined): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
@@ -97,8 +142,33 @@ async function createSafetyNotificationBestEffort(input: {
   body: string;
   entity_id?: string | null;
   data: Record<string, unknown>;
+  cooldownMinutes?: number;
 }): Promise<void> {
   try {
+    const cooldownMinutes = input.cooldownMinutes ?? 60;
+    const dangerId = typeof input.data.danger_id === "string" ? input.data.danger_id : null;
+    if (dangerId) {
+      const duplicateResult = await pool.query<{ id: string }>(
+        `SELECT id
+         FROM notifications
+         WHERE user_id = $1::uuid
+           AND type = 'danger_alert'
+           AND data->>'danger_id' = $2
+           AND created_at > NOW() - ($3::int * INTERVAL '1 minute')
+         LIMIT 1`,
+        [input.user_id, dangerId, cooldownMinutes]
+      );
+
+      if (duplicateResult.rows[0]) {
+        console.log("[safety.routes] Skipping duplicate safety notification:", {
+          user_id: input.user_id,
+          danger_id: dangerId,
+          cooldownMinutes,
+        });
+        return;
+      }
+    }
+
     console.log("[safety.routes] Creating safety notification:", {
       user_id: input.user_id,
       title: input.title,
@@ -195,6 +265,8 @@ async function getTrailRoutePoints(trailId: string): Promise<CoordinatePoint[]> 
 
 router.post(
   "/fetch-ocha",
+  authenticate,
+  asyncHandler(requireAdmin),
   asyncHandler(async (_req, res) => {
     console.log("[safety.routes] POST /fetch-ocha start");
     try {
@@ -218,12 +290,13 @@ router.post(
 
 router.get(
   "/nearby-alerts",
+  optionalAuthenticate,
   asyncHandler(async (req, res) => {
     console.log("[safety.routes] GET /nearby-alerts start");
     const lat = Number(req.query.lat);
     const lng = Number(req.query.lng);
     const radius = req.query.radius === undefined ? 5000 : Number(req.query.radius);
-    const userId = req.auth?.sub ?? (isUuid(req.query.user_id) ? req.query.user_id : null);
+    const userId = req.auth?.sub ?? null;
     const trailId = isUuid(req.query.trail_id) ? req.query.trail_id : null;
 
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
@@ -243,7 +316,9 @@ router.get(
           `SELECT id, incident_type, severity, latitude, longitude, description, headline,
                   source, source_name, source_url, reported_at, expires_at
            FROM safety_incidents
-           WHERE is_resolved = false AND expires_at > NOW()`
+           WHERE is_resolved = false
+             AND expires_at > NOW()
+             AND COALESCE(moderation_status, 'active') = 'active'`
         ),
         pool.query<DangerousLocationRow>(
           `SELECT id, name, name_ar, location_type, latitude, longitude, danger_radius_meters, risk_level
@@ -277,7 +352,8 @@ router.get(
 
       if (userId) {
         console.log("[safety.routes] Creating nearby alert notifications for user:", userId);
-        for (const alert of alerts) {
+        const notificationAlerts = alerts.filter((alert) => alert.distance_meters <= SAFETY_PUSH_WARNING_RADIUS_METERS);
+        for (const alert of notificationAlerts) {
           const isLocation = alert.kind === "location";
           const locationName = isLocation
             ? alert.name
@@ -294,13 +370,18 @@ router.get(
             body: `${locationName} is ${Math.round(alert.distance_meters)}m from your location. Exercise caution.`,
             entity_id: trailId,
             data: {
+              danger_id: alert.id,
+              danger_kind: alert.kind,
               severity: riskLevel,
               danger_type: locationType,
               source: "safety",
               latitude: alert.latitude,
               longitude: alert.longitude,
               distance_meters: alert.distance_meters,
+              warning_radius_meters: SAFETY_PUSH_WARNING_RADIUS_METERS,
+              cooldown_minutes: 60,
             },
+            cooldownMinutes: 60,
           });
         }
       }
@@ -380,7 +461,8 @@ router.get(
                   source, source_name, source_url, reported_at, expires_at
            FROM safety_incidents
            WHERE is_resolved = false
-             AND reported_at > NOW() - INTERVAL '7 days'`
+             AND reported_at > NOW() - INTERVAL '7 days'
+             AND COALESCE(moderation_status, 'active') = 'active'`
         ),
       ]);
 
@@ -475,14 +557,14 @@ router.post(
 
     try {
       console.log("[safety.routes] Inserting user incident report");
-      const result = await pool.query<{ id: string }>(
+      const result = await pool.query<{ id: string; moderation_status: string }>(
         `INSERT INTO safety_incidents (
            incident_type, severity, latitude, longitude,
            description, headline, reported_at, expires_at,
-           source, source_name, confirmed_count, reporter_id
+           source, source_name, confirmed_count, reporter_id, moderation_status
          )
-         VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW() + INTERVAL '48 hours', 'user', 'User report', 1, $7::uuid)
-         RETURNING id`,
+         VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW() + INTERVAL '48 hours', 'user', 'User report', 1, $7::uuid, 'pending')
+         RETURNING id, moderation_status`,
         [
           parsed.data.incident_type,
           parsed.data.severity,
@@ -497,11 +579,51 @@ router.post(
       console.log("[safety.routes] Updating achievement stats for incident report");
       await updateUserStats(req.auth.sub, { incidents: 1 });
 
-      res.status(201).json({ data: { id: result.rows[0].id } });
+      res.status(201).json({ data: { id: result.rows[0].id, moderation_status: result.rows[0].moderation_status } });
     } catch (error) {
       console.error("[safety.routes] /report-incident database error:", error);
       res.status(500).json({ error: "Failed to report incident", detail: error instanceof Error ? error.message : String(error) });
     }
+  })
+);
+
+router.patch(
+  "/incidents/:id/moderation",
+  authenticate,
+  asyncHandler(requireAdmin),
+  asyncHandler(async (req, res) => {
+    const incidentId = req.params.id;
+    if (!isUuid(incidentId)) {
+      res.status(400).json({ error: "Incident id must be a valid UUID" });
+      return;
+    }
+
+    const parsed = incidentModerationSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "Validation failed", details: parsed.error.flatten() });
+      return;
+    }
+
+    const isResolved = ["resolved", "expired", "rejected"].includes(parsed.data.status);
+    const result = await pool.query(
+      `UPDATE safety_incidents
+       SET moderation_status = $2,
+           moderation_note = $3,
+           moderated_by = $4::uuid,
+           moderated_at = NOW(),
+           is_resolved = $5,
+           resolved_at = CASE WHEN $5 THEN COALESCE(resolved_at, NOW()) ELSE resolved_at END
+       WHERE id = $1::uuid
+       RETURNING id, moderation_status, is_resolved, moderated_at`,
+      [incidentId, parsed.data.status, parsed.data.note ?? null, req.auth?.sub, isResolved]
+    );
+
+    if (!result.rows[0]) {
+      res.status(404).json({ error: "Incident not found" });
+      return;
+    }
+
+    res.json({ data: result.rows[0] });
   })
 );
 

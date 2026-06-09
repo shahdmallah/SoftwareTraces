@@ -23,6 +23,8 @@ export type SpeciesTaxonomy = {
 };
 
 export type SpeciesIdentification = {
+  hasOrganism?: boolean;
+  noOrganismReason?: string;
   commonName: string;
   scientificName: string;
   shortDescription: string;
@@ -47,6 +49,34 @@ type IdentifyResponse = {
   isFallback: boolean;
   fallbackReason?: string;
 };
+
+const UNKNOWN_ORGANISM_NAMES = new Set([
+  'unknown organism',
+  'no organism detected',
+  'no species detected',
+  'not detected',
+  'none',
+  'n/a',
+]);
+
+export function hasDetectedSpecies(identification: SpeciesIdentification | null | undefined) {
+  if (!identification) {
+    return false;
+  }
+
+  if (identification.hasOrganism === false) {
+    return false;
+  }
+
+  const commonName = identification.commonName?.trim().toLowerCase() ?? '';
+  const scientificName = identification.scientificName?.trim() ?? '';
+
+  if (UNKNOWN_ORGANISM_NAMES.has(commonName)) {
+    return false;
+  }
+
+  return Boolean(commonName || scientificName);
+}
 
 function getExpoExtraWildlifeApiUrl() {
   const candidates = [

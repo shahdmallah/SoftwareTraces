@@ -8,6 +8,7 @@ const USERS_PAGE_SIZE = 200;
 type ProfileRow = {
   user_id: string;
   full_name: string;
+  role: string | null;
 };
 
 export type SignupInput = {
@@ -127,13 +128,28 @@ function isDuplicateEmailError(error: { message?: string; status?: number } | nu
 }
 
 async function fetchProfile(adminClient: SupabaseClient, userId: string): Promise<ProfileRow | null> {
-  const { data, error } = await adminClient.from("profiles").select("user_id, full_name").eq("user_id", userId).maybeSingle();
+  const { data, error } = await adminClient.from("profiles").select("user_id, full_name, role").eq("user_id", userId).maybeSingle();
 
   if (error) {
     throw error;
   }
 
   return data;
+}
+
+async function fetchProfileWithRetry(adminClient: SupabaseClient, userId: string): Promise<ProfileRow | null> {
+  let profile = await fetchProfile(adminClient, userId);
+  if (profile) {
+    return profile;
+  }
+
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  profile = await fetchProfile(adminClient, userId);
+  return profile;
+}
+
+function getProfileRole(profile: ProfileRow | null | undefined): string {
+  return profile?.role === "admin" ? "admin" : DEFAULT_ROLE;
 }
 
 function mapUserResponse(user: { id: string; email: string; full_name: string; role?: string }): AuthUserResponse {
@@ -201,14 +217,14 @@ async function signup(input: SignupInput): Promise<AuthUserResponse> {
       email: createdUser.email
     });
 
-    // Profile created automatically by database trigger
+    const profile = await fetchProfileWithRetry(adminClient, createdUser.id);
 
     console.log("[signup] Signup completed for user:", createdUser.id);
     return mapUserResponse({
       id: createdUser.id,
       email: createdUser.email,
-      full_name: input.full_name,
-      role: DEFAULT_ROLE
+      full_name: profile?.full_name ?? input.full_name,
+      role: getProfileRole(profile)
     });
   } catch (error) {
     console.error("[signup] Full error:", error);
@@ -239,7 +255,6 @@ async function login(input: LoginInput): Promise<LoginResponse> {
 
   const profile = await fetchProfile(adminClient, data.user.id);
   const fullName = profile?.full_name ?? String(data.user.user_metadata.full_name ?? "");
-  const role = String(data.user.user_metadata.role ?? DEFAULT_ROLE);
 
   return {
     token: signAccessToken(data.user.id, data.user.email),
@@ -247,7 +262,7 @@ async function login(input: LoginInput): Promise<LoginResponse> {
       id: data.user.id,
       email: data.user.email,
       full_name: fullName,
-      role
+      role: getProfileRole(profile)
     })
   };
 }
@@ -267,7 +282,7 @@ async function getCurrentUser(userId: string): Promise<AuthUserResponse> {
     id: data.user.id,
     email: data.user.email,
     full_name: profile?.full_name ?? String(data.user.user_metadata.full_name ?? ""),
-    role: String(data.user.user_metadata.role ?? DEFAULT_ROLE)
+    role: getProfileRole(profile)
   });
 }
 

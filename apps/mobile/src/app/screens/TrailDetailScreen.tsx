@@ -44,6 +44,11 @@ import { getOfflineMapPacks, saveOfflineMapPack, type OfflineMapPack } from '../
 
 type TrailDetailScreenRouteProp = RouteProp<RootStackParamList, 'TrailDetail'>;
 type TrailDetailNavigationProp = StackNavigationProp<RootStackParamList>;
+type CommunityFeedPost = Extract<FeedItem, { kind: 'recap' | 'plan' }>;
+
+function isCommunityFeedPost(item: FeedItem): item is CommunityFeedPost {
+  return item.kind === 'recap' || item.kind === 'plan';
+}
 
 const CONDITION_OPTIONS: Array<{ type: ConditionType; icon: keyof typeof Ionicons.glyphMap; label: string }> = [
   { type: 'good', icon: 'checkmark-circle-outline', label: 'Good' },
@@ -601,7 +606,7 @@ export function TrailDetailScreen() {
     );
   }
 
-  const posts = communityPosts;
+  const posts = communityPosts.filter(isCommunityFeedPost);
   const isThisTrailActive = activeSessionTrailId === trail.id || ongoingTrailActivity?.trail_id === trail.id;
   const safetyBand = trailSafety ? getSafetyBand(trailSafety.safety_score) : null;
   const canOpenTrailThread = isAuthenticated;
@@ -863,6 +868,7 @@ export function TrailDetailScreen() {
               onPress={() => navigation.navigate('TrailAccess', {
                 trailId: trail.id,
                 trailName: isArabic ? trail.nameAr || trail.name : trail.name,
+                canEditTrailhead: Boolean(isAuthenticated && user?.id && trail.userId === user.id),
               })}
             >
               <View style={styles.gettingThereIcon}>

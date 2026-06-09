@@ -1,3 +1,5 @@
+import type { NatureSighting } from '../../api/natureSightingsApi';
+
 /**
  * Payload passed from TrailReview -> ActivityShare after a completed hike.
  * Review fields are for the trail review; post fields are for the Activity recap.
@@ -30,6 +32,7 @@ export type TrailCompletionDraft = {
   }>;
   postVisibility?: 'public' | 'friends' | 'private';
   photoUris: string[];
+  natureSightings?: NatureSighting[];
   completedAtIso: string;
   durationMs: number;
   stepCount: number;

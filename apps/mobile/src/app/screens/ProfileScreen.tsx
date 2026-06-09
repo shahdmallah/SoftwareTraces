@@ -19,7 +19,8 @@ import { useLanguage, TranslationKey } from '../contexts/LanguageContext';
 import { useAuth } from '../contexts/AuthContext';
 import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { getMyAchievements, type UserAchievement } from '../api/achievementsApi';
+import { getLeaderboard, getMyAchievements, type LeaderboardEntry, type UserAchievement } from '../api/achievementsApi';
+import { getMyBadges, type Badge } from '../api/badgesApi';
 import { getMyActivities, type Activity } from '../api/activitiesApi';
 import { getProfile, getProfilePhotos, getProfileReviews, type Profile, type ProfilePhoto, type ProfileReview } from '../api/profilesApi';
 import { getFollowers, getFollowing, getMyFriends, type SocialProfile } from '../api/socialApi';
@@ -36,14 +37,14 @@ type SettingItem = {
 };
 
 type ProfileLinkItem = {
-  id: 'myTrails' | 'trailDrafts' | 'offlineDownloads' | 'ongoingActivities' | 'history' | 'journal';
+  id: 'myTrails' | 'trailDrafts' | 'offlineDownloads' | 'ongoingActivities' | 'safetyCenter' | 'history' | 'journal';
   icon: string;
   labelKey?: TranslationKey;
   labelEn?: string;
   labelAr?: string;
   subtitleEn: string;
   subtitleAr: string;
-  route: 'MyTrails' | 'TrailDrafts' | 'OfflineDownloads' | 'OngoingActivities' | 'History' | 'Journal';
+  route: 'MyTrails' | 'TrailDrafts' | 'OfflineDownloads' | 'OngoingActivities' | 'SafetyCenter' | 'History' | 'Journal';
 };
 
 const settings: SettingItem[] = [
@@ -86,6 +87,15 @@ const profileLinks: ProfileLinkItem[] = [
     subtitleEn: 'Resume or close active trail recordings',
     subtitleAr: 'تابع أو أغلق تسجيلات المسارات المفتوحة',
     route: 'OngoingActivities',
+  },
+  {
+    id: 'safetyCenter',
+    icon: 'shield-checkmark-outline',
+    labelEn: 'Safety Center',
+    labelAr: 'Safety Center',
+    subtitleEn: 'Manage SOS contacts and emergency alerts',
+    subtitleAr: 'Manage SOS contacts and emergency alerts',
+    route: 'SafetyCenter',
   },
   {
     id: 'history',
@@ -489,6 +499,8 @@ export function ProfileScreen() {
     .map((part) => part[0]?.toUpperCase() ?? '')
     .join('') || 'TR';
   const [achievements, setAchievements] = useState<ProfileAchievement[]>([]);
+  const [badges, setBadges] = useState<Badge[]>([]);
+  const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [activities, setActivities] = useState<Activity[]>([]);
 
   useFocusEffect(
@@ -500,6 +512,8 @@ export function ProfileScreen() {
         setProfileReviews([]);
         setProfilePhotos([]);
         setAchievements([]);
+        setBadges([]);
+        setLeaderboard([]);
         setActivities([]);
         setFriendsList([]);
         setFriendsVisible(false);
@@ -534,8 +548,10 @@ export function ProfileScreen() {
         };
 
         try {
-          const [userAchievements, userActivities, loadedProfile] = await Promise.all([
+          const [userAchievements, userBadges, leaderboardRows, userActivities, loadedProfile] = await Promise.all([
             getMyAchievements().catch(() => [] as UserAchievement[]),
+            getMyBadges().catch(() => [] as Badge[]),
+            getLeaderboard(10).catch(() => [] as LeaderboardEntry[]),
             getMyActivities({ page: 1, limit: 50 }).catch(() => [] as Activity[]),
             getProfile(user.id),
           ]);
@@ -562,6 +578,8 @@ export function ProfileScreen() {
             setProfileReviews(nextReviews);
             setProfilePhotos(nextPhotos);
             setAchievements(buildProfileAchievements(userAchievements));
+            setBadges(userBadges);
+            setLeaderboard(leaderboardRows);
             setActivities(userActivities);
             setProfileError('');
           }
@@ -571,6 +589,8 @@ export function ProfileScreen() {
             setProfileReviews([]);
             setProfilePhotos([]);
             setAchievements([]);
+            setBadges([]);
+            setLeaderboard([]);
             setActivities([]);
             setProfileError(error instanceof Error ? error.message : 'Unable to load profile data.');
           }
@@ -844,6 +864,41 @@ export function ProfileScreen() {
                   </Pressable>
                 ))}
               </ScrollView>
+
+              {badges.length ? (
+                <View style={styles.badgesBlock}>
+                  <Text style={[styles.badgesTitle, isArabic && styles.textRtl]}>
+                    {isArabic ? 'الشارات المكتسبة' : 'Earned badges'}
+                  </Text>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.badgesRow}>
+                    {badges.map((badge) => (
+                      <View key={badge.id} style={styles.badgePill}>
+                        <Ionicons name="ribbon-outline" size={14} color="#630E13" />
+                        <Text style={styles.badgePillText} numberOfLines={1}>
+                          {isArabic ? badge.name_ar || badge.name || badge.title : badge.name || badge.title}
+                        </Text>
+                      </View>
+                    ))}
+                  </ScrollView>
+                </View>
+              ) : null}
+
+              {leaderboard.length ? (
+                <View style={styles.leaderboardBlock}>
+                  <Text style={[styles.badgesTitle, isArabic && styles.textRtl]}>
+                    {isArabic ? 'لوحة المتصدرين' : 'Leaderboard'}
+                  </Text>
+                  {leaderboard.slice(0, 5).map((entry, index) => (
+                    <View key={entry.user_id} style={[styles.leaderboardRow, isArabic && styles.rowReverse]}>
+                      <Text style={styles.leaderboardRank}>{index + 1}</Text>
+                      <Text style={[styles.leaderboardName, isArabic && styles.textRtl]} numberOfLines={1}>
+                        {entry.full_name}
+                      </Text>
+                      <Text style={styles.leaderboardPoints}>{entry.total_points} pts</Text>
+                    </View>
+                  ))}
+                </View>
+              ) : null}
             </View>
           </AnimatedBlock>
 
@@ -1495,6 +1550,25 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: 2,
   },
+  badgesBlock: { marginTop: 14 },
+  badgesTitle: { fontSize: 13, fontWeight: '700', color: '#2C2418', marginBottom: 8 },
+  badgesRow: { gap: 8, paddingRight: 4 },
+  badgePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: '#F6EFE4',
+    maxWidth: 180,
+  },
+  badgePillText: { fontSize: 12, color: '#630E13', fontWeight: '600', flexShrink: 1 },
+  leaderboardBlock: { marginTop: 14, gap: 6 },
+  leaderboardRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 4 },
+  leaderboardRank: { width: 18, fontSize: 12, fontWeight: '800', color: '#630E13' },
+  leaderboardName: { flex: 1, fontSize: 13, color: '#2C2418' },
+  leaderboardPoints: { fontSize: 12, color: '#8A7A6A', fontWeight: '600' },
 
   // Next milestone
   milestoneRow: {

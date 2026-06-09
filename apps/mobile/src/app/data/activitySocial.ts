@@ -1,4 +1,6 @@
 import type { TrailCompletionDraft } from '../features/trailCompletion/types';
+import type { PhotoType } from '../api/mediaApi';
+import type { NatureSighting } from '../api/natureSightingsApi';
 
 export type Friend = {
   id: string;
@@ -34,10 +36,12 @@ export type FeedItem =
   | {
       id: string;
       kind: 'recap';
-      sourceType?: 'review' | 'activity';
+      sourceType?: 'review' | 'activity' | 'media';
       userId?: string;
       isLiked?: boolean;
       activityId?: string;
+      photoId?: string;
+      photoType?: PhotoType;
       completionDraft?: TrailCompletionDraft;
       trailId: string;
       user: string;
@@ -55,6 +59,7 @@ export type FeedItem =
       likes: number;
       comments: number;
       previewComments?: FeedCommentPreview[];
+      natureSightings?: NatureSighting[];
       distance: string;
     }
   | {
@@ -81,6 +86,23 @@ export type FeedItem =
       spotsLeft: number;
       visibility?: 'public' | 'private' | 'friends';
       invitedNames?: string[];
+    }
+  | {
+      id: string;
+      kind: 'challenge';
+      title: string;
+      description: string;
+      goalType: string;
+      goalValue: number;
+      startAt: string;
+      endAt: string;
+      rewardBadgeName?: string | null;
+      rewardPoints?: number;
+      participantCount?: number;
+      completedCount?: number;
+      progressValue?: number;
+      participantStatus?: string | null;
+      createdAt?: string;
     };
 
 export const friends: Friend[] = [

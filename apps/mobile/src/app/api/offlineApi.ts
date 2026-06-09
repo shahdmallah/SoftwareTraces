@@ -74,6 +74,8 @@ type OfflineRoutePayload = {
   elevationProfile?: unknown[];
   safetySnapshot?: unknown;
   generatedAt?: string;
+  archiveDownloaded?: boolean;
+  archiveError?: string;
 };
 
 export type OfflineMapRecord = {
@@ -189,6 +191,36 @@ async function requestOfflineArchive(trailId: string) {
   await response.arrayBuffer().catch(() => undefined);
 }
 
+function offlineBundleToRoutePayload(
+  trailId: string,
+  bundle: Awaited<ReturnType<typeof getOfflineTrailBundle>>,
+  archive: { downloaded: boolean; error?: string },
+): OfflineRoutePayload {
+  const trail = bundle.trail;
+
+  return {
+    trailId,
+    trailName: trail.name,
+    trailNameAr: trail.nameAr,
+    region: trail.region,
+    regionAr: trail.regionAr,
+    coordinates: trail.coordinates,
+    tileRegion: `trail-${trailId}`,
+    tileUrlTemplate: '',
+    routeCoordinates: normalizeRouteCoordinates(trail.routeCoordinates),
+    trail,
+    safetyAlerts: bundle.safetyAlerts,
+    safetyMarkers: bundle.safety_markers,
+    checkpointReports: bundle.checkpoint_reports,
+    accessRoute: bundle.access_route,
+    elevationProfile: bundle.elevation_profile,
+    safetySnapshot: bundle.safety_snapshot,
+    generatedAt: bundle.generated_at ?? bundle.safety_snapshot_generated_at ?? undefined,
+    archiveDownloaded: archive.downloaded,
+    archiveError: archive.error,
+  };
+}
+
 export async function getOfflineTrailBundle(trailId: string) {
   const response = await apiRequest<Envelope<OfflineTrailBundle>>(`/api/offline/trails/${trailId}/bundle`);
   const trail = normalizeTrail(response.data.trail);
@@ -229,29 +261,15 @@ export async function deleteOfflineMap(id: string) {
 }
 
 export async function downloadOfflineMap(trailId: string): Promise<OfflineRoutePayload> {
-  const [bundle] = await Promise.all([
-    getOfflineTrailBundle(trailId),
-    requestOfflineArchive(trailId),
-  ]);
-  const trail = bundle.trail;
+  const bundle = await getOfflineTrailBundle(trailId);
 
-  return {
-    trailId,
-    trailName: trail.name,
-    trailNameAr: trail.nameAr,
-    region: trail.region,
-    regionAr: trail.regionAr,
-    coordinates: trail.coordinates,
-    tileRegion: `trail-${trailId}`,
-    tileUrlTemplate: '',
-    routeCoordinates: normalizeRouteCoordinates(trail.routeCoordinates),
-    trail,
-    safetyAlerts: bundle.safetyAlerts,
-    safetyMarkers: bundle.safety_markers,
-    checkpointReports: bundle.checkpoint_reports,
-    accessRoute: bundle.access_route,
-    elevationProfile: bundle.elevation_profile,
-    safetySnapshot: bundle.safety_snapshot,
-    generatedAt: bundle.generated_at ?? bundle.safety_snapshot_generated_at ?? undefined,
-  };
+  try {
+    await requestOfflineArchive(trailId);
+    return offlineBundleToRoutePayload(trailId, bundle, { downloaded: true });
+  } catch (error) {
+    return offlineBundleToRoutePayload(trailId, bundle, {
+      downloaded: false,
+      error: error instanceof Error ? error.message : 'Unable to sync account archive.',
+    });
+  }
 }

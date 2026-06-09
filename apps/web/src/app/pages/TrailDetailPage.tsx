@@ -11,17 +11,22 @@ import { downloadOfflineMap } from '../api/offline';
 import { getAccessToken } from '../api/client';
 import { getMapBubblePhotos, getMapBubbles } from '../api/map';
 import {
+  addTrailCondition,
+  createTrailReview,
   getTrailById,
   getTrailConditions,
   getTrailPhotos,
   getTrailReviews,
   saveTrail,
   unsaveTrail,
+  uploadTrailPhoto,
   type Trail,
   type TrailCondition,
   type TrailPhoto,
   type TrailReview,
 } from '../api/trails';
+import { getTrailSafety, type TrailSafety } from '../api/safety';
+import { getWeatherForecast, type WeatherForecast } from '../api/weather';
 import { cardDifficulty, formatDistance, formatElevation } from '../utils/trailFormat';
 
 const difficultyConfig = {
@@ -108,6 +113,13 @@ export function TrailDetailPage() {
   const [saved, setSaved] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [isLoading, setIsLoading] = useState(true);
+  const [showReviewForm, setShowReviewForm] = useState(false);
+  const [reviewRating, setReviewRating] = useState(5);
+  const [reviewContent, setReviewContent] = useState('');
+  const [conditionType, setConditionType] = useState('good');
+  const [conditionNote, setConditionNote] = useState('');
+  const [trailSafety, setTrailSafety] = useState<TrailSafety | null>(null);
+  const [weather, setWeather] = useState<WeatherForecast | null>(null);
   const isGuest = !getAccessToken();
 
   useEffect(() => {
@@ -118,11 +130,20 @@ export function TrailDetailPage() {
       setErrorMessage('');
       try {
         const nextTrail = await getTrailById(id);
-        const [nextReviews, nextConditions, nextPhotos, nextMediaRouteImages] = await Promise.all([
+        const point = trailPointToLatLng(nextTrail.coordinates);
+        const [nextReviews, nextConditions, nextPhotos, nextMediaRouteImages, nextSafety, nextWeather] = await Promise.all([
           getTrailReviews(id).catch(() => []),
           getTrailConditions(id).catch(() => []),
           getTrailPhotos(id).catch(() => []),
           getTrailMediaRouteImageUrls(nextTrail).catch(() => []),
+          getTrailSafety(id).catch(() => null),
+          point
+            ? getWeatherForecast({
+                lat: point.lat,
+                lng: point.lng,
+                date: new Date().toISOString().slice(0, 10),
+              }).catch(() => null)
+            : Promise.resolve(null),
         ]);
         if (!cancelled) {
           setTrail(nextTrail);
@@ -130,6 +151,8 @@ export function TrailDetailPage() {
           setConditions(nextConditions);
           setPhotos(nextPhotos);
           setMediaRouteImages(nextMediaRouteImages);
+          setTrailSafety(nextSafety);
+          setWeather(nextWeather);
         }
       } catch (error) {
         if (!cancelled) {
@@ -160,6 +183,60 @@ export function TrailDetailPage() {
       else await unsaveTrail(trail.id);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Unable to update saved trail.');
+    }
+  };
+
+  const handleSubmitReview = async () => {
+    if (!trail || !reviewContent.trim()) return;
+    if (isGuest) {
+      setErrorMessage('Sign in to write a review.');
+      return;
+    }
+
+    try {
+      const created = await createTrailReview(trail.id, {
+        rating: reviewRating,
+        content: reviewContent.trim(),
+      });
+      setReviews((current) => [created, ...current]);
+      setReviewContent('');
+      setShowReviewForm(false);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Unable to submit review.');
+    }
+  };
+
+  const handleReportCondition = async () => {
+    if (!trail) return;
+    if (isGuest) {
+      setErrorMessage('Sign in to report trail conditions.');
+      return;
+    }
+
+    try {
+      const created = await addTrailCondition(trail.id, {
+        condition_type: conditionType,
+        description: conditionNote.trim() || undefined,
+      });
+      setConditions((current) => [created, ...current]);
+      setConditionNote('');
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Unable to report condition.');
+    }
+  };
+
+  const handleUploadPhoto = async (file: File | null) => {
+    if (!trail || !file) return;
+    if (isGuest) {
+      setErrorMessage('Sign in to upload trail photos.');
+      return;
+    }
+
+    try {
+      const uploaded = await uploadTrailPhoto(trail.id, file);
+      setPhotos((current) => [{ id: uploaded.id, url: uploaded.url, created_at: new Date().toISOString() }, ...current]);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Unable to upload photo.');
     }
   };
 
@@ -246,8 +323,37 @@ export function TrailDetailPage() {
           <StatCard icon={<Users className="w-4 h-4" />} label="Reviews" value={trail.reviews || reviews.length} />
         </div>
 
+        {(trailSafety || weather) && (
+          <div className="grid md:grid-cols-2 gap-4">
+            {trailSafety && (
+              <div className="bg-card rounded-xl border border-border p-5">
+                <h3 className="mb-2">Trail safety</h3>
+                <p className="text-sm text-secondary">
+                  Score <strong>{trailSafety.safety_score}</strong> · Risk <strong>{trailSafety.risk_level}</strong>
+                </p>
+                {trailSafety.warnings.length > 0 && (
+                  <ul className="mt-2 text-sm text-secondary list-disc pl-5">
+                    {trailSafety.warnings.slice(0, 3).map((warning) => (
+                      <li key={warning}>{warning}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+            {weather && (
+              <div className="bg-card rounded-xl border border-border p-5">
+                <h3 className="mb-2">Weather forecast</h3>
+                <p className="text-sm text-secondary">
+                  {weather.condition} · {weather.temperature_c}°C
+                  {weather.precipitation_probability != null ? ` · ${weather.precipitation_probability}% rain` : ''}
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="flex flex-col sm:flex-row gap-3">
-          <Link to="/recording" className="flex-1 flex items-center justify-center gap-2 px-6 py-3 bg-primary text-primary-foreground rounded-xl hover:bg-primary/90 transition-colors">
+          <Link to={`/recording?trailId=${trail.id}`} className="flex-1 flex items-center justify-center gap-2 px-6 py-3 bg-primary text-primary-foreground rounded-xl hover:bg-primary/90 transition-colors">
             <Play className="w-5 h-5" />
             <span>Start Hike</span>
           </Link>
@@ -281,10 +387,10 @@ export function TrailDetailPage() {
           </div>
         </div>
 
-        {conditions.length > 0 && (
-          <div className="bg-card rounded-xl border border-border p-6">
-            <h3 className="mb-3">Trail Conditions</h3>
-            <div className="space-y-3">
+        <div className="bg-card rounded-xl border border-border p-6">
+          <h3 className="mb-3">Trail Conditions</h3>
+          {conditions.length > 0 ? (
+            <div className="space-y-3 mb-4">
               {conditions.map((condition) => (
                 <div key={condition.id} className="rounded-lg border border-border p-3">
                   <p className="font-medium text-foreground">{condition.condition_type.replace('_', ' ')}</p>
@@ -292,19 +398,56 @@ export function TrailDetailPage() {
                 </div>
               ))}
             </div>
-          </div>
-        )}
+          ) : (
+            <p className="text-sm text-muted-foreground mb-4">No recent condition reports.</p>
+          )}
+          {!isGuest && (
+            <div className="grid md:grid-cols-[180px_1fr_auto] gap-2">
+              <select value={conditionType} onChange={(event) => setConditionType(event.target.value)} className="rounded-lg border border-border bg-background px-3 py-2 text-sm">
+                <option value="good">Good</option>
+                <option value="fair">Fair</option>
+                <option value="mud">Mud</option>
+                <option value="snow">Snow</option>
+                <option value="closure">Closure</option>
+              </select>
+              <input
+                value={conditionNote}
+                onChange={(event) => setConditionNote(event.target.value)}
+                placeholder="Optional notes"
+                className="rounded-lg border border-border bg-background px-3 py-2 text-sm"
+              />
+              <button type="button" onClick={() => void handleReportCondition()} className="px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm">
+                Report
+              </button>
+            </div>
+          )}
+        </div>
 
-        {gallery.length > 0 && (
-          <div className="bg-card rounded-xl border border-border p-6">
-            <h3 className="mb-3">Photos</h3>
+        <div className="bg-card rounded-xl border border-border p-6">
+          <div className="flex items-center justify-between mb-3">
+            <h3>Photos</h3>
+            {!isGuest && (
+              <label className="text-sm text-primary font-medium hover:underline cursor-pointer">
+                Upload photo
+                <input
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(event) => void handleUploadPhoto(event.target.files?.[0] ?? null)}
+                />
+              </label>
+            )}
+          </div>
+          {gallery.length > 0 ? (
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               {gallery.slice(0, 8).map((url) => (
                 <ImageWithFallback key={url} src={url} alt={trail.name} className="aspect-square rounded-lg object-cover" />
               ))}
             </div>
-          </div>
-        )}
+          ) : (
+            <p className="text-sm text-muted-foreground">No photos yet.</p>
+          )}
+        </div>
 
         <div className="bg-card rounded-xl border border-border p-6">
           <div className="flex items-center justify-between mb-4">
@@ -312,8 +455,32 @@ export function TrailDetailPage() {
               <MessageCircle className="w-5 h-5 text-muted-foreground" />
               <h3>Reviews</h3>
             </div>
-            <button className="text-sm text-primary font-medium hover:underline">Write a review</button>
+            <button type="button" onClick={() => setShowReviewForm((current) => !current)} className="text-sm text-primary font-medium hover:underline">
+              {showReviewForm ? 'Cancel' : 'Write a review'}
+            </button>
           </div>
+
+          {showReviewForm && !isGuest && (
+            <div className="mb-4 rounded-lg border border-border p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-secondary">Rating</span>
+                <select value={reviewRating} onChange={(event) => setReviewRating(Number(event.target.value))} className="rounded-lg border border-border bg-background px-3 py-2 text-sm">
+                  {[5, 4, 3, 2, 1].map((value) => (
+                    <option key={value} value={value}>{value} stars</option>
+                  ))}
+                </select>
+              </div>
+              <textarea
+                value={reviewContent}
+                onChange={(event) => setReviewContent(event.target.value)}
+                placeholder="Share your experience on this trail"
+                className="w-full min-h-24 rounded-lg border border-border bg-background px-3 py-2 text-sm"
+              />
+              <button type="button" onClick={() => void handleSubmitReview()} className="px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm">
+                Submit review
+              </button>
+            </div>
+          )}
 
           <div className="space-y-4">
             {reviews.length === 0 ? (

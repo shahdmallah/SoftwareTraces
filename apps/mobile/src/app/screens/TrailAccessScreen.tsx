@@ -17,7 +17,7 @@ export function TrailAccessScreen() {
   const insets = useSafeAreaInsets();
   const { language } = useLanguage();
   const isArabic = language === 'ar';
-  const { trailId, trailName } = route.params;
+  const { trailId, trailName, canEditTrailhead = false } = route.params;
 
   return (
     <AnimatedScreen style={styles.container}>
@@ -31,6 +31,7 @@ export function TrailAccessScreen() {
         bottomInset={insets.bottom}
         onBack={() => navigation.goBack()}
         onRequireAuth={() => navigation.navigate('Auth', { mode: 'signin' })}
+        canEditTrailhead={canEditTrailhead}
       />
     </AnimatedScreen>
   );

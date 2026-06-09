@@ -24,6 +24,15 @@ export type TrailRecommendation = {
   match_tags: string[];
 };
 
+export type RecommendationPreferences = {
+  preferred_regions: string[];
+  preferred_difficulties: string[];
+  preferred_features: string[];
+  preferred_tags: string[];
+  min_distance_km: number | null;
+  max_distance_km: number | null;
+};
+
 export async function getTrailRecommendations() {
   const response = await apiRequest<Envelope<TrailRecommendation[]>>(
     '/api/recommendations/trails',
@@ -40,4 +49,17 @@ export async function getTrailRecommendations() {
     ...recommendation,
     match_tags: Array.isArray(recommendation.match_tags) ? recommendation.match_tags : [],
   }));
+}
+
+export async function getRecommendationPreferences() {
+  const response = await apiRequest<Envelope<RecommendationPreferences>>('/api/recommendations/preferences');
+  return response.data;
+}
+
+export async function updateRecommendationPreferences(preferences: Partial<RecommendationPreferences>) {
+  const response = await apiRequest<Envelope<RecommendationPreferences>>('/api/recommendations/preferences', {
+    method: 'PUT',
+    body: JSON.stringify(preferences),
+  });
+  return response.data;
 }

@@ -1,5 +1,4 @@
 import { pool } from "../../db/pool";
-import fetch from "node-fetch";
 import type {
   CreateNotificationInput,
   Notification,
@@ -8,27 +7,7 @@ import type {
   NotificationType,
   PushToken,
 } from "./notifications.types";
-
-const EXPO_PUSH_ENDPOINT = "https://exp.host/--/api/v2/push/send";
-
-type ExpoPushTicket =
-  | {
-      status: "ok";
-      id?: string;
-    }
-  | {
-      status: "error";
-      message?: string;
-      details?: {
-        error?: string;
-        [key: string]: unknown;
-      };
-    };
-
-type ExpoPushResponse = {
-  data?: ExpoPushTicket | ExpoPushTicket[];
-  errors?: { code?: string; message?: string }[];
-};
+import { sendFcmPushNotification } from "./fcmProvider";
 
 interface NotificationRow {
   id: string;
@@ -46,29 +25,21 @@ interface NotificationRow {
   created_at: string | Date;
 }
 
+type PushProvider = "expo" | "fcm" | "apns" | "webpush";
+
+interface PushDeliveryResult {
+  token_id: string;
+  provider: PushProvider;
+  status: "sent" | "skipped" | "failed";
+  reason?: string;
+}
+
 function toIsoString(value: string | Date | null): string | null {
   if (value === null) {
     return null;
   }
 
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
-}
-
-function isExpoPushToken(token: string): boolean {
-  return /^(ExponentPushToken|ExpoPushToken)\[[^\]]+\]$/.test(token);
-}
-
-function getExpoChannelId(data?: object): string | undefined {
-  if (!data || typeof data !== "object") {
-    return undefined;
-  }
-
-  const typedData = data as Record<string, unknown>;
-  return typedData.notification_kind === "navigation_off_track" ? "navigation" : undefined;
-}
-
-async function removePushTokenById(tokenId: string): Promise<void> {
-  await pool.query("DELETE FROM push_tokens WHERE id = $1::uuid", [tokenId]);
 }
 
 function formatNotification(row: NotificationRow): Notification {
@@ -289,20 +260,27 @@ export async function registerPushToken(
   userId: string,
   token: string,
   platform: string,
-  deviceId?: string
+  deviceId?: string,
+  provider?: PushProvider,
+  appVersion?: string
 ): Promise<PushToken> {
   console.log("[notifications.service.registerPushToken] ========== START ==========");
-  console.log("[notifications.service.registerPushToken] Params:", { userId, platform, deviceId, tokenLength: token.length });
+  console.log("[notifications.service.registerPushToken] Params:", { userId, platform, provider, deviceId, appVersion, tokenLength: token.length });
+  const resolvedProvider = provider ?? inferProvider(platform, token);
 
   const updateResult = await pool.query<PushToken>(
     `UPDATE push_tokens
      SET platform = $3,
          device_id = $4,
+         provider = $5,
+         app_version = $6,
+         last_seen_at = NOW(),
+         is_active = true,
          updated_at = NOW()
      WHERE user_id = $1::uuid
        AND token = $2
-     RETURNING id, user_id, token, platform, device_id, created_at, updated_at`,
-    [userId, token, platform, deviceId ?? null]
+     RETURNING id, user_id, token, platform, provider, device_id, app_version, last_seen_at, is_active, created_at, updated_at`,
+    [userId, token, platform, deviceId ?? null, resolvedProvider, appVersion ?? null]
   );
 
   if (updateResult.rows[0]) {
@@ -311,10 +289,10 @@ export async function registerPushToken(
   }
 
   const insertResult = await pool.query<PushToken>(
-    `INSERT INTO push_tokens (user_id, token, platform, device_id)
-     VALUES ($1::uuid, $2, $3, $4)
-     RETURNING id, user_id, token, platform, device_id, created_at, updated_at`,
-    [userId, token, platform, deviceId ?? null]
+    `INSERT INTO push_tokens (user_id, token, platform, provider, device_id, app_version, last_seen_at, is_active)
+     VALUES ($1::uuid, $2, $3, $4, $5, $6, NOW(), true)
+     RETURNING id, user_id, token, platform, provider, device_id, app_version, last_seen_at, is_active, created_at, updated_at`,
+    [userId, token, platform, resolvedProvider, deviceId ?? null, appVersion ?? null]
   );
 
   console.log("[notifications.service.registerPushToken] Inserted token:", insertResult.rows[0].id);
@@ -326,7 +304,9 @@ export async function removePushToken(userId: string, token: string): Promise<bo
   console.log("[notifications.service.removePushToken] Params:", { userId, tokenLength: token.length });
 
   const result = await pool.query(
-    `DELETE FROM push_tokens
+    `UPDATE push_tokens
+     SET is_active = false,
+         updated_at = NOW()
      WHERE user_id = $1::uuid
        AND token = $2`,
     [userId, token]
@@ -336,121 +316,105 @@ export async function removePushToken(userId: string, token: string): Promise<bo
   return (result.rowCount ?? 0) > 0;
 }
 
-async function sendExpoPush(token: PushToken, title: string, body: string, data?: object): Promise<void> {
-  const channelId = getExpoChannelId(data);
-  const response = await fetch(EXPO_PUSH_ENDPOINT, {
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-      "Accept-Encoding": "gzip, deflate",
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      to: token.token,
-      title,
-      body,
-      data: data ?? {},
-      sound: "default",
-      priority: "high",
-      ...(channelId ? { channelId } : {}),
-    }),
-  });
-
-  const payload = (await response.json().catch(() => ({}))) as ExpoPushResponse;
-  if (!response.ok) {
-    throw new Error(`Expo push request failed with ${response.status}: ${JSON.stringify(payload)}`);
+function inferProvider(platform: string, token: string): PushProvider {
+  if (token.startsWith("ExponentPushToken[")) {
+    return "expo";
   }
 
-  const tickets = Array.isArray(payload.data) ? payload.data : payload.data ? [payload.data] : [];
-  const failedTicket = tickets.find((ticket) => ticket.status === "error");
-  if (!failedTicket) {
-    console.log("[notifications.service.sendExpoPush] Sent Expo push:", {
-      token_id: token.id,
-      ticket_count: tickets.length,
+  if (platform === "ios") {
+    return "apns";
+  }
+
+  if (platform === "android") {
+    return "fcm";
+  }
+
+  return "webpush";
+}
+
+async function sendExpoPush(token: PushToken, title: string, body: string, data?: object): Promise<PushDeliveryResult> {
+  try {
+    const response = await fetch("https://exp.host/--/api/v2/push/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        to: token.token,
+        title,
+        body,
+        data: data ?? {},
+      }),
     });
-    return;
-  }
 
-  if (failedTicket.details?.error === "DeviceNotRegistered") {
-    await removePushTokenById(token.id);
-  }
+    if (!response.ok) {
+      return { token_id: token.id, provider: "expo", status: "failed", reason: `Expo responded ${response.status}` };
+    }
 
-  throw new Error(failedTicket.message ?? `Expo push failed: ${failedTicket.details?.error ?? "unknown error"}`);
+    return { token_id: token.id, provider: "expo", status: "sent" };
+  } catch (error) {
+    return { token_id: token.id, provider: "expo", status: "failed", reason: error instanceof Error ? error.message : String(error) };
+  }
 }
 
-async function sendFcmPush(token: PushToken, title: string, body: string, data?: object): Promise<void> {
-  if (isExpoPushToken(token.token)) {
-    await sendExpoPush(token, title, body, data);
-    return;
+async function sendApnsPush(token: PushToken, _title: string, _body: string, _data?: object): Promise<PushDeliveryResult> {
+  if (!process.env.APNS_KEY_ID || !process.env.APNS_TEAM_ID || !process.env.APNS_PRIVATE_KEY) {
+    return { token_id: token.id, provider: "apns", status: "skipped", reason: "APNS credentials are not configured" };
   }
 
-  console.warn("[notifications.service.sendFcmPush] Native FCM token delivery is not configured:", {
-    token_id: token.id,
-    title,
-    body,
-    hasData: Boolean(data),
-  });
+  return { token_id: token.id, provider: "apns", status: "skipped", reason: "APNS provider adapter is configured for future credential integration" };
 }
 
-async function sendApnsPush(token: PushToken, title: string, body: string, data?: object): Promise<void> {
-  if (isExpoPushToken(token.token)) {
-    await sendExpoPush(token, title, body, data);
-    return;
+async function sendWebPush(token: PushToken, _title: string, _body: string, _data?: object): Promise<PushDeliveryResult> {
+  if (!process.env.WEB_PUSH_VAPID_PUBLIC_KEY || !process.env.WEB_PUSH_VAPID_PRIVATE_KEY) {
+    return { token_id: token.id, provider: "webpush", status: "skipped", reason: "WebPush VAPID credentials are not configured" };
   }
 
-  console.warn("[notifications.service.sendApnsPush] Native APNS token delivery is not configured:", {
-    token_id: token.id,
-    title,
-    body,
-    hasData: Boolean(data),
-  });
+  return { token_id: token.id, provider: "webpush", status: "skipped", reason: "WebPush provider adapter is configured for future credential integration" };
 }
 
-async function sendWebPush(token: PushToken, title: string, body: string, data?: object): Promise<void> {
-  if (isExpoPushToken(token.token)) {
-    await sendExpoPush(token, title, body, data);
-    return;
+async function deliverPush(token: PushToken, title: string, body: string, data?: object): Promise<PushDeliveryResult> {
+  const provider = (token.provider ?? inferProvider(token.platform, token.token)) as PushProvider;
+  if (provider === "expo") {
+    return sendExpoPush(token, title, body, data);
   }
 
-  console.warn("[notifications.service.sendWebPush] Native web push delivery is not configured:", {
-    token_id: token.id,
-    title,
-    body,
-    hasData: Boolean(data),
-  });
+  if (provider === "apns") {
+    return sendApnsPush(token, title, body, data);
+  }
+
+  return sendWebPush(token, title, body, data);
 }
 
-export async function sendPushNotification(userId: string, title: string, body: string, data?: object): Promise<void> {
+export async function sendPushNotification(userId: string, title: string, body: string, data?: object): Promise<PushDeliveryResult[]> {
   console.log("[notifications.service.sendPushNotification] ========== START ==========");
   console.log("[notifications.service.sendPushNotification] Params:", { userId, title, hasData: Boolean(data) });
 
   try {
     const result = await pool.query<PushToken>(
-      `SELECT id, user_id, token, platform, device_id, created_at, updated_at
+      `SELECT id, user_id, token, platform, provider, device_id, app_version, last_seen_at, is_active, created_at, updated_at
        FROM push_tokens
-       WHERE user_id = $1::uuid`,
+       WHERE user_id = $1::uuid
+         AND COALESCE(is_active, true) = true
+         AND COALESCE(provider, '') <> 'fcm'`,
       [userId]
     );
     console.log("[notifications.service.sendPushNotification] Tokens found:", result.rows.length);
+    const deliveries: PushDeliveryResult[] = [];
 
     for (const token of result.rows) {
-      try {
-        if (token.platform === "android") {
-          await sendFcmPush(token, title, body, data);
-        } else if (token.platform === "ios") {
-          await sendApnsPush(token, title, body, data);
-        } else {
-          await sendWebPush(token, title, body, data);
-        }
-      } catch (pushError) {
-        console.error("[notifications.service.sendPushNotification] Push send failed:", {
-          token_id: token.id,
-          platform: token.platform,
-          error: pushError instanceof Error ? pushError.message : String(pushError),
-        });
-      }
+      const delivery = await deliverPush(token, title, body, data);
+      deliveries.push(delivery);
+      console.log("[notifications.service.sendPushNotification] Delivery result:", delivery);
     }
+
+    const fcmDeliveries = await sendFcmPushNotification(userId, title, body, data);
+    for (const delivery of fcmDeliveries) {
+      deliveries.push(delivery);
+      console.log("[notifications.service.sendPushNotification] FCM delivery result:", delivery);
+    }
+
+    return deliveries;
   } catch (error) {
     console.error("[notifications.service.sendPushNotification] Failed to load push tokens:", error);
+    return [];
   }
 }

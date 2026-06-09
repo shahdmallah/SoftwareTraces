@@ -51,3 +51,16 @@ export async function getPendingSync() {
   const response = await apiRequest<Envelope<any[]>>('/api/offline/sync');
   return response.data;
 }
+
+export async function syncOfflineActivities(activities: Record<string, unknown>[]) {
+  const response = await apiRequest<Envelope<unknown>>('/api/offline/sync', {
+    method: 'POST',
+    body: JSON.stringify({ activities }),
+  });
+  return response.data;
+}
+
+export async function getOfflineTrailBundle(trailId: string) {
+  const response = await apiRequest<Envelope<unknown>>(`/api/offline/trails/${trailId}/bundle`);
+  return response.data;
+}

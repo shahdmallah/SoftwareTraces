@@ -9,6 +9,7 @@ import type { Socket } from 'socket.io-client';
 import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
 import {
   createMessagesSocket,
+  emitTypingState,
   getConversationMessages,
   markConversationRead,
   sendConversationMessage,
@@ -65,6 +66,9 @@ export function ActivityThreadScreen() {
   const [isLoading, setIsLoading] = useState(Boolean(route.params.conversationId ?? route.params.threadId));
   const [isSending, setIsSending] = useState(false);
   const [apiMessage, setApiMessage] = useState<string | null>(null);
+  const [typingUserId, setTypingUserId] = useState<string | null>(null);
+  const socketRef = useRef<Socket | null>(null);
+  const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -143,6 +147,7 @@ export function ActivityThreadScreen() {
         onMessage: (message) => {
           if (message.conversation_id === conversationId) {
             setMessages((current) => upsertMessage(current, message));
+            setTypingUserId(null);
             void markConversationRead(conversationId).catch(() => undefined);
           }
         },
@@ -150,6 +155,12 @@ export function ActivityThreadScreen() {
           if (nextConversation.id === conversationId) {
             setConversation(nextConversation);
           }
+        },
+        onTyping: (payload) => {
+          if (payload.conversation_id !== conversationId || payload.user_id === currentProfileId) {
+            return;
+          }
+          setTypingUserId(payload.is_typing ? payload.user_id : null);
         },
       },
       conversationId,
@@ -159,6 +170,7 @@ export function ActivityThreadScreen() {
           nextSocket.close();
         } else {
           socket = nextSocket;
+          socketRef.current = nextSocket;
         }
       })
       .catch(() => undefined);
@@ -166,8 +178,12 @@ export function ActivityThreadScreen() {
     return () => {
       cancelled = true;
       socket?.close();
+      socketRef.current = null;
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
     };
-  }, [conversationId]);
+  }, [conversationId, currentProfileId]);
 
   useEffect(() => {
     const timeout = setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 80);
@@ -380,12 +396,27 @@ export function ActivityThreadScreen() {
         {apiMessage ? (
           <Text style={[styles.apiMessage, isArabic ? rtlText : ltrText]}>{apiMessage}</Text>
         ) : null}
+        {typingUserId ? (
+          <Text style={[styles.typingIndicator, isArabic ? rtlText : ltrText]}>
+            {isArabic ? 'يكتب...' : 'Typing...'}
+          </Text>
+        ) : null}
       </ScrollView>
 
       <View style={[styles.composer, { paddingBottom: Math.max(12, insets.bottom + 8) }, isArabic ? rtlRow : ltrRow]}>
         <TextInput
           value={draft}
-          onChangeText={setDraft}
+          onChangeText={(value) => {
+            setDraft(value);
+            if (!conversationId || !socketRef.current) return;
+            emitTypingState(socketRef.current, conversationId, value.trim().length > 0);
+            if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+            typingTimeoutRef.current = setTimeout(() => {
+              if (socketRef.current && conversationId) {
+                emitTypingState(socketRef.current, conversationId, false);
+              }
+            }, 1500);
+          }}
           placeholder={isArabic ? 'اكتب رسالة...' : 'Write a message...'}
           placeholderTextColor="#A18F7A"
           style={[styles.input, isArabic ? rtlText : ltrText]}
@@ -464,6 +495,7 @@ const styles = StyleSheet.create({
   timeText: { marginTop: 5, color: '#8A7A6A', fontSize: 10, fontWeight: '700' },
   myTimeText: { color: 'rgba(255,255,255,0.65)' },
   apiMessage: { alignSelf: 'center', maxWidth: '90%', color: '#8A7A6A', fontSize: 11, lineHeight: 16, textAlign: 'center' },
+  typingIndicator: { color: '#8A7A6A', fontSize: 12, fontStyle: 'italic', paddingHorizontal: 8, paddingBottom: 4 },
   composer: { flexDirection: 'row', alignItems: 'flex-end', gap: 10, paddingHorizontal: 16, paddingTop: 12, backgroundColor: '#FFF8F1', borderTopWidth: 1, borderTopColor: '#E7D8C3' },
   input: { flex: 1, minHeight: 46, maxHeight: 116, borderRadius: 18, paddingHorizontal: 14, paddingTop: 12, paddingBottom: 10, backgroundColor: '#FFFFFF', color: '#2C2418', fontSize: 14 },
   sendButton: { width: 46, height: 46, borderRadius: 23, alignItems: 'center', justifyContent: 'center', backgroundColor: '#630E13' },

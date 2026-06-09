@@ -5,7 +5,7 @@ import type { StackNavigationProp } from '@react-navigation/stack';
 import { AnimatedEntrance } from '../AnimatedUI';
 import { shareActivityPost, uploadActivityMedia, type ActivityMediaFile } from '../../api/activitiesApi';
 import { saveNatureSighting } from '../../api/natureSightingsApi';
-import { identifySpeciesDetails, type SpeciesLanguage } from '../../api/speciesApi';
+import { hasDetectedSpecies, identifySpeciesDetails, type SpeciesLanguage } from '../../api/speciesApi';
 import { addLocalFeedItem } from '../../data/localSocial';
 import { completionRadii } from '../../features/trailCompletion/theme';
 import type { TrailCompletionDraft } from '../../features/trailCompletion/types';
@@ -87,8 +87,12 @@ async function uploadRecapPhotosToActivity(draft: TrailCompletionDraft, caption:
 
       if (uploaded.id) {
         await identifySpeciesDetails(imageUriToActivityFile(uri), language)
-          .then((identification) =>
-            saveNatureSighting({
+          .then((identification) => {
+            if (!hasDetectedSpecies(identification.result)) {
+              return undefined;
+            }
+
+            return saveNatureSighting({
               trail_id: uploaded.trail_id ?? draft.trailId ?? null,
               activity_id: uploaded.activity_id ?? draft.activityId,
               photo_id: uploaded.id,
@@ -98,9 +102,11 @@ async function uploadRecapPhotosToActivity(draft: TrailCompletionDraft, caption:
               longitude: lng,
               language,
               classification: identification.result,
-            }),
-          )
-          .catch(() => undefined);
+            });
+          })
+          .catch((error) => {
+            console.warn('[ShareActions] Nature sighting skipped', error);
+          });
       }
     }),
   );

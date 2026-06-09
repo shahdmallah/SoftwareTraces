@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
-import { TrendingUp, Clock, Mountain, Zap, Calendar, Users, MessageCircle, Play } from 'lucide-react';
+import { TrendingUp, Clock, Mountain, Zap, Calendar, Users, MessageCircle, Play, Trophy, Shield } from 'lucide-react';
 import { Link } from 'react-router';
 import { StatCard } from '../components/StatCard';
-import { getMyActivities, type Activity } from '../api/activities';
+import { getActivityJournal, getMyActivities, type Activity } from '../api/activities';
+import { getMyChallenges, joinChallenge, listChallenges, type Challenge } from '../api/challenges';
+import { joinMeetup, listMeetups, type Meetup } from '../api/meetups';
 import { getAccessToken } from '../api/client';
 
 function km(activity: Activity) {
@@ -19,15 +21,26 @@ function durationHours(activity: Activity) {
 
 export function ActivityPage() {
   const [activities, setActivities] = useState<Activity[]>([]);
+  const [journal, setJournal] = useState<Activity[]>([]);
+  const [challenges, setChallenges] = useState<Challenge[]>([]);
+  const [meetups, setMeetups] = useState<Meetup[]>([]);
   const [errorMessage, setErrorMessage] = useState('');
   const isGuest = !getAccessToken();
 
   useEffect(() => {
     if (isGuest) return;
 
-    getMyActivities()
-      .then(setActivities)
-      .catch((error) => setErrorMessage(error instanceof Error ? error.message : 'Unable to load activities.'));
+    void Promise.all([
+      getMyActivities().then(setActivities),
+      getActivityJournal({ limit: 10 }).then(setJournal).catch(() => setJournal([])),
+      Promise.all([listChallenges(), getMyChallenges().catch(() => [])]).then(([publicRows, myRows]) => {
+        const merged = new Map<string, Challenge>();
+        publicRows.forEach((row) => merged.set(row.id, row));
+        myRows.forEach((row) => merged.set(row.id, { ...merged.get(row.id), ...row }));
+        setChallenges([...merged.values()]);
+      }),
+      listMeetups({ limit: 10 }).then(setMeetups).catch(() => setMeetups([])),
+    ]).catch((error) => setErrorMessage(error instanceof Error ? error.message : 'Unable to load activities.'));
   }, [isGuest]);
 
   const totals = useMemo(() => ({
@@ -45,7 +58,7 @@ export function ActivityPage() {
         <div className="flex items-center justify-between mb-6">
           <div>
             <h1 className="mb-2">Activity</h1>
-            <p className="text-secondary">Synced from /api/activities/me</p>
+            <p className="text-secondary">Activities, challenges, meetups, and journal entries from the API.</p>
           </div>
           <Link to="/recording" className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors">
             <Play className="w-4 h-4" />
@@ -93,16 +106,77 @@ export function ActivityPage() {
           <div className="bg-card rounded-xl border border-border p-6">
             <div className="flex items-center gap-2 mb-4">
               <Users className="w-5 h-5 text-secondary" />
-              <h3>Community Activity</h3>
+              <h3>Community</h3>
             </div>
-            <p className="text-sm text-secondary">Connect `/api/social/feed` here when you want the web community feed surfaced.</p>
+            <div className="flex flex-wrap gap-2">
+              <Link to="/feed" className="px-3 py-2 rounded-lg border border-border text-sm hover:bg-muted/20">Open feed</Link>
+              <Link to="/messages" className="px-3 py-2 rounded-lg border border-border text-sm hover:bg-muted/20">Messages</Link>
+              <Link to="/safety" className="px-3 py-2 rounded-lg border border-border text-sm hover:bg-muted/20 inline-flex items-center gap-1">
+                <Shield className="w-4 h-4" />
+                Safety
+              </Link>
+            </div>
           </div>
           <div className="bg-card rounded-xl border border-border p-6">
             <div className="flex items-center gap-2 mb-4">
               <MessageCircle className="w-5 h-5 text-secondary" />
-              <h3>Trail Plans</h3>
+              <h3>Meetups</h3>
             </div>
-            <p className="text-sm text-secondary">Plans and messages are ready for their corresponding backend endpoints.</p>
+            <div className="space-y-2">
+              {meetups.slice(0, 4).map((meetup) => (
+                <div key={meetup.id} className="flex items-center justify-between text-sm">
+                  <span>{meetup.title}</span>
+                  <button
+                    type="button"
+                    onClick={() => void joinMeetup(meetup.id)}
+                    className="text-primary hover:underline"
+                  >
+                    Join
+                  </button>
+                </div>
+              ))}
+              {!meetups.length && <p className="text-sm text-secondary">No upcoming meetups.</p>}
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-card rounded-xl border border-border p-6 mb-6">
+          <div className="flex items-center gap-2 mb-4">
+            <Trophy className="w-5 h-5 text-secondary" />
+            <h3>Challenges</h3>
+          </div>
+          <div className="space-y-3">
+            {challenges.slice(0, 5).map((challenge) => (
+              <div key={challenge.id} className="flex items-start justify-between gap-4 text-sm border border-border rounded-lg p-3">
+                <div>
+                  <p className="font-medium text-foreground">{challenge.title}</p>
+                  <p className="text-secondary">{challenge.description}</p>
+                  {challenge.participant_status && <p className="text-xs text-primary mt-1">Status: {challenge.participant_status}</p>}
+                </div>
+                {!challenge.participant_status && (
+                  <button type="button" onClick={() => void joinChallenge(challenge.id)} className="text-primary hover:underline shrink-0">
+                    Join
+                  </button>
+                )}
+              </div>
+            ))}
+            {!challenges.length && <p className="text-sm text-secondary">No active challenges.</p>}
+          </div>
+        </div>
+
+        <div className="bg-card rounded-xl border border-border p-6 mb-6">
+          <div className="flex items-center gap-2 mb-4">
+            <Calendar className="w-5 h-5 text-secondary" />
+            <h3>Activity journal</h3>
+          </div>
+          <div className="space-y-3">
+            {journal.slice(0, 5).map((activity) => (
+              <div key={activity.id} className="text-sm flex justify-between">
+                <span>{activity.title || 'Trail activity'}</span>
+                <span className="text-secondary">{new Date(activity.started_at).toLocaleDateString()}</span>
+              </div>
+            ))}
+            {!journal.length && <p className="text-sm text-secondary">No journal entries yet.</p>}
           </div>
         </div>
 

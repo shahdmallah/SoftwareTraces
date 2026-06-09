@@ -1,4 +1,5 @@
 import { apiRequest } from './client';
+import type { SpeciesIdentification, SpeciesLanguage } from './speciesApi';
 
 type Envelope<T> = {
   data: T;
@@ -20,6 +21,7 @@ export type TrailPhoto = {
   helpful_score?: number;
   flag_count?: number;
   quality_score?: number | null;
+  trip_id?: string | null;
 };
 
 export type PhotoType = 'media' | 'trail_photo' | 'review_photo' | 'activity_media';
@@ -105,6 +107,8 @@ export async function uploadMedia(payload: {
   longitude?: number | null;
   locationName?: string | null;
   tripId?: string | null;
+  classification?: SpeciesIdentification | null;
+  language?: SpeciesLanguage;
 }) {
   const formData = new FormData();
   formData.append('file', payload.file as unknown as Blob);
@@ -114,9 +118,22 @@ export async function uploadMedia(payload: {
   if (typeof payload.longitude === 'number') formData.append('longitude', String(payload.longitude));
   if (payload.locationName) formData.append('location_name', payload.locationName);
   if (payload.tripId) formData.append('trip_id', payload.tripId);
+  if (payload.classification) formData.append('classification', JSON.stringify(payload.classification));
+  if (payload.language) formData.append('language', payload.language);
   formData.append('is_public', 'true');
 
-  const response = await apiRequest<Envelope<{ id: string; url: string; thumbnail_url?: string; source?: 'media'; nature_sighting?: unknown }>>('/api/media', {
+  const response = await apiRequest<Envelope<{
+    id: string;
+    url: string;
+    thumbnail_url?: string;
+    caption?: string | null;
+    latitude?: number | string | null;
+    longitude?: number | string | null;
+    location_name?: string | null;
+    trip_id?: string | null;
+    source?: 'media';
+    nature_sighting?: unknown;
+  }>>('/api/media', {
     method: 'POST',
     body: formData,
   });

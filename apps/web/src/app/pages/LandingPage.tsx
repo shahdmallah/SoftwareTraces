@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import {
   Compass,
   Map,
@@ -92,10 +92,11 @@ const navLinks = [
 ];
 
 interface LandingPageProps {
-  onAuth: () => void;
+  onAuth: () => Promise<{ role: string } | null>;
 }
 
 export function LandingPage({ onAuth }: LandingPageProps) {
+  const navigate = useNavigate();
   const [authMode, setAuthMode] = useState<'signin' | 'signup' | null>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
@@ -450,7 +451,13 @@ export function LandingPage({ onAuth }: LandingPageProps) {
         <AuthModal
           mode={authMode}
           onClose={() => setAuthMode(null)}
-          onSuccess={() => { setAuthMode(null); onAuth(); }}
+          onSuccess={async () => {
+            setAuthMode(null);
+            const user = await onAuth();
+            if (user?.role === 'admin') {
+              navigate('/admin');
+            }
+          }}
           onToggleMode={() => setAuthMode(authMode === 'signin' ? 'signup' : 'signin')}
         />
       )}
