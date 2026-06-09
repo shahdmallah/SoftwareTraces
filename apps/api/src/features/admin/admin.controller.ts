@@ -22,9 +22,9 @@ import {
 
 const uuidSchema = z.string().uuid();
 const moderationSchema = z.object({
-  status: z.enum(["pending", "approved", "rejected", "hidden"]),
-  note: z.string().trim().max(1000).nullable().optional(),
-});
+  moderation_status: z.enum(["pending", "approved", "verified", "rejected", "hidden"]),
+  moderation_note: z.string().trim().max(1000).nullable().optional(),
+}).strict();
 
 const badgeSchema = z.object({
   code: z.string().trim().min(1).max(80).regex(/^[A-Z0-9_:-]+$/).optional(),
@@ -163,15 +163,33 @@ export async function getIncidents(req: Request, res: Response): Promise<void> {
 export async function patchIncidentModeration(req: Request, res: Response): Promise<void> {
   try {
     const auth = requireAuth(req);
+    const incidentId = uuidSchema.parse(req.params.id);
     const body = moderationSchema.parse(req.body);
-    const incident = await moderateIncident(uuidSchema.parse(req.params.id), body.status, body.note ?? null, auth.sub);
+    console.log("[admin.patchIncidentModeration] Request:", {
+      incidentId,
+      body,
+      adminUserId: auth.sub,
+    });
+    const incident = await moderateIncident(incidentId, body.moderation_status, body.moderation_note ?? null, auth.sub);
     if (!incident) {
       res.status(404).json({ error: "Incident not found" });
       return;
     }
     res.json({ data: incident });
   } catch (error) {
-    sendAdminError("patchIncidentModeration", res, error);
+    console.error("[admin.patchIncidentModeration] ERROR:", error);
+
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ error: "Validation failed", details: error.flatten() });
+      return;
+    }
+
+    res.status(500).json({
+      error: "Admin action failed",
+      ...(process.env.NODE_ENV !== "production"
+        ? { details: error instanceof Error ? error.message : String(error) }
+        : {}),
+    });
   }
 }
 
@@ -249,7 +267,13 @@ export async function getOchaLogs(_req: Request, res: Response): Promise<void> {
   try {
     res.json({ data: await listOchaLogs() });
   } catch (error) {
-    sendAdminError("getOchaLogs", res, error);
+    console.error("[admin.getOchaLogs] ERROR:", error);
+    res.status(500).json({
+      error: "Failed to fetch OCHA logs",
+      ...(process.env.NODE_ENV !== "production"
+        ? { details: error instanceof Error ? error.message : String(error) }
+        : {}),
+    });
   }
 }
 
@@ -257,6 +281,12 @@ export async function postOchaFetch(_req: Request, res: Response): Promise<void>
   try {
     res.json({ data: await runOchaImport() });
   } catch (error) {
-    sendAdminError("postOchaFetch", res, error);
+    console.error("[admin.postOchaFetch] ERROR:", error);
+    res.status(500).json({
+      error: "Failed to run OCHA import",
+      ...(process.env.NODE_ENV !== "production"
+        ? { details: error instanceof Error ? error.message : String(error) }
+        : {}),
+    });
   }
 }
