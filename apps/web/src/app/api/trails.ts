@@ -30,6 +30,8 @@ export type Trail = {
 
 export type TrailReview = {
   id: string;
+  trail_id?: string;
+  user_id?: string;
   rating: number;
   title?: string | null;
   content: string;
@@ -55,6 +57,9 @@ export type TrailPhoto = {
   is_primary?: boolean;
   created_at?: string;
   uploaded_by?: string | null;
+  user_id?: string | null;
+  uploader_id?: string | null;
+  trip_id?: string | null;
   source?: 'direct' | 'review' | 'media' | 'activity_media';
   approved_for_trail_page?: boolean;
   manual_review_required?: boolean;

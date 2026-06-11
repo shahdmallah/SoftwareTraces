@@ -1,5 +1,6 @@
 // Updated to centralize typed frontend access for trail, review, condition, bookmark, and nearby APIs with mobile-friendly normalization.
-import { apiRequest } from './client';
+import { apiRequest, type ApiErrorPayload } from './client';
+import type { TrailAccessDangerZone } from './safetyApi';
 
 export type TrailDifficulty = 'Easy' | 'Moderate' | 'Hard' | 'Expert';
 export type TrailDifficultyApi = 'easy' | 'moderate' | 'hard' | 'expert';
@@ -224,6 +225,8 @@ export type DuplicateTrailWarning = {
   matches: DuplicateTrailMatch[];
 };
 
+export type CreateTrailWarning = TrailAccessDangerZone | string;
+
 export type TrailBookmark = {
   saved_id: string;
   trailId: string;
@@ -241,6 +244,15 @@ type Envelope<T> = {
     total: number;
     pages: number;
   };
+};
+
+export type CreateTrailResponse = Envelope<Trail> & {
+  duplicate_warning?: DuplicateTrailWarning | null;
+  route_warnings?: TrailAccessDangerZone[];
+};
+
+export type CreateTrailErrorPayload = ApiErrorPayload & {
+  warnings?: CreateTrailWarning[];
 };
 
 type SavedTrailRow = {
@@ -326,7 +338,7 @@ export function normalizeTrail(trail: Trail): Trail {
   };
 }
 
-export async function createTrail(payload: {
+export type CreateTrailPayload = {
   name: string;
   nameAr?: string;
   description?: string;
@@ -342,8 +354,10 @@ export async function createTrail(payload: {
   confirm_hazard?: boolean;
   coordinates: [number, number][];
   stats: TrailStatsResponse;
-}) {
-  return apiRequest<Envelope<Trail>>('/api/trails', {
+};
+
+export async function createTrail(payload: CreateTrailPayload) {
+  return apiRequest<CreateTrailResponse>('/api/trails', {
     method: 'POST',
     body: JSON.stringify(payload),
   });

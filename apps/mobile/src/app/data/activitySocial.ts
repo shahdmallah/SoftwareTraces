@@ -60,6 +60,7 @@ export type FeedItem =
       comments: number;
       previewComments?: FeedCommentPreview[];
       natureSightings?: NatureSighting[];
+      photoUris?: string[];
       distance: string;
     }
   | {

@@ -169,6 +169,7 @@ const AUTO_DETECTED_API_URL = getAutoDetectedApiUrl();
 const API_BASE_URL = (EXPLICIT_API_URL || AUTO_DETECTED_API_URL || DEFAULT_API_URL || 'http://localhost:3001').replace(/\/$/, '');
 const IS_USING_FALLBACK_API_URL = !EXPLICIT_API_URL;
 const AUTH_SESSION_KEY = 'traces.auth.session';
+const FIRST_LOGIN_SETUP_KEY_PREFIX = 'traces.first-login-setup';
 let activeSession: AuthSession | null = null;
 
 if (__DEV__ && IS_USING_FALLBACK_API_URL) {
@@ -316,4 +317,21 @@ export async function clearStoredSession() {
 export async function getAccessToken() {
   const session = activeSession ?? await getStoredSession();
   return session?.token ?? null;
+}
+
+function getFirstLoginSetupKey(userId: string) {
+  return `${FIRST_LOGIN_SETUP_KEY_PREFIX}.${userId}`;
+}
+
+export async function hasCompletedFirstLoginSetup(userId: string) {
+  const value = await SecureStore.getItemAsync(getFirstLoginSetupKey(userId));
+  return value !== 'pending';
+}
+
+export async function markFirstLoginSetupPending(userId: string) {
+  await SecureStore.setItemAsync(getFirstLoginSetupKey(userId), 'pending');
+}
+
+export async function markFirstLoginSetupComplete(userId: string) {
+  await SecureStore.setItemAsync(getFirstLoginSetupKey(userId), 'done');
 }

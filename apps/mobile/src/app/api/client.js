@@ -69,10 +69,11 @@ exports.apiTextRequest = apiTextRequest;
 var auth_1 = require("../lib/auth");
 var ApiError = /** @class */ (function (_super) {
     __extends(ApiError, _super);
-    function ApiError(message, status) {
+    function ApiError(message, status, payload) {
         var _this = _super.call(this, message) || this;
         _this.name = 'ApiError';
         _this.status = status;
+        _this.payload = payload;
         return _this;
     }
     return ApiError;
@@ -142,7 +143,7 @@ function apiRequest(path_1) {
                 case 3:
                     payload = (_b.sent());
                     if (!response.ok) {
-                        throw new ApiError(getErrorMessage(payload, 'Request failed.'), response.status);
+                        throw new ApiError(getErrorMessage(payload, 'Request failed.'), response.status, payload);
                     }
                     return [2 /*return*/, payload];
             }
@@ -177,7 +178,7 @@ function apiTextRequest(path_1) {
                         catch (_c) {
                             payload = body ? { error: body } : null;
                         }
-                        throw new ApiError(getErrorMessage(payload, 'Request failed.'), response.status);
+                        throw new ApiError(getErrorMessage(payload, 'Request failed.'), response.status, payload);
                     }
                     return [2 /*return*/, body];
             }

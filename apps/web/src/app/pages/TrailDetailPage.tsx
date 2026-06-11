@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router';
 import {
   ArrowLeft, MapPin, Clock, TrendingUp, Star, Bookmark, Download,
-  Share2, Play, Users, MessageCircle, ChevronRight, Flag,
+  Share2, Users, MessageCircle, ChevronRight, Flag, Shield,
 } from 'lucide-react';
 import { ImageWithFallback } from '../components/ImageWithFallback';
 import { StatCard } from '../components/StatCard';
@@ -327,10 +327,20 @@ export function TrailDetailPage() {
           <div className="grid md:grid-cols-2 gap-4">
             {trailSafety && (
               <div className="bg-card rounded-xl border border-border p-5">
-                <h3 className="mb-2">Trail safety</h3>
+                <div className="flex items-center justify-between gap-2 mb-2">
+                  <h3>Trail safety</h3>
+                  <Link to="/safety" className="inline-flex items-center gap-1 text-xs text-primary hover:underline">
+                    <Shield className="w-3.5 h-3.5" />
+                    Safety Center
+                  </Link>
+                </div>
                 <p className="text-sm text-secondary">
                   Score <strong>{trailSafety.safety_score}</strong> · Risk <strong>{trailSafety.risk_level}</strong>
+                  {trailSafety.incident_count_48h > 0 ? ` · ${trailSafety.incident_count_48h} incident(s) in 48h` : ''}
                 </p>
+                {trailSafety.nearest_settlement && (
+                  <p className="text-xs text-secondary mt-1">Nearest settlement: {trailSafety.nearest_settlement.name}</p>
+                )}
                 {trailSafety.warnings.length > 0 && (
                   <ul className="mt-2 text-sm text-secondary list-disc pl-5">
                     {trailSafety.warnings.slice(0, 3).map((warning) => (
@@ -353,10 +363,6 @@ export function TrailDetailPage() {
         )}
 
         <div className="flex flex-col sm:flex-row gap-3">
-          <Link to={`/recording?trailId=${trail.id}`} className="flex-1 flex items-center justify-center gap-2 px-6 py-3 bg-primary text-primary-foreground rounded-xl hover:bg-primary/90 transition-colors">
-            <Play className="w-5 h-5" />
-            <span>Start Hike</span>
-          </Link>
           <button onClick={handleDownload} className="flex-1 flex items-center justify-center gap-2 px-6 py-3 border border-border rounded-xl hover:bg-muted/20 transition-colors">
             <Download className="w-5 h-5" />
             <span>Download Offline</span>

@@ -108,6 +108,7 @@ export function mapSocialFeedItemToFeedItem(item: SocialFeedItem): FeedItem {
     const trailId = item.trail.id ?? '';
     const caption = item.caption?.trim() || item.content?.trim() || '';
     const label = item.trail.name ?? (trailId ? 'Trail media' : 'Location media');
+    const photoUris = item.photos.map((photoItem) => photoItem.url).filter(Boolean);
 
     return {
       id: item.id,
@@ -123,6 +124,7 @@ export function mapSocialFeedItemToFeedItem(item: SocialFeedItem): FeedItem {
       handle,
       avatar: item.user.avatar_url || '',
       image: photo,
+      photoUris,
       trailNameEn: label,
       trailNameAr: label,
       regionEn: trailId ? 'Trail recap' : 'Location media',

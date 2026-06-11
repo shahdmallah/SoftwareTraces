@@ -66,7 +66,7 @@ export function SavedTrailsPage() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
         <div className="mb-6">
           <h1 className="mb-2">Saved Trails</h1>
-          <p className="text-secondary">Your backend bookmarks • {filteredTrails.length} trails</p>
+          <p className="text-secondary">Your saved trails • {filteredTrails.length} trails</p>
         </div>
 
         <div className="relative mb-6">

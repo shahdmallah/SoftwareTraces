@@ -61,7 +61,7 @@ export function MyTrailsPage() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
         <div className="mb-6">
           <h1 className="mb-2">My Trails</h1>
-          <p className="text-secondary">Published routes pulled from /api/trails/mine</p>
+          <p className="text-secondary">{filteredTrails.length} published routes</p>
         </div>
 
         <div className="relative mb-6">

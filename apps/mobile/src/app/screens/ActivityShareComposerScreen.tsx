@@ -1141,13 +1141,13 @@ export function ActivityShareComposerScreen() {
     [],
   );
 
-  const getDetectedClassificationForUpload = useCallback(
+  const getClassificationForUpload = useCallback(
     async (photoUri: string, index: number) => {
-      const classification = index === 0 && speciesResult
-        ? speciesResult
-        : (await identifySpeciesDetails(imageUriToFile(photoUri), isArabic ? 'ar' : 'en')).result;
+      if (index === 0 && speciesResult) {
+        return speciesResult;
+      }
 
-      return hasDetectedSpecies(classification) ? classification : null;
+      return (await identifySpeciesDetails(imageUriToFile(photoUri), isArabic ? 'ar' : 'en')).result;
     },
     [isArabic, speciesResult],
   );
@@ -1255,7 +1255,7 @@ export function ActivityShareComposerScreen() {
             let classification: SpeciesIdentification | null = null;
 
             try {
-              classification = await getDetectedClassificationForUpload(photo, index);
+              classification = await getClassificationForUpload(photo, index);
             } catch (error) {
               console.warn('[ActivityShareComposer] Location media species identification skipped', error);
             }
@@ -1268,7 +1268,7 @@ export function ActivityShareComposerScreen() {
               locationName: mediaLocationName,
               tripId: trailIdForMedia,
               language: isArabic ? 'ar' : 'en',
-              classification,
+              classification: classification && hasDetectedSpecies(classification) ? classification : null,
             });
           }),
         );
@@ -1392,7 +1392,7 @@ export function ActivityShareComposerScreen() {
           let classification: SpeciesIdentification | null = null;
 
           try {
-            classification = await getDetectedClassificationForUpload(photo, index);
+            classification = await getClassificationForUpload(photo, index);
           } catch (error) {
             console.warn('[ActivityShareComposer] Recap species identification skipped', error);
           }
@@ -1405,7 +1405,7 @@ export function ActivityShareComposerScreen() {
             locationName: selectedTrail?.name || trimmedTrail,
             tripId: selectedTrailId,
             language: isArabic ? 'ar' : 'en',
-            classification,
+            classification: classification && hasDetectedSpecies(classification) ? classification : null,
           });
         }),
       );

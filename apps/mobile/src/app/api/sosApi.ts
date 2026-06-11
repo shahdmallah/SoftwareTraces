@@ -15,6 +15,9 @@ export type SosAlert = {
   status_note?: string | null;
   contact_count?: number;
   notified_contact_count?: number;
+  emergency_contacts_count?: number;
+  contacts_notified?: number;
+  notification_status?: 'success' | 'partial' | 'failed';
   occurred_at: string;
   acknowledged_at?: string | null;
   resolved_at?: string | null;
@@ -24,10 +27,18 @@ export type SosAlert = {
   updated_at?: string;
 };
 
+export type SosCreateResult = {
+  sos_event: SosAlert;
+  emergency_contacts_count: number;
+  contacts_notified: number;
+  notification_status: 'success' | 'partial' | 'failed';
+};
+
 export type EmergencyContact = {
   id: string;
   user_id: string;
   contact_user_id: string | null;
+  full_name?: string;
   name: string;
   phone: string | null;
   email: string | null;
@@ -49,7 +60,7 @@ export async function sendSosAlert(payload: {
   message?: string;
   occurredAt?: string;
 }) {
-  const response = await apiRequest<Envelope<SosAlert>>('/api/sos', {
+  const response = await apiRequest<Envelope<SosCreateResult>>('/api/sos', {
     method: 'POST',
     body: JSON.stringify({
       latitude: payload.latitude,
@@ -89,8 +100,43 @@ export async function getEmergencyContacts() {
   return response.data;
 }
 
+type EmergencyContactPayload = {
+  full_name?: string;
+  name?: string;
+  contact_user_id?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  relationship?: string | null;
+  priority?: number;
+  notify_by_sms?: boolean;
+  notify_by_email?: boolean;
+  notify_by_push?: boolean;
+  notify_on_sos?: boolean;
+  is_active?: boolean;
+};
+
+function normalizeEmergencyContactPayload(payload: EmergencyContactPayload) {
+  const fullName = (payload.full_name ?? payload.name ?? '').trim();
+
+  return {
+    full_name: fullName,
+    name: fullName,
+    contact_user_id: payload.contact_user_id ?? null,
+    phone: payload.phone ?? null,
+    email: payload.email ?? null,
+    relationship: payload.relationship ?? null,
+    priority: payload.priority,
+    notify_by_sms: payload.notify_by_sms,
+    notify_by_email: payload.notify_by_email,
+    notify_by_push: payload.notify_by_push,
+    notify_on_sos: payload.notify_on_sos,
+    is_active: payload.is_active,
+  };
+}
+
 export async function createEmergencyContact(payload: {
-  name: string;
+  full_name?: string;
+  name?: string;
   contact_user_id?: string | null;
   phone?: string | null;
   email?: string | null;
@@ -101,14 +147,16 @@ export async function createEmergencyContact(payload: {
   notify_by_push?: boolean;
   notify_on_sos?: boolean;
 }) {
+  const body = normalizeEmergencyContactPayload(payload);
   const response = await apiRequest<Envelope<EmergencyContact>>('/api/sos/contacts', {
     method: 'POST',
-    body: JSON.stringify(payload),
+    body: JSON.stringify(body),
   });
   return response.data;
 }
 
 export async function updateEmergencyContact(id: string, payload: Partial<{
+  full_name: string;
   name: string;
   contact_user_id: string | null;
   phone: string | null;
@@ -121,9 +169,20 @@ export async function updateEmergencyContact(id: string, payload: Partial<{
   notify_on_sos: boolean;
   is_active: boolean;
 }>) {
+  const body =
+    payload.full_name != null || payload.name != null
+      ? normalizeEmergencyContactPayload(payload)
+      : {
+          ...payload,
+          contact_user_id: payload.contact_user_id ?? null,
+          phone: payload.phone ?? null,
+          email: payload.email ?? null,
+          relationship: payload.relationship ?? null,
+        };
+
   const response = await apiRequest<Envelope<EmergencyContact>>(`/api/sos/contacts/${id}`, {
     method: 'PATCH',
-    body: JSON.stringify(payload),
+    body: JSON.stringify(body),
   });
   return response.data;
 }

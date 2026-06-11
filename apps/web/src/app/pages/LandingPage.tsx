@@ -14,6 +14,7 @@ import {
   Menu,
   X,
 } from 'lucide-react';
+import { BrandLogo } from '../components/BrandLogo';
 import { ImageWithFallback } from '../components/ImageWithFallback';
 import { AuthModal } from '../components/AuthModal';
 
@@ -88,7 +89,7 @@ const navLinks = [
   { label: 'Explore', to: '/explore' },
   { label: 'Map', to: '/map' },
   { label: 'Trails', to: '/explore' },
-  { label: 'Activity', to: '/activity' },
+  { label: 'Feed', to: '/feed' },
 ];
 
 interface LandingPageProps {
@@ -106,10 +107,11 @@ export function LandingPage({ onAuth }: LandingPageProps) {
         <div className="max-w-7xl mx-auto px-6 lg:px-8">
           <div className="flex items-center justify-between h-16 lg:h-18">
             <Link to="/" className="flex items-center gap-2.5">
-              <div className="w-9 h-9 rounded-xl flex items-center justify-center shadow" style={{ backgroundColor: '#630E13' }}>
-                <Compass className="w-5 h-5 text-white" />
-              </div>
-              <span className="text-white font-semibold text-lg leading-none">Traces</span>
+              <BrandLogo
+                tone="dark"
+                imageClassName="w-9 h-9"
+                textClassName="text-white font-semibold text-lg leading-none"
+              />
             </Link>
 
             <div className="hidden md:flex items-center gap-8">
@@ -409,11 +411,12 @@ export function LandingPage({ onAuth }: LandingPageProps) {
         <div className="max-w-7xl mx-auto">
           <div className="flex flex-col md:flex-row items-start justify-between gap-8 mb-10">
             <div className="max-w-xs">
-              <div className="flex items-center gap-2 mb-3">
-                <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ backgroundColor: '#630E13' }}>
-                  <Compass className="w-4 h-4 text-white" />
-                </div>
-                <span className="text-white font-semibold">Traces</span>
+            <div className="flex items-center gap-2 mb-3">
+                <BrandLogo
+                  tone="dark"
+                  imageClassName="w-8 h-8"
+                  textClassName="text-white font-semibold"
+                />
               </div>
               <p className="text-[#8A7A6A] text-sm leading-relaxed">
                 A trail discovery and activity tracking platform for hikers, route builders, and outdoor communities.

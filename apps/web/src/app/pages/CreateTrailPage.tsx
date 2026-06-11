@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ArrowLeft, Save, Send, MapPin, Image as ImageIcon, RotateCcw, Sparkles } from 'lucide-react';
+import { ArrowLeft, Save, Send, MapPin, Image as ImageIcon, RotateCcw, Sparkles, Pencil, MousePointer2, Undo2 } from 'lucide-react';
 import { Link, useNavigate } from 'react-router';
 import { MapboxTrailMap } from '../components/MapboxTrailMap';
 import { createTrail, getNearbyTrails, getTrailStats, searchOrGenerateTrail, type Trail } from '../api/trails';
@@ -78,10 +78,8 @@ export function CreateTrailPage() {
   const [trailPrompt, setTrailPrompt] = useState('');
   const [isGeneratingTrail, setIsGeneratingTrail] = useState(false);
   const [generatedMessage, setGeneratedMessage] = useState('');
-  const [routePoints, setRoutePoints] = useState<[number, number][]>([
-    [35.235, 31.776],
-    [35.255, 31.785],
-  ]);
+  const [routePoints, setRoutePoints] = useState<[number, number][]>([]);
+  const [isDrawingRoute, setIsDrawingRoute] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const isGuest = !getAccessToken();
@@ -111,6 +109,7 @@ export function CreateTrailPage() {
       }
 
       setRoutePoints(generatedTrail.coordinates);
+      setIsDrawingRoute(false);
       setTrailName(generatedTrail.name_suggestion || result.parsed.name_suggestion || 'Suggested Trail');
       setDescription(generatedTrail.description_suggestion || result.parsed.description_suggestion || prompt);
       setRegion(result.parsed.region || '');
@@ -186,6 +185,14 @@ export function CreateTrailPage() {
     }
   };
 
+  const addRoutePoint = (point: [number, number]) => {
+    setRoutePoints((current) => [...current, point]);
+  };
+
+  const undoRoutePoint = () => {
+    setRoutePoints((current) => current.slice(0, -1));
+  };
+
   return (
     <div className="min-h-screen bg-background pb-20 md:pb-8">
       <div className="bg-card border-b border-border sticky top-0 z-10">
@@ -197,7 +204,7 @@ export function CreateTrailPage() {
               </Link>
               <div>
                 <h2 className="font-semibold text-foreground">Create New Trail</h2>
-                <p className="text-sm text-secondary">Click the map to define the route</p>
+                <p className="text-sm text-secondary">{isDrawingRoute ? 'Draw the route on the map' : 'Add points on the map'}</p>
               </div>
             </div>
             <div className="flex items-center gap-2">
@@ -287,20 +294,64 @@ export function CreateTrailPage() {
 
         <div className="bg-card rounded-xl border border-border p-6">
           <div className="flex items-center justify-between mb-4">
-            <h3>Route Map</h3>
-            <div className="flex items-center gap-2 text-sm text-secondary">
-              <MapPin className="w-4 h-4" />
-              <span>{routePoints.length} points</span>
+            <div>
+              <h3>Route Map</h3>
+              <div className="mt-1 flex items-center gap-2 text-sm text-secondary">
+                <MapPin className="w-4 h-4" />
+                <span>{routePoints.length} points</span>
+              </div>
+            </div>
+            <div className="flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setIsDrawingRoute(true)}
+                className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg border text-sm transition-colors ${
+                  isDrawingRoute
+                    ? 'bg-primary text-primary-foreground border-primary'
+                    : 'border-border hover:bg-muted/20'
+                }`}
+              >
+                <Pencil className="w-4 h-4" />
+                <span>Draw</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsDrawingRoute(false)}
+                className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg border text-sm transition-colors ${
+                  !isDrawingRoute
+                    ? 'bg-primary text-primary-foreground border-primary'
+                    : 'border-border hover:bg-muted/20'
+                }`}
+              >
+                <MousePointer2 className="w-4 h-4" />
+                <span>Points</span>
+              </button>
+              <button
+                type="button"
+                onClick={undoRoutePoint}
+                disabled={!routePoints.length}
+                className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-border text-sm hover:bg-muted/20 transition-colors disabled:opacity-50"
+              >
+                <Undo2 className="w-4 h-4" />
+                <span>Undo</span>
+              </button>
             </div>
           </div>
           <div className="aspect-video rounded-lg overflow-hidden border border-border">
             <MapboxTrailMap
               routeCoordinates={routePoints}
               heightClassName="h-full"
-              onMapClick={(point) => setRoutePoints((prev) => [...prev, point])}
+              drawingEnabled={isDrawingRoute}
+              fitToContent={!isDrawingRoute}
+              onRouteDraw={setRoutePoints}
+              onMapClick={addRoutePoint}
             />
           </div>
-          <p className="text-sm text-muted mt-3">Click the map to add route points. The backend calculates distance, elevation, duration, and difficulty before creation.</p>
+          <p className="text-sm text-muted mt-3">
+            {isDrawingRoute
+              ? 'Drag across the map to sketch the route. Switch to Points for precise clicks.'
+              : 'Click the map to add route points. Switch to Draw for a freehand route.'}
+          </p>
         </div>
 
         <div className="bg-accent/10 border border-accent/20 rounded-lg p-4">

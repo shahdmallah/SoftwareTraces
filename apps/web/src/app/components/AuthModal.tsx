@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { X, Eye, EyeOff, Compass, Mail, Lock, User, ArrowRight } from 'lucide-react';
+import { X, Eye, EyeOff, Mail, Lock, User, ArrowRight } from 'lucide-react';
+import { BrandLogo } from './BrandLogo';
 import { ImageWithFallback } from './ImageWithFallback';
 import { login, signup } from '../api/auth';
 
@@ -49,17 +50,17 @@ export function AuthModal({ mode, onClose, onSuccess, onToggleMode }: AuthModalP
           />
           <div className="absolute inset-0 bg-gradient-to-br from-[#630E13]/80 via-[#630E13]/55 to-[#2C2418]/70" />
           <div className="relative z-10">
-            <div className="flex items-center gap-2 mb-2">
-              <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ backgroundColor: '#D4A843' }}>
-                <Compass className="w-5 h-5 text-white" />
-              </div>
-              <span className="text-white text-xl font-semibold">Traces</span>
-            </div>
+            <BrandLogo
+              tone="dark"
+              className="mb-2"
+              imageClassName="w-9 h-9"
+              textClassName="text-white text-xl font-semibold"
+            />
             <p className="text-white/70 text-sm">Trail planning made simple</p>
           </div>
           <div className="relative z-10">
             <blockquote className="text-white text-lg leading-relaxed mb-4">
-              "Save the routes you love, record the days you want to remember, and keep the map close."
+              "Save the routes you love, remember the days outside, and keep the map close."
             </blockquote>
             <p className="text-white/60 text-sm">Traces</p>
           </div>
@@ -79,8 +80,8 @@ export function AuthModal({ mode, onClose, onSuccess, onToggleMode }: AuthModalP
             </h2>
             <p className="text-[#6B5D4E] text-sm">
               {mode === 'signin'
-                ? 'Sign in to save trails, track activity, and manage your routes.'
-                : 'Create an account to save, record, and share your trail journeys.'}
+                ? 'Sign in to save trails, review activity, and manage your routes.'
+                : 'Create an account to save and share your trail journeys.'}
             </p>
           </div>
 

@@ -67,6 +67,7 @@ var maps_1 = require("@rnmapbox/maps");
 var vector_icons_1 = require("@expo/vector-icons");
 var react_native_safe_area_context_1 = require("react-native-safe-area-context");
 var trailsApi_1 = require("../api/trailsApi");
+var client_1 = require("../api/client");
 var trailRoutes_1 = require("../state/trailRoutes");
 var translateTrailContent_1 = require("../utils/translateTrailContent");
 var MAPBOX_ACCESS_TOKEN = (_a = process.env.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN) !== null && _a !== void 0 ? _a : '';
@@ -272,6 +273,25 @@ function confirmDuplicateTrail(warning) {
             { text: 'Cancel', style: 'cancel', onPress: function () { return resolve(false); } },
             { text: 'Create anyway', style: 'destructive', onPress: function () { return resolve(true); } },
         ]);
+    });
+}
+function formatHazardWarningItem(warning) {
+    if (typeof warning === 'string') {
+        return warning;
+    }
+    if (warning && typeof warning === 'object') {
+        var item = warning;
+        return String(item.warning_en || item.warning || item.message || JSON.stringify(item));
+    }
+    return String(warning);
+}
+function showHazardBlockedWarning(warnings) {
+    var messages = warnings.slice(0, 5).map(formatHazardWarningItem).filter(Boolean);
+    var messageText = messages.length > 0
+        ? "This route passes through hazardous or settlement areas and cannot be created.\n\n".concat(messages.join('\n'))
+        : 'This route passes through hazardous or settlement areas and cannot be created.';
+    return new Promise(function (resolve) {
+        react_native_1.Alert.alert('Dangerous route blocked', messageText, [{ text: 'OK', onPress: function () { return resolve(); } }], { cancelable: true });
     });
 }
 function buildDirectionsUrl(waypoints) {
@@ -783,107 +803,100 @@ function TrailCreator(_a) {
             }
         });
     }); };
-    var save = function (status) { return __awaiter(_this, void 0, void 0, function () {
-        var confirmedDuplicate, duplicateWarning, shouldCreateAnyway, translatedTrail, payload, json, uploadError_1, e_2;
-        return __generator(this, function (_a) {
-            switch (_a.label) {
-                case 0:
-                    if (!isFinished || !stats)
-                        return [2 /*return*/];
-                    if (!name.trim()) {
-                        react_native_1.Alert.alert('Missing name', 'Please enter a trail name.');
-                        return [2 /*return*/];
-                    }
-                    if (status === 'published' && !description.trim()) {
-                        react_native_1.Alert.alert('Missing description', 'Please add a description before publishing this trail.');
-                        return [2 /*return*/];
-                    }
-                    setSavingMode(status);
-                    setSaveError(null);
-                    setSaveSuccess(null);
-                    _a.label = 1;
-                case 1:
-                    _a.trys.push([1, 13, 14, 15]);
-                    confirmedDuplicate = false;
-                    return [4 /*yield*/, (0, trailsApi_1.checkDuplicateTrail)({
-                            name: name.trim(),
-                            coordinates: routeCoordinates,
-                            distance: stats.length_meters,
-                            visibility: 'public',
-                        })];
-                case 2:
-                    duplicateWarning = _a.sent();
-                    if (!duplicateWarning.has_similar_trails) return [3 /*break*/, 4];
-                    return [4 /*yield*/, confirmDuplicateTrail(duplicateWarning)];
-                case 3:
-                    shouldCreateAnyway = _a.sent();
-                    if (!shouldCreateAnyway) {
-                        return [2 /*return*/];
-                    }
-                    confirmedDuplicate = true;
-                    _a.label = 4;
-                case 4: return [4 /*yield*/, (0, translateTrailContent_1.translateTrailContentToArabic)({
-                        name: name.trim(),
-                        description: description.trim() || undefined,
-                        region: region.trim() || undefined,
-                        features: features,
-                    })];
-                case 5:
-                    translatedTrail = _a.sent();
-                    payload = {
-                        name: name.trim(),
-                        nameAr: translatedTrail.nameAr,
-                        description: description.trim() || undefined,
-                        descriptionAr: translatedTrail.descriptionAr,
-                        region: region.trim() || undefined,
-                        regionAr: translatedTrail.regionAr,
-                        features: features,
-                        featuresAr: translatedTrail.featuresAr,
-                        tags: features,
-                        status: 'draft',
-                        visibility: status === 'published' ? 'public' : 'private',
-                        confirm_duplicate: confirmedDuplicate,
-                        coordinates: routeCoordinates,
-                        stats: stats,
-                    };
-                    return [4 /*yield*/, (0, trailsApi_1.createTrail)(payload)];
-                case 6:
-                    json = _a.sent();
-                    if (!trailImage) return [3 /*break*/, 10];
-                    _a.label = 7;
-                case 7:
-                    _a.trys.push([7, 9, , 10]);
-                    return [4 /*yield*/, (0, trailsApi_1.uploadTrailPhoto)(json.data.id, trailImage)];
-                case 8:
-                    _a.sent();
-                    return [3 /*break*/, 10];
-                case 9:
-                    uploadError_1 = _a.sent();
-                    console.warn('Trail photo upload failed:', uploadError_1);
-                    setSaveError('Trail saved, but photo upload failed.');
-                    return [3 /*break*/, 10];
-                case 10:
-                    if (!(status === 'published')) return [3 /*break*/, 12];
-                    return [4 /*yield*/, (0, trailsApi_1.publishTrail)(json.data.id)];
-                case 11:
-                    _a.sent();
-                    _a.label = 12;
-                case 12:
-                    (0, trailRoutes_1.setTrailRouteCoordinates)(json.data.id, routeCoordinates);
-                    setSaveSuccess(status === 'published' ? 'Published!' : 'Draft saved!');
-                    onSaved === null || onSaved === void 0 ? void 0 : onSaved(__assign(__assign({}, payload), { id: json.data.id, status: status }));
-                    return [3 /*break*/, 15];
-                case 13:
-                    e_2 = _a.sent();
-                    setSaveError(e_2 instanceof Error ? e_2.message : status === 'published' ? 'Failed to publish trail.' : 'Failed to save draft.');
-                    return [3 /*break*/, 15];
-                case 14:
-                    setSavingMode(null);
-                    return [7 /*endfinally*/];
-                case 15: return [2 /*return*/];
+    var save = async function (status) {
+        if (!isFinished || !stats) {
+            return;
+        }
+        if (!name.trim()) {
+            react_native_1.Alert.alert('Missing name', 'Please enter a trail name.');
+            return;
+        }
+        if (status === 'published' && !description.trim()) {
+            react_native_1.Alert.alert('Missing description', 'Please add a description before publishing this trail.');
+            return;
+        }
+        setSavingMode(status);
+        setSaveError(null);
+        setSaveSuccess(null);
+        try {
+            var confirmedDuplicate = false;
+            var duplicateWarning = await (0, trailsApi_1.checkDuplicateTrail)({
+                name: name.trim(),
+                coordinates: routeCoordinates,
+                distance: stats.length_meters,
+                visibility: 'public',
+            });
+            if (duplicateWarning.has_similar_trails) {
+                var shouldCreateAnyway = await confirmDuplicateTrail(duplicateWarning);
+                if (!shouldCreateAnyway) {
+                    return;
+                }
+                confirmedDuplicate = true;
             }
-        });
-    }); };
+            var translatedTrail = await (0, translateTrailContent_1.translateTrailContentToArabic)({
+                name: name.trim(),
+                description: description.trim() || undefined,
+                region: region.trim() || undefined,
+                features: features,
+            });
+            var createStatus = status === 'published' ? 'draft' : status;
+            var payload = {
+                name: name.trim(),
+                nameAr: translatedTrail.nameAr,
+                description: description.trim() || undefined,
+                descriptionAr: translatedTrail.descriptionAr,
+                region: region.trim() || undefined,
+                regionAr: translatedTrail.regionAr,
+                features: features,
+                featuresAr: translatedTrail.featuresAr,
+                tags: features,
+                status: createStatus,
+                visibility: status === 'published' ? 'public' : 'private',
+                confirm_duplicate: confirmedDuplicate,
+                coordinates: routeCoordinates,
+                stats: stats,
+            };
+            var json = void 0;
+            try {
+                json = await (0, trailsApi_1.createTrail)(payload);
+            }
+            catch (error) {
+                var errorPayload = error instanceof client_1.ApiError ? error.payload : undefined;
+                if (error instanceof client_1.ApiError &&
+                    error.status === 400 &&
+                    Array.isArray(errorPayload === null || errorPayload === void 0 ? void 0 : errorPayload.warnings) &&
+                    errorPayload.warnings.length > 0) {
+                    await showHazardBlockedWarning(errorPayload.warnings);
+                    setSaveError('This trail cannot be created because the route passes through hazardous or settlement areas.');
+                    return;
+                }
+                else {
+                    throw error;
+                }
+            }
+            if (trailImage) {
+                try {
+                    await (0, trailsApi_1.uploadTrailPhoto)(json.data.id, trailImage);
+                }
+                catch (uploadError) {
+                    console.warn('Trail photo upload failed:', uploadError);
+                    setSaveError('Trail saved, but photo upload failed.');
+                }
+            }
+            if (status === 'published') {
+                await (0, trailsApi_1.publishTrail)(json.data.id);
+            }
+            (0, trailRoutes_1.setTrailRouteCoordinates)(json.data.id, routeCoordinates);
+            setSaveSuccess(status === 'published' ? 'Published!' : 'Draft saved!');
+            onSaved === null || onSaved === void 0 ? void 0 : onSaved(__assign(__assign({}, payload), { id: json.data.id, status: status }));
+        }
+        catch (error) {
+            setSaveError(error instanceof Error ? error.message : status === 'published' ? 'Failed to publish trail.' : 'Failed to save draft.');
+        }
+        finally {
+            setSavingMode(null);
+        }
+    };
     var handleMapPress = function (coord) {
         if (!isDrawing || !coord || coord.length !== 2 || isCalculating) {
             return;

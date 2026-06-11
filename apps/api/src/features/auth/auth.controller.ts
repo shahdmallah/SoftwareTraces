@@ -1,4 +1,5 @@
 import type { Request, Response } from "express";
+import { trackUserActivity } from "../analytics/analytics.service";
 import { requireAuth } from "../../middleware/auth";
 import { authService } from "./auth.service";
 
@@ -9,6 +10,11 @@ export async function signup(req: Request, res: Response): Promise<void> {
 
 export async function login(req: Request, res: Response): Promise<void> {
   const result = await authService.login(req.body);
+  await trackUserActivity({
+    userId: result.user.id,
+    eventType: "login",
+    metadata: { email: result.user.email },
+  });
   res.status(200).json(result);
 }
 

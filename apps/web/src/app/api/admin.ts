@@ -13,50 +13,75 @@ export type AdminRecord = Record<string, unknown> & {
 
 export type AdminDashboard = Record<string, unknown>;
 
+export type AdminUsersPage = {
+  users: AdminRecord[];
+  page: number;
+  limit: number;
+  total: number;
+  pages: number;
+};
+
 export type ChallengePayload = {
   title: string;
   description: string;
-  goal_type: string;
+  goal_type:
+    | 'complete_trails'
+    | 'total_distance_km'
+    | 'complete_difficulty'
+    | 'join_meetups'
+    | 'submit_safety_reports'
+    | 'checkpoint_reports';
   goal_value: number;
   goal_metadata: Record<string, unknown> | null;
-  start_at: string | null;
-  end_at: string | null;
-  visibility: string;
-  status: string;
+  start_at: string;
+  end_at: string;
+  visibility: 'public' | 'private';
+  status: 'draft' | 'published' | 'archived';
   reward_badge_id: string | null;
   reward_points: number;
 };
 
+// Fixed: criteria_value is a JSON object (not number); added name_ar, description_ar
 export type BadgePayload = {
   code: string;
   name: string;
+  name_ar?: string | null;
   description: string;
-  badge_icon_url: string | null;
+  description_ar?: string | null;
+  badge_icon_url?: string | null;
   category: string;
   criteria_type: string;
-  criteria_value: number;
+  criteria_value: Record<string, unknown>;
   points: number;
   is_active: boolean;
 };
 
 export type IncidentModerationPayload = {
-  moderation_status: 'pending' | 'approved' | 'rejected' | 'hidden';
+  moderation_status: 'pending' | 'approved' | 'verified' | 'rejected' | 'hidden';
   moderation_note: string | null;
 };
 
+// Fixed: removed `source` (not in backend schema); added `operating_hours`
 export type DangerousLocationPayload = {
   name: string;
   name_ar: string | null;
   location_type: string;
   latitude: number;
   longitude: number;
-  danger_radius_meters: number;
-  risk_level: string;
-  description: string;
-  description_ar: string | null;
-  source: string;
-  is_active: boolean;
+  danger_radius_meters?: number;
+  risk_level?: string;
+  operating_hours?: string | null;
+  description?: string | null;
+  description_ar?: string | null;
+  is_active?: boolean;
 };
+
+function unwrapEntity<T>(payload: unknown): T {
+  if (payload && typeof payload === 'object' && 'data' in payload) {
+    return (payload as { data: T }).data;
+  }
+  return payload as T;
+}
 
 function unwrapList<T extends AdminRecord>(payload: unknown, preferredKey: string): T[] {
   if (Array.isArray(payload)) return payload as T[];
@@ -76,6 +101,7 @@ function unwrapList<T extends AdminRecord>(payload: unknown, preferredKey: strin
     'locations',
     'badges',
     'challenges',
+    'users',
   ];
 
   for (const key of candidateKeys) {
@@ -102,7 +128,13 @@ export function getAdminId(item: AdminRecord | null | undefined) {
 }
 
 export async function getAdminDashboard() {
-  return apiRequest<AdminDashboard>('/api/admin/dashboard');
+  const response = await apiRequest<{ data: AdminDashboard }>('/api/admin/dashboard');
+  return response.data;
+}
+
+export async function getAdminUsers(query?: { q?: string; page?: number; limit?: number }) {
+  const response = await apiRequest<{ data: AdminUsersPage }>('/api/admin/users', {}, query);
+  return response.data;
 }
 
 export async function getAdminChallenges() {
@@ -111,37 +143,44 @@ export async function getAdminChallenges() {
 }
 
 export async function createAdminChallenge(payload: ChallengePayload) {
-  return apiRequest<AdminRecord>('/api/admin/challenges', {
+  const response = await apiRequest<unknown>('/api/admin/challenges', {
     method: 'POST',
     body: JSON.stringify(payload),
   });
+  return unwrapEntity<AdminRecord>(response);
 }
 
 export async function getAdminChallenge(id: string) {
-  return apiRequest<AdminRecord>(`/api/admin/challenges/${id}`);
+  const response = await apiRequest<unknown>(`/api/admin/challenges/${id}`);
+  return unwrapEntity<AdminRecord>(response);
 }
 
 export async function updateAdminChallenge(id: string, payload: ChallengePayload) {
-  return apiRequest<AdminRecord>(`/api/admin/challenges/${id}`, {
+  const response = await apiRequest<unknown>(`/api/admin/challenges/${id}`, {
     method: 'PATCH',
     body: JSON.stringify(payload),
   });
+  return unwrapEntity<AdminRecord>(response);
 }
 
 export async function deleteAdminChallenge(id: string) {
-  return apiRequest<AdminRecord>(`/api/admin/challenges/${id}`, { method: 'DELETE' });
+  const response = await apiRequest<unknown>(`/api/admin/challenges/${id}`, { method: 'DELETE' });
+  return unwrapEntity<AdminRecord>(response);
 }
 
 export async function publishAdminChallenge(id: string) {
-  return apiRequest<AdminRecord>(`/api/admin/challenges/${id}/publish`, { method: 'POST' });
+  const response = await apiRequest<unknown>(`/api/admin/challenges/${id}/publish`, { method: 'POST' });
+  return unwrapEntity<AdminRecord>(response);
 }
 
 export async function archiveAdminChallenge(id: string) {
-  return apiRequest<AdminRecord>(`/api/admin/challenges/${id}/archive`, { method: 'POST' });
+  const response = await apiRequest<unknown>(`/api/admin/challenges/${id}/archive`, { method: 'POST' });
+  return unwrapEntity<AdminRecord>(response);
 }
 
 export async function recalculateAdminChallenge(id: string) {
-  return apiRequest<AdminRecord>(`/api/admin/challenges/${id}/recalculate`, { method: 'POST' });
+  const response = await apiRequest<unknown>(`/api/admin/challenges/${id}/recalculate`, { method: 'POST' });
+  return unwrapEntity<AdminRecord>(response);
 }
 
 export async function getAdminBadges() {
@@ -150,37 +189,44 @@ export async function getAdminBadges() {
 }
 
 export async function createAdminBadge(payload: BadgePayload) {
-  return apiRequest<AdminRecord>('/api/admin/badges', {
+  const response = await apiRequest<unknown>('/api/admin/badges', {
     method: 'POST',
     body: JSON.stringify(payload),
   });
+  return unwrapEntity<AdminRecord>(response);
 }
 
 export async function getAdminBadge(id: string) {
-  return apiRequest<AdminRecord>(`/api/admin/badges/${id}`);
+  const response = await apiRequest<unknown>(`/api/admin/badges/${id}`);
+  return unwrapEntity<AdminRecord>(response);
 }
 
 export async function updateAdminBadge(id: string, payload: BadgePayload) {
-  return apiRequest<AdminRecord>(`/api/admin/badges/${id}`, {
+  const response = await apiRequest<unknown>(`/api/admin/badges/${id}`, {
     method: 'PATCH',
     body: JSON.stringify(payload),
   });
+  return unwrapEntity<AdminRecord>(response);
 }
 
 export async function deleteAdminBadge(id: string) {
-  return apiRequest<AdminRecord>(`/api/admin/badges/${id}`, { method: 'DELETE' });
+  const response = await apiRequest<unknown>(`/api/admin/badges/${id}`, { method: 'DELETE' });
+  return unwrapEntity<AdminRecord>(response);
 }
 
-export async function getAdminIncidents() {
-  const response = await apiRequest<unknown>('/api/admin/incidents');
+// Fixed: accepts optional status filter matching backend ?status= query param
+export async function getAdminIncidents(status?: string) {
+  const query = status ? { status } : undefined;
+  const response = await apiRequest<unknown>('/api/admin/incidents', {}, query);
   return unwrapList<AdminRecord>(response, 'incidents');
 }
 
 export async function updateIncidentModeration(id: string, payload: IncidentModerationPayload) {
-  return apiRequest<AdminRecord>(`/api/admin/incidents/${id}/moderation`, {
+  const response = await apiRequest<unknown>(`/api/admin/incidents/${id}/moderation`, {
     method: 'PATCH',
     body: JSON.stringify(payload),
   });
+  return unwrapEntity<AdminRecord>(response);
 }
 
 export async function getAdminDangerousLocations() {
@@ -189,21 +235,24 @@ export async function getAdminDangerousLocations() {
 }
 
 export async function createAdminDangerousLocation(payload: DangerousLocationPayload) {
-  return apiRequest<AdminRecord>('/api/admin/dangerous-locations', {
+  const response = await apiRequest<unknown>('/api/admin/dangerous-locations', {
     method: 'POST',
     body: JSON.stringify(payload),
   });
+  return unwrapEntity<AdminRecord>(response);
 }
 
 export async function updateAdminDangerousLocation(id: string, payload: DangerousLocationPayload) {
-  return apiRequest<AdminRecord>(`/api/admin/dangerous-locations/${id}`, {
+  const response = await apiRequest<unknown>(`/api/admin/dangerous-locations/${id}`, {
     method: 'PATCH',
     body: JSON.stringify(payload),
   });
+  return unwrapEntity<AdminRecord>(response);
 }
 
 export async function deleteAdminDangerousLocation(id: string) {
-  return apiRequest<AdminRecord>(`/api/admin/dangerous-locations/${id}`, { method: 'DELETE' });
+  const response = await apiRequest<unknown>(`/api/admin/dangerous-locations/${id}`, { method: 'DELETE' });
+  return unwrapEntity<AdminRecord>(response);
 }
 
 export async function getAdminCheckpointReports(query?: Record<string, string>) {
@@ -222,5 +271,6 @@ export async function getAdminOchaLogs() {
 }
 
 export async function fetchAdminOcha() {
-  return apiRequest<AdminRecord>('/api/admin/ocha/fetch', { method: 'POST' });
+  const response = await apiRequest<unknown>('/api/admin/ocha/fetch', { method: 'POST' });
+  return unwrapEntity<AdminRecord>(response);
 }

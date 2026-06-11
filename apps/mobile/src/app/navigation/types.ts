@@ -36,7 +36,7 @@ export type RootStackParamList = {
     initialMeetingLng?: number;
   };
   ProfileSettings: { settingId: string };
-  RecommendationPreferences: undefined;
+  RecommendationPreferences: { onboarding?: boolean; notice?: string } | undefined;
   PublicProfile: { profileId: string };
   CreateTrail: { generatedTrail?: GeneratedTrailSuggestion } | undefined;
   Recording: { trailId: string; activityId?: string };
@@ -45,7 +45,7 @@ export type RootStackParamList = {
   History: undefined;
   Journal: undefined;
   Notifications: undefined;
-  SafetyCenter: undefined;
+  SafetyCenter: { onboarding?: boolean } | undefined;
   SearchResults: { query?: string; mode?: 'trail' | 'people' } | undefined;
   AdvancedFilters: undefined;
   EditProfile: undefined;

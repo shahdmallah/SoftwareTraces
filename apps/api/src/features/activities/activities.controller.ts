@@ -7,6 +7,7 @@ import { HttpError } from "../../lib/httpError";
 import { requireAuth } from "../../middleware/auth";
 import { verifyPhoto } from "../../services/photoVerificationService";
 import { updateUserStats } from "../achievements/achievements.service";
+import { trackUserActivity } from "../analytics/analytics.service";
 import { createSosEvent } from "../sos/sos.service";
 
 interface StartActivityBody {
@@ -586,7 +587,7 @@ export async function getActivityById(req: Request, res: Response): Promise<void
     console.log("[activities.getActivityById] fetching points", { activity_id: req.params.id });
     const pointsResult = await pool.query(
       `
-      SELECT latitude, longitude, elevation_meters AS elevation, timestamp AS recorded_at
+      SELECT latitude, longitude, elevation_meters AS elevation, speed_mps, timestamp AS recorded_at
       FROM activity_points
       WHERE activity_id = $1::uuid
       ORDER BY sequence ASC
@@ -657,6 +658,11 @@ export async function startActivity(req: Request, res: Response): Promise<void> 
     );
 
     console.log("[activities.startActivity] returning created activity", { activity_id: activity.id });
+    await trackUserActivity({
+      userId: auth.sub,
+      eventType: "activity_created",
+      metadata: { activity_id: activity.id, trail_id: activity.trail_id },
+    });
     res.status(201).json(activity);
   } catch (error) {
     handleActivityError("startActivity", error);
@@ -1198,6 +1204,11 @@ export async function sosAlert(req: Request, res: Response): Promise<void> {
     });
 
     console.log("[activities.sosAlert] returning SOS event", { sos_id: result.id });
+    await trackUserActivity({
+      userId: auth.sub,
+      eventType: "sos_triggered",
+      metadata: { sos_id: result.id, activity_id: activity_id ?? null },
+    });
     res.status(201).json({ data: result });
   } catch (error) {
     handleActivityError("sosAlert", error);

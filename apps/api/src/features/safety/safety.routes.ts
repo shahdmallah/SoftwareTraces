@@ -8,6 +8,7 @@ import { asyncHandler } from "../../lib/asyncHandler";
 import { HttpError } from "../../lib/httpError";
 import { authenticate } from "../../middleware/auth";
 import { updateUserStats } from "../achievements/achievements.service";
+import { trackUserActivity } from "../analytics/analytics.service";
 import { createNotification } from "../notifications/notifications.service";
 import { requireAdmin } from "./admin";
 import {
@@ -28,6 +29,12 @@ function haversineMeters(lat1: number, lng1: number, lat2: number, lng2: number)
 
 type RiskLevel = "safe" | "caution" | "dangerous" | "avoid";
 type Severity = "critical" | "high" | "medium" | "low";
+type IncidentModerationStatus = "pending" | "approved" | "verified" | "rejected" | "hidden" | "active" | "resolved" | "expired";
+type IncidentTrustLevel = "community_report" | "community_confirmed" | "admin_verified" | "disputed" | "hidden";
+
+const PUBLIC_INCIDENT_MODERATION_SQL = "'pending', 'approved', 'verified', 'active'";
+const COMMUNITY_CONFIRMATION_THRESHOLD = 5;
+const safetyIncidentColumnCache = new Map<string, boolean>();
 
 interface CoordinatePoint {
   latitude: number;
@@ -56,12 +63,16 @@ interface SafetyIncidentRow {
   source: string;
   source_name: string | null;
   source_url: string | null;
+  moderation_status: IncidentModerationStatus | null;
+  confirmations_count: string | number | null;
+  disputes_count: string | number | null;
+  community_confidence_score: string | number | null;
   reported_at: string | Date;
   expires_at: string | Date;
 }
 
 const router = Router();
-const SAFETY_PUSH_WARNING_RADIUS_METERS = 500;
+const SAFETY_PUSH_NOTIFICATION_DISTANCE_METERS = 500;
 
 function optionalAuthenticate(req: Request, _res: Response, next: NextFunction): void {
   const authHeader = req.headers.authorization;
@@ -123,8 +134,13 @@ const reportIncidentSchema = z.object({
 });
 
 const incidentModerationSchema = z.object({
-  status: z.enum(["pending", "active", "rejected", "resolved", "expired"]),
+  status: z.enum(["pending", "approved", "verified", "rejected", "hidden"]),
   note: z.string().trim().max(1000).optional(),
+});
+
+const incidentFeedbackSchema = z.object({
+  action: z.enum(["confirm", "dispute", "note"]),
+  comment: z.string().trim().max(1000).optional(),
 });
 
 function toNumber(value: string | number | null | undefined): number {
@@ -134,6 +150,27 @@ function toNumber(value: string | number | null | undefined): number {
 
 function isUuid(value: unknown): value is string {
   return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+async function safetyIncidentColumnExists(columnName: string): Promise<boolean> {
+  const cached = safetyIncidentColumnCache.get(columnName);
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  const result = await pool.query<{ exists: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1
+       FROM information_schema.columns
+       WHERE table_schema = 'public'
+         AND table_name = 'safety_incidents'
+         AND column_name = $1
+     ) AS exists`,
+    [columnName]
+  );
+  const exists = Boolean(result.rows[0]?.exists);
+  safetyIncidentColumnCache.set(columnName, exists);
+  return exists;
 }
 
 async function createSafetyNotificationBestEffort(input: {
@@ -208,6 +245,119 @@ function getRiskLevel(score: number): RiskLevel {
   if (score >= 60) return "caution";
   if (score >= 40) return "dangerous";
   return "avoid";
+}
+
+function getIncidentTrustLevel(
+  incident: Pick<SafetyIncidentRow, "moderation_status" | "confirmations_count" | "disputes_count">
+): IncidentTrustLevel {
+  const status = incident.moderation_status ?? "pending";
+  const confirmations = toNumber(incident.confirmations_count);
+  const disputes = toNumber(incident.disputes_count);
+
+  if (status === "hidden") {
+    return "hidden";
+  }
+
+  if (status === "approved" || status === "verified" || status === "active") {
+    return "admin_verified";
+  }
+
+  if (disputes > confirmations) {
+    return "disputed";
+  }
+
+  if (confirmations >= COMMUNITY_CONFIRMATION_THRESHOLD && confirmations > disputes) {
+    return "community_confirmed";
+  }
+
+  return "community_report";
+}
+
+function getIncidentVerificationLabel(
+  incident: Pick<SafetyIncidentRow, "moderation_status" | "source" | "confirmations_count" | "disputes_count">
+): string {
+  switch (getIncidentTrustLevel(incident)) {
+    case "admin_verified":
+      return "Verified by admin";
+    case "community_confirmed":
+      return "Community confirmed";
+    case "disputed":
+      return "Disputed";
+    case "hidden":
+      return "Hidden";
+    case "community_report":
+    default:
+      return incident.source === "user" ? "Reported by community" : "Community report";
+  }
+}
+
+function enrichIncidentForPublic(incident: SafetyIncidentRow) {
+  const confirmationsCount = toNumber(incident.confirmations_count);
+  const disputesCount = toNumber(incident.disputes_count);
+
+  return {
+    ...incident,
+    confirmations_count: confirmationsCount,
+    disputes_count: disputesCount,
+    community_confidence_score: toNumber(incident.community_confidence_score),
+    trust_level: getIncidentTrustLevel(incident),
+    verification_label: getIncidentVerificationLabel(incident),
+    confirmation_label: `Confirmed by ${confirmationsCount} users`,
+    dispute_label: `Disputed by ${disputesCount} users`,
+  };
+}
+
+async function refreshIncidentCommunityValidation(incidentId: string) {
+  const hasCommunityNotesCount = await safetyIncidentColumnExists("community_notes_count");
+  const communityNotesCountSetSql = hasCommunityNotesCount
+    ? `,
+         community_notes_count = calculated_counts.community_notes_count`
+    : "";
+  const communityNotesCountReturningSql = hasCommunityNotesCount
+    ? `,
+               si.community_notes_count`
+    : "";
+
+  const result = await pool.query(
+    `WITH counts AS (
+       SELECT
+         requested.incident_id,
+         COALESCE(COUNT(feedback.id) FILTER (WHERE feedback.feedback_type = 'confirm'), 0)::int AS confirmations_count,
+         COALESCE(COUNT(feedback.id) FILTER (WHERE feedback.feedback_type = 'dispute'), 0)::int AS disputes_count,
+         COALESCE(COUNT(feedback.id) FILTER (WHERE feedback.feedback_type = 'note'), 0)::int AS community_notes_count
+       FROM (SELECT $1::uuid AS incident_id) requested
+       LEFT JOIN safety_incident_feedback feedback
+         ON feedback.incident_id = requested.incident_id
+       GROUP BY requested.incident_id
+     ),
+     calculated_counts AS (
+       SELECT
+         counts.incident_id,
+         counts.confirmations_count,
+         counts.disputes_count,
+         counts.community_notes_count,
+         CASE
+           WHEN counts.confirmations_count + counts.disputes_count = 0 THEN 0
+           ELSE ROUND((counts.confirmations_count::numeric / (counts.confirmations_count + counts.disputes_count)) * 100)
+         END AS community_confidence_score
+       FROM counts
+     )
+     UPDATE safety_incidents si
+     SET confirmations_count = calculated_counts.confirmations_count,
+         disputes_count = calculated_counts.disputes_count,
+         community_confidence_score = calculated_counts.community_confidence_score${communityNotesCountSetSql}
+     FROM calculated_counts
+     WHERE si.id = calculated_counts.incident_id
+     RETURNING si.id,
+               si.confirmations_count,
+               si.disputes_count,
+               si.community_confidence_score,
+               si.moderation_status${communityNotesCountReturningSql}`,
+    [incidentId]
+  );
+
+  await pool.query("DELETE FROM trail_safety_scores");
+  return result.rows[0] ?? null;
 }
 
 function parseLineString(lineString: string | null): CoordinatePoint[] {
@@ -314,11 +464,15 @@ router.get(
       const [incidentResult, locationResult] = await Promise.all([
         pool.query<SafetyIncidentRow>(
           `SELECT id, incident_type, severity, latitude, longitude, description, headline,
-                  source, source_name, source_url, reported_at, expires_at
+                  source, source_name, source_url, COALESCE(moderation_status, 'pending') AS moderation_status,
+                  COALESCE(confirmations_count, confirmed_count, 0) AS confirmations_count,
+                  COALESCE(disputes_count, 0) AS disputes_count,
+                  COALESCE(community_confidence_score, 0) AS community_confidence_score,
+                  reported_at, expires_at
            FROM safety_incidents
            WHERE is_resolved = false
              AND expires_at > NOW()
-             AND COALESCE(moderation_status, 'active') = 'active'`
+             AND COALESCE(moderation_status, 'pending') IN (${PUBLIC_INCIDENT_MODERATION_SQL})`
         ),
         pool.query<DangerousLocationRow>(
           `SELECT id, name, name_ar, location_type, latitude, longitude, danger_radius_meters, risk_level
@@ -329,7 +483,7 @@ router.get(
 
       const incidents = incidentResult.rows
         .map((incident) => ({
-          ...incident,
+          ...enrichIncidentForPublic(incident),
           kind: "incident" as const,
           latitude: toNumber(incident.latitude),
           longitude: toNumber(incident.longitude),
@@ -352,8 +506,11 @@ router.get(
 
       if (userId) {
         console.log("[safety.routes] Creating nearby alert notifications for user:", userId);
-        const notificationAlerts = alerts.filter((alert) => alert.distance_meters <= SAFETY_PUSH_WARNING_RADIUS_METERS);
-        for (const alert of notificationAlerts) {
+        for (const alert of alerts) {
+          if (alert.distance_meters > SAFETY_PUSH_NOTIFICATION_DISTANCE_METERS) {
+            continue;
+          }
+
           const isLocation = alert.kind === "location";
           const locationName = isLocation
             ? alert.name
@@ -378,7 +535,6 @@ router.get(
               latitude: alert.latitude,
               longitude: alert.longitude,
               distance_meters: alert.distance_meters,
-              warning_radius_meters: SAFETY_PUSH_WARNING_RADIUS_METERS,
               cooldown_minutes: 60,
             },
             cooldownMinutes: 60,
@@ -458,11 +614,15 @@ router.get(
         ),
         pool.query<SafetyIncidentRow>(
           `SELECT id, incident_type, severity, latitude, longitude, description, headline,
-                  source, source_name, source_url, reported_at, expires_at
+                  source, source_name, source_url, COALESCE(moderation_status, 'pending') AS moderation_status,
+                  COALESCE(confirmations_count, confirmed_count, 0) AS confirmations_count,
+                  COALESCE(disputes_count, 0) AS disputes_count,
+                  COALESCE(community_confidence_score, 0) AS community_confidence_score,
+                  reported_at, expires_at
            FROM safety_incidents
            WHERE is_resolved = false
              AND reported_at > NOW() - INTERVAL '7 days'
-             AND COALESCE(moderation_status, 'active') = 'active'`
+             AND COALESCE(moderation_status, 'pending') IN (${PUBLIC_INCIDENT_MODERATION_SQL})`
         ),
       ]);
 
@@ -499,7 +659,7 @@ router.get(
         }
 
         safetyScore -= getRiskPenalty(incident.severity);
-        warnings.push(`${incident.severity} incident nearby: ${incident.headline ?? incident.incident_type}`);
+        warnings.push(`${incident.severity} incident nearby (${getIncidentVerificationLabel(incident)}): ${incident.headline ?? incident.incident_type}`);
 
         if (new Date(incident.reported_at).getTime() >= twoDaysAgo) {
           incidentCount48h += 1;
@@ -557,14 +717,15 @@ router.post(
 
     try {
       console.log("[safety.routes] Inserting user incident report");
-      const result = await pool.query<{ id: string; moderation_status: string }>(
+      const result = await pool.query<{ id: string; moderation_status: string; confirmations_count: number; disputes_count: number; community_confidence_score: number }>(
         `INSERT INTO safety_incidents (
            incident_type, severity, latitude, longitude,
            description, headline, reported_at, expires_at,
-           source, source_name, confirmed_count, reporter_id, moderation_status
+           source, source_name, confirmed_count, reporter_id, moderation_status,
+           confirmations_count, disputes_count, community_confidence_score
          )
-         VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW() + INTERVAL '48 hours', 'user', 'User report', 1, $7::uuid, 'pending')
-         RETURNING id, moderation_status`,
+         VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW() + INTERVAL '48 hours', 'user', 'User report', 0, $7::uuid, 'pending', 0, 0, 0)
+         RETURNING id, moderation_status, confirmations_count, disputes_count, community_confidence_score`,
         [
           parsed.data.incident_type,
           parsed.data.severity,
@@ -578,11 +739,146 @@ router.post(
 
       console.log("[safety.routes] Updating achievement stats for incident report");
       await updateUserStats(req.auth.sub, { incidents: 1 });
+      await trackUserActivity({
+        userId: req.auth.sub,
+        eventType: "incident_reported",
+        metadata: { incident_id: result.rows[0].id, incident_type: parsed.data.incident_type },
+      });
+      await pool.query("DELETE FROM trail_safety_scores");
 
-      res.status(201).json({ data: { id: result.rows[0].id, moderation_status: result.rows[0].moderation_status } });
+      res.status(201).json({
+        data: {
+          id: result.rows[0].id,
+          moderation_status: result.rows[0].moderation_status,
+          confirmations_count: result.rows[0].confirmations_count,
+          disputes_count: result.rows[0].disputes_count,
+          community_confidence_score: result.rows[0].community_confidence_score,
+          trust_level: "community_report",
+          verification_label: "Reported by community",
+        },
+      });
     } catch (error) {
       console.error("[safety.routes] /report-incident database error:", error);
       res.status(500).json({ error: "Failed to report incident", detail: error instanceof Error ? error.message : String(error) });
+    }
+  })
+);
+
+router.post(
+  "/incidents/:id/feedback",
+  authenticate,
+  asyncHandler(async (req, res) => {
+    try {
+      const incidentId = req.params.id;
+      if (!isUuid(incidentId)) {
+        res.status(400).json({ error: "Incident id must be a valid UUID" });
+        return;
+      }
+
+      if (!req.auth?.sub) {
+        res.status(401).json({ error: "Authentication required" });
+        return;
+      }
+
+      const parsed = incidentFeedbackSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: "Validation failed", details: parsed.error.flatten() });
+        return;
+      }
+
+      if (parsed.data.action === "note" && !parsed.data.comment) {
+        res.status(400).json({ error: "A supporting note requires a comment" });
+        return;
+      }
+
+      const profileResult = await pool.query<{ id: string }>(
+        `SELECT COALESCE(id, user_id) AS id
+         FROM profiles
+         WHERE user_id = $1::uuid OR id = $1::uuid
+         LIMIT 1`,
+        [req.auth.sub]
+      );
+
+      if (!profileResult.rows[0]) {
+        res.status(404).json({ error: "Authenticated user profile not found" });
+        return;
+      }
+
+      const incidentResult = await pool.query<{ id: string }>(
+        `SELECT id
+         FROM safety_incidents
+         WHERE id = $1::uuid
+           AND is_resolved = false
+           AND COALESCE(moderation_status, 'pending') IN (${PUBLIC_INCIDENT_MODERATION_SQL})
+         LIMIT 1`,
+        [incidentId]
+      );
+
+      if (!incidentResult.rows[0]) {
+        res.status(404).json({ error: "Incident not found or not available for community feedback" });
+        return;
+      }
+
+      const existingFeedbackResult = await pool.query<{ id: string; feedback_type: string; note: string | null }>(
+        `SELECT id, feedback_type, note
+         FROM safety_incident_feedback
+         WHERE incident_id = $1::uuid
+           AND user_id = $2::uuid
+         LIMIT 1`,
+        [incidentId, req.auth.sub]
+      );
+      const wasUpdated = Boolean(existingFeedbackResult.rows[0]);
+
+      const feedbackResult = await pool.query<{
+        id: string;
+        incident_id: string;
+        user_id: string;
+        feedback_type: string;
+        note: string | null;
+        comment: string | null;
+        created_at: string | Date;
+        updated_at: string | Date;
+      }>(
+        `INSERT INTO safety_incident_feedback (incident_id, user_id, feedback_type, note)
+         VALUES ($1::uuid, $2::uuid, $3, $4)
+         ON CONFLICT (incident_id, user_id, feedback_type)
+         DO UPDATE SET
+           feedback_type = EXCLUDED.feedback_type,
+           note = EXCLUDED.note,
+           updated_at = NOW()
+         RETURNING id, incident_id, user_id, feedback_type, note, note AS comment, created_at, updated_at`,
+        [incidentId, req.auth.sub, parsed.data.action, parsed.data.comment ?? null]
+      );
+
+      const incident = await refreshIncidentCommunityValidation(incidentId);
+
+      res.status(wasUpdated ? 200 : 201).json({
+        data: {
+          feedback: feedbackResult.rows[0],
+          incident,
+          duplicate_strategy: wasUpdated ? "updated_existing_feedback" : "created_feedback",
+        },
+      });
+    } catch (error) {
+      console.error("[safety.feedback]", error);
+
+      const pgCode = typeof error === "object" && error !== null && "code" in error ? String((error as { code?: unknown }).code) : "";
+      if (pgCode === "23503") {
+        res.status(404).json({ error: "Referenced incident or user no longer exists" });
+        return;
+      }
+
+      if (pgCode === "23514" || pgCode === "22P02") {
+        res.status(400).json({ error: "Invalid feedback request" });
+        return;
+      }
+
+      res.status(500).json({
+        error: "Failed to save safety incident feedback",
+        ...(process.env.NODE_ENV !== "production"
+          ? { details: error instanceof Error ? error.message : String(error) }
+          : {}),
+      });
     }
   })
 );
@@ -604,24 +900,23 @@ router.patch(
       return;
     }
 
-    const isResolved = ["resolved", "expired", "rejected"].includes(parsed.data.status);
     const result = await pool.query(
       `UPDATE safety_incidents
        SET moderation_status = $2,
            moderation_note = $3,
            moderated_by = $4::uuid,
-           moderated_at = NOW(),
-           is_resolved = $5,
-           resolved_at = CASE WHEN $5 THEN COALESCE(resolved_at, NOW()) ELSE resolved_at END
+           moderated_at = NOW()
        WHERE id = $1::uuid
-       RETURNING id, moderation_status, is_resolved, moderated_at`,
-      [incidentId, parsed.data.status, parsed.data.note ?? null, req.auth?.sub, isResolved]
+       RETURNING id, moderation_status, moderation_note, moderated_by, moderated_at`,
+      [incidentId, parsed.data.status, parsed.data.note ?? null, req.auth?.sub]
     );
 
     if (!result.rows[0]) {
       res.status(404).json({ error: "Incident not found" });
       return;
     }
+
+    await pool.query("DELETE FROM trail_safety_scores");
 
     res.json({ data: result.rows[0] });
   })

@@ -18,6 +18,7 @@ import { generateTrailFromDescription } from "../../services/trailGenerationServ
 import { searchTrailsByCriteria } from "../../services/trailSearchService";
 import { verifyPhoto } from "../../services/photoVerificationService";
 import { updateUserStats } from "../achievements/achievements.service";
+import { trackTrailView } from "../analytics/analytics.service";
 import { findSimilarPublicTrails } from "./duplicateTrail.service";
 import { detectCheckpointsOnRoute, sampleRoutePoints } from "./access.controller";
 import { attachApprovedTrailImages } from "./trailPhotoVisibility";
@@ -55,7 +56,6 @@ const createTrailBodySchema = z.object({
   status: z.enum(["draft", "published"]).optional().default("draft"),
   visibility: z.enum(["public", "private"]).optional(),
   confirm_duplicate: z.boolean().optional(),
-  confirm_hazard: z.boolean().optional(),
   coordinates: z.array(z.tuple([z.number(), z.number()])).min(2),
   stats: z.object({
     length_meters: z.number().nonnegative(),
@@ -667,6 +667,7 @@ export async function getTrailById(req: Request, res: Response): Promise<void> {
 
     console.log("[getTrailById] Step 4: Formatting result...");
     const [formattedTrail] = await attachApprovedTrailImages([formatTrailForApp(trailResult.rows[0])]);
+    await trackTrailView(trailId, req.auth?.sub ?? null);
 
     console.log("[getTrailById] Step 5: Sending response...");
     res.json({ data: formattedTrail });
@@ -960,16 +961,15 @@ export async function createTrail(req: Request, res: Response): Promise<void> {
       tags,
       status,
       visibility,
-      confirm_hazard,
       coordinates,
       stats,
     } = createTrailBodySchema.parse(req.body);
 
     const routeWarnings = await detectCheckpointsOnRoute(sampleRoutePoints(coordinates, 300));
 
-    if (routeWarnings.length > 0 && !confirm_hazard) {
+    if (routeWarnings.length > 0) {
       res.status(400).json({
-        error: "Route passes through a dangerous or settlement area",
+        error: "This trail cannot be created because the route passes through a dangerous or settlement area",
         warnings: routeWarnings,
       });
       return;

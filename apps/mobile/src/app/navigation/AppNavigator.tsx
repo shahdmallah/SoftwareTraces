@@ -534,10 +534,27 @@ function NotificationShortcut({ enabled, routeName }: { enabled: boolean; routeN
 }
 
 export function AppNavigator() {
-  const { isAuthenticated, isLoading } = useAuth();
+  const {
+    hasCompletedFirstLoginSetup,
+    isAuthenticated,
+    isFirstLoginSetupLoading,
+    isLoading,
+  } = useAuth();
   const [routeName, setRouteName] = useState('Unknown');
 
-  if (isLoading) {
+  useEffect(() => {
+    if (!isAuthenticated || isFirstLoginSetupLoading || hasCompletedFirstLoginSetup || !navigationRef.isReady()) {
+      return;
+    }
+
+    const activeRoute = getActiveRouteName(navigationRef.getRootState());
+
+    if (activeRoute !== 'SafetyCenter' && activeRoute !== 'RecommendationPreferences') {
+      navigationRef.navigate('SafetyCenter', { onboarding: true });
+    }
+  }, [hasCompletedFirstLoginSetup, isAuthenticated, isFirstLoginSetupLoading, routeName]);
+
+  if (isLoading || (isAuthenticated && isFirstLoginSetupLoading)) {
     return (
       <View style={styles.loadingScreen}>
         <Text style={styles.loadingText}>Loading your session...</Text>

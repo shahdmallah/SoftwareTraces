@@ -8,7 +8,7 @@ import type { Feature, FeatureCollection, LineString } from 'geojson';
 import { RootStackParamList } from '../navigation/types';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTrailTracking } from '../contexts/TrailTrackingContext';
-import { sendSosAlert } from '../api/sosApi';
+import { sendSosAlert, type SosCreateResult } from '../api/sosApi';
 import {
   formatSafetyDistance,
   getNearbySafetyAlerts,
@@ -175,6 +175,7 @@ export function RecordingScreen() {
   } = useTrailTracking();
   const [isCapturingPhoto, setIsCapturingPhoto] = useState(false);
   const [isSendingSos, setIsSendingSos] = useState(false);
+  const [lastSosResult, setLastSosResult] = useState<SosCreateResult | null>(null);
   const [isPanelExpanded, setIsPanelExpanded] = useState(false);
   const [isPhotosExpanded, setIsPhotosExpanded] = useState(false);
   const panelMaxHeight = isPanelExpanded
@@ -309,6 +310,7 @@ export function RecordingScreen() {
     setSelectedSafetyAlert(null);
     setSafetyError(null);
     setIsSafetyLoading(false);
+    setLastSosResult(null);
     setTrailBuddyFactRequests(0);
   }, [trailId]);
 
@@ -480,13 +482,17 @@ export function RecordingScreen() {
         onPress: async () => {
           setIsSendingSos(true);
           try {
-            const alert = await sendSosAlert({
+            const result = await sendSosAlert({
               latitude: currentLocation[1],
               longitude: currentLocation[0],
               activityId: session?.backendActivityId,
               message: trail ? `Emergency on ${trail.name}` : 'Emergency during live recording',
             });
-            Alert.alert('SOS sent', `Alert ${alert.id} is ${alert.status}.`);
+            setLastSosResult(result);
+            Alert.alert(
+              'SOS sent',
+              `Alert ${result.sos_event.id} is ${result.sos_event.status}. ${result.contacts_notified}/${result.emergency_contacts_count} contacts notified (${result.notification_status}).`,
+            );
           } catch (error) {
             Alert.alert('Unable to send SOS', error instanceof Error ? error.message : 'Please try again or contact emergency services directly.');
           } finally {
@@ -865,18 +871,69 @@ export function RecordingScreen() {
                         ? 'You are on the trail preview'
                         : `You are about ${Math.round(nearestDistance)} m from the trail`}
                     </Text>
-                    <Text style={styles.statusText}>
-                      {locationMessage ?? stepMessage ?? trailError ?? 'Your GPS path overlays the trail map in real time.'}
-                    </Text>
-                    {navigationInstruction ? (
-                      <Text style={styles.navigationHintText}>{navigationInstruction}</Text>
+                  <Text style={styles.statusText}>
+                    {locationMessage ?? stepMessage ?? trailError ?? 'Your GPS path overlays the trail map in real time.'}
+                  </Text>
+                  {navigationInstruction ? (
+                    <Text style={styles.navigationHintText}>{navigationInstruction}</Text>
                     ) : navigationHint ? (
                       <Text style={styles.navigationHintText}>{navigationHint}</Text>
                     ) : null}
-                  </View>
+                </View>
 
-                  {primarySafetyAlert ? (
-                    <View style={styles.safetyDetailCard}>
+                {lastSosResult ? (
+                  <View
+                    style={[
+                      styles.sosSummaryCard,
+                      lastSosResult.notification_status === 'failed'
+                        ? styles.sosSummaryCardFailed
+                        : lastSosResult.notification_status === 'partial'
+                        ? styles.sosSummaryCardPartial
+                        : styles.sosSummaryCardSuccess,
+                    ]}
+                  >
+                    <View style={styles.sosSummaryHeader}>
+                      <View
+                        style={[
+                          styles.sosSummaryIcon,
+                          lastSosResult.notification_status === 'failed'
+                            ? styles.sosSummaryIconFailed
+                            : lastSosResult.notification_status === 'partial'
+                            ? styles.sosSummaryIconPartial
+                            : styles.sosSummaryIconSuccess,
+                        ]}
+                      >
+                        <Ionicons
+                          name={
+                            lastSosResult.notification_status === 'failed'
+                              ? 'alert-circle-outline'
+                              : 'shield-checkmark-outline'
+                          }
+                          size={16}
+                          color="#fff"
+                        />
+                      </View>
+                      <View style={styles.sosSummaryCopy}>
+                        <Text style={styles.sosSummaryTitle}>
+                          {lastSosResult.notification_status === 'failed'
+                            ? 'SOS created, but no contacts were notified'
+                            : 'SOS sent successfully'}
+                        </Text>
+                        <Text style={styles.sosSummaryText} numberOfLines={2}>
+                          Alert {lastSosResult.sos_event.id.slice(0, 8)} · {lastSosResult.contacts_notified}/
+                          {lastSosResult.emergency_contacts_count} contacts notified · {lastSosResult.sos_event.status}
+                        </Text>
+                      </View>
+                    </View>
+
+                    <Pressable style={styles.sosSummaryButton} onPress={() => navigation.navigate('SafetyCenter')}>
+                      <Text style={styles.sosSummaryButtonText}>Open Safety Center</Text>
+                    </Pressable>
+                  </View>
+                ) : null}
+
+                {primarySafetyAlert ? (
+                  <View style={styles.safetyDetailCard}>
                       <View style={styles.safetyDetailHeader}>
                         <View
                           style={[
@@ -1178,6 +1235,76 @@ const styles = StyleSheet.create({
     color: '#705F4D',
     fontSize: 12,
     lineHeight: 18,
+  },
+  sosSummaryCard: {
+    borderRadius: 20,
+    padding: 14,
+    gap: 12,
+    borderWidth: 1,
+  },
+  sosSummaryCardSuccess: {
+    backgroundColor: '#EEF7EF',
+    borderColor: '#CFE4C8',
+  },
+  sosSummaryCardPartial: {
+    backgroundColor: '#FFF4E8',
+    borderColor: '#F0D8BC',
+  },
+  sosSummaryCardFailed: {
+    backgroundColor: '#F9E2E1',
+    borderColor: '#E8B8B5',
+  },
+  sosSummaryHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  sosSummaryIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sosSummaryIconSuccess: {
+    backgroundColor: '#1E7A46',
+  },
+  sosSummaryIconPartial: {
+    backgroundColor: '#B46A1A',
+  },
+  sosSummaryIconFailed: {
+    backgroundColor: '#9B1C1C',
+  },
+  sosSummaryCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  sosSummaryTitle: {
+    color: '#2C2418',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '900',
+  },
+  sosSummaryText: {
+    marginTop: 2,
+    color: '#5E4E40',
+    fontSize: 11,
+    lineHeight: 16,
+    fontWeight: '700',
+  },
+  sosSummaryButton: {
+    minHeight: 40,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: 'rgba(99,14,19,0.12)',
+  },
+  sosSummaryButtonText: {
+    color: '#630E13',
+    fontSize: 12,
+    fontWeight: '900',
   },
   navigationHintText: {
     marginTop: 8,

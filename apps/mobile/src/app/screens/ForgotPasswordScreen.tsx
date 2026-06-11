@@ -14,6 +14,7 @@ import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 
 import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
+import { BrandBadge } from '../components/BrandBadge';
 import { useLanguage } from '../contexts/LanguageContext';
 import { RootStackParamList } from '../navigation/types';
 import { ltrText, rtlText } from '../utils/direction';
@@ -74,9 +75,13 @@ export function ForgotPasswordScreen() {
               <Ionicons name={isArabic ? 'arrow-forward' : 'arrow-back'} size={18} color="white" />
             </Pressable>
 
-            <View style={styles.logoBadge}>
-              <Ionicons name={isSubmitted ? 'mail-open-outline' : 'key-outline'} size={25} color="#F5D16F" />
-            </View>
+            <BrandBadge
+              size="xl"
+              showText={false}
+              backgroundColor="#FBF7EE"
+              borderColor="rgba(99,14,19,0.14)"
+              containerStyle={styles.authBrandBadge}
+            />
             <Text style={[styles.title, isArabic ? rtlText : ltrText]}>{isSubmitted ? copy.sentTitle : copy.title}</Text>
             <Text style={[styles.subtitle, isArabic ? rtlText : ltrText]}>{isSubmitted ? copy.sentCopy : copy.subtitle}</Text>
           </AnimatedBlock>
@@ -169,15 +174,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: 'rgba(255,255,255,0.15)',
   },
-  logoBadge: {
-    width: 62,
-    height: 62,
-    borderRadius: 31,
-    backgroundColor: 'rgba(255,255,255,0.16)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.2)',
+  authBrandBadge: {
+    marginBottom: 2,
+    shadowColor: '#1B120D',
+    shadowOpacity: 0.16,
+    shadowOffset: { width: 0, height: 8 },
+    shadowRadius: 14,
+    elevation: 5,
   },
   title: {
     marginTop: 14,

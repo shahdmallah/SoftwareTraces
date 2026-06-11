@@ -38,6 +38,13 @@ export type TrailCompletionDraft = {
   stepCount: number;
   /** Number of GPS samples recorded along the route (proxy for “checkpoints” / journey density). */
   routePointCount: number;
+  activityDistanceKm?: number;
+  avgSpeedKph?: number;
+  avgPaceMinPerKm?: number;
+  elevationProfile?: Array<{
+    distanceKm: number;
+    elevationM: number;
+  }>;
   trailDistanceKm?: number;
   trailElevationGainM?: number;
   trailCoordinates?: [number, number];

@@ -202,7 +202,7 @@ export function ExplorePage() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
         <div className="mb-6">
           <h1 className="mb-1">Explore Trails</h1>
-          <p className="text-muted-foreground">Live backend trails • {sortedTrails.length} results</p>
+          <p className="text-muted-foreground">Browse trails • {sortedTrails.length} results</p>
         </div>
 
         <div className="relative mb-4">

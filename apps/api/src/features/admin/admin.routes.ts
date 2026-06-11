@@ -17,6 +17,7 @@ import {
   deleteDangerousLocation,
   getBadge,
   getBadges,
+  getUsers,
   getCheckpointReports,
   getDangerousLocations,
   getIncidents,
@@ -35,6 +36,7 @@ const router = Router();
 router.use(authenticate, asyncHandler(requireAdmin));
 
 router.get("/dashboard", asyncHandler(dashboard));
+router.get("/users", asyncHandler(getUsers));
 
 router.get("/challenges", asyncHandler(adminListChallenges));
 router.post("/challenges", asyncHandler(adminCreateChallenge));

@@ -14,14 +14,37 @@ export type SocialFeedItem = {
   user: SocialProfile;
   trail: { id: string | null; name: string | null; image: string | null };
   rating: number | null;
+  title: string | null;
   content: string | null;
   caption: string | null;
+  visibility: string | null;
   photo_url: string | null;
+  photos: Array<{ id: string; url: string; created_at: string }>;
+  activity: {
+    id: string | null;
+    distance_meters: number | null;
+    elapsed_time_seconds: number | null;
+    elevation_gain_meters?: number | null;
+    elevation_loss_meters?: number | null;
+    max_elevation_meters?: number | null;
+    min_elevation_meters?: number | null;
+    elevation_summary?: {
+      gain_meters: number | null;
+      loss_meters: number | null;
+      max_meters: number | null;
+      min_meters: number | null;
+    };
+  } | null;
   created_at: string;
   likes_count: number;
   comments_count: number;
   is_liked_by_user: boolean;
-  activity?: { id: string | null; distance_meters: number | null; elapsed_time_seconds: number | null } | null;
+  recent_comments?: Array<{
+    id: string;
+    body: string;
+    created_at: string;
+    user: SocialProfile;
+  }>;
 };
 
 export async function getSocialFeed(params: { page?: number; limit?: number; filter?: 'all' | 'friends' } = {}) {

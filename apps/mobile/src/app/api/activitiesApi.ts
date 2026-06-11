@@ -77,6 +77,7 @@ export type ActivityDetailPoint = {
   latitude: number;
   longitude: number;
   elevation?: number | null;
+  speed_mps?: number | null;
   recorded_at: string;
 };
 

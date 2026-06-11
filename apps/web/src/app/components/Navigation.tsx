@@ -1,13 +1,13 @@
 import { useState } from 'react';
 import { Link, useLocation } from 'react-router';
-import { Map, Compass, Bookmark, Activity, User, Plus, LogOut, LogIn, ShieldCheck, Users, Bell } from 'lucide-react';
+import { Map, Compass, Bookmark, User, Plus, LogOut, LogIn, ShieldCheck, Users, Bell } from 'lucide-react';
 import { AuthModal } from './AuthModal';
+import { BrandLogo } from './BrandLogo';
 
 const navLinks = [
   { to: '/explore', label: 'Explore', icon: Compass },
   { to: '/map', label: 'Map', icon: Map },
   { to: '/feed', label: 'Feed', icon: Users },
-  { to: '/activity', label: 'Activity', icon: Activity },
   { to: '/notifications', label: 'Alerts', icon: Bell },
   { to: '/profile', label: 'Profile', icon: User },
 ];
@@ -30,10 +30,12 @@ export function DesktopNavigation({ isAuthenticated = false, isAdmin = false, on
     <>
       <nav className="hidden md:flex items-center justify-between h-16 px-6 bg-card border-b border-border sticky top-0 z-50">
         <Link to="/" className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center">
-            <Compass className="w-5 h-5 text-primary-foreground" />
-          </div>
-          <span className="font-semibold text-foreground text-lg">Traces</span>
+          <BrandLogo
+            tone="light"
+            className="gap-2"
+            imageClassName="w-8 h-8"
+            textClassName="font-semibold text-foreground text-lg"
+          />
         </Link>
 
         <div className="flex items-center gap-1">

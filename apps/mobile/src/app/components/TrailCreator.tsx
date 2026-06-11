@@ -14,11 +14,14 @@ import {
   parseTrailDescription,
   uploadTrailPhoto,
   publishTrail,
+  type CreateTrailErrorPayload,
+  type CreateTrailPayload,
   type GeneratedTrailSuggestion,
   type DuplicateTrailWarning,
   type TrailAnalysisResponse,
   type TrailStatsResponse,
 } from '../api/trailsApi';
+import { setTrailAccess } from '../api/safetyApi';
 import { ApiError } from '../api/client';
 import { setTrailRouteCoordinates } from '../state/trailRoutes';
 import { translateTrailContentToArabic } from '../utils/translateTrailContent';
@@ -26,23 +29,7 @@ import { translateTrailContentToArabic } from '../utils/translateTrailContent';
 type LngLat = [number, number];
 type DrawingStage = 'start' | 'middle' | 'end';
 
-type SaveTrailBody = {
-  name: string;
-  nameAr?: string;
-  description?: string;
-  descriptionAr?: string;
-  region?: string;
-  regionAr?: string;
-  features?: string[];
-  featuresAr?: string[];
-  tags?: string[];
-  status?: 'draft' | 'published';
-  visibility?: 'public' | 'private';
-  confirm_duplicate?: boolean;
-  confirm_hazard?: boolean;
-  coordinates: LngLat[];
-  stats: TrailStatsResponse;
-};
+type SaveTrailBody = CreateTrailPayload;
 
 type DirectionsResponse = {
   routes?: Array<{
@@ -537,20 +524,17 @@ function formatHazardWarningItem(warning: unknown) {
   return String(warning);
 }
 
-function confirmHazardWarning(warnings: unknown[]) {
+function showHazardBlockedWarning(warnings: unknown[]) {
   const messages = warnings.slice(0, 5).map(formatHazardWarningItem).filter(Boolean);
   const messageText = messages.length > 0
-    ? `This route passes through hazardous or settlement areas.\n\n${messages.join('\n')}\n\nProceed anyway?`
-    : 'This route passes through hazardous or settlement areas.\n\nProceed anyway?';
+    ? `This route passes through hazardous or settlement areas and cannot be created.\n\n${messages.join('\n')}`
+    : 'This route passes through hazardous or settlement areas and cannot be created.';
 
-  return new Promise<boolean>((resolve) => {
+  return new Promise<void>((resolve) => {
     Alert.alert(
-      'Route hazard warning',
+      'Dangerous route blocked',
       messageText,
-      [
-        { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
-        { text: 'Create anyway', style: 'destructive', onPress: () => resolve(true) },
-      ],
+      [{ text: 'OK', onPress: () => resolve() }],
       { cancelable: true },
     );
   });
@@ -607,6 +591,8 @@ export function TrailCreator({
   const [middleCoordinates, setMiddleCoordinates] = useState<LngLat[]>([]);
   const [endCoordinate, setEndCoordinate] = useState<LngLat | null>(null);
   const [routeCoordinates, setRouteCoordinates] = useState<LngLat[]>([]);
+  const [accessPointCoordinate, setAccessPointCoordinate] = useState<LngLat | null>(null);
+  const [isSelectingAccessPoint, setIsSelectingAccessPoint] = useState(false);
 
   const [stats, setStats] = useState<TrailStatsResponse | null>(null);
 
@@ -765,6 +751,13 @@ export function TrailCreator({
     setFeatures((current) => current.filter((feature) => feature !== featureToRemove));
   };
 
+  const beginAccessPointSelection = () => {
+    setIsSelectingAccessPoint(true);
+    setSaveSuccess(null);
+    setSaveError(null);
+    setCalcError(null);
+  };
+
   const routeGeojson = useMemo(() => toLineFeature(routeCoordinates), [routeCoordinates]);
   const routeKey = useMemo(
     () => routeCoordinates.map(([lng, lat]) => `${lng.toFixed(5)},${lat.toFixed(5)}`).join('|'),
@@ -773,6 +766,7 @@ export function TrailCreator({
   const startGeojson = useMemo(() => toPointFeature(startCoordinate), [startCoordinate]);
   const middleGeojson = useMemo(() => toPointsFeatureCollection(middleCoordinates), [middleCoordinates]);
   const endGeojson = useMemo(() => toPointFeature(endCoordinate), [endCoordinate]);
+  const accessPointGeojson = useMemo(() => toPointFeature(accessPointCoordinate), [accessPointCoordinate]);
   const waypointCount = middleCoordinates.length + (startCoordinate ? 1 : 0) + (endCoordinate ? 1 : 0);
   const canUndo = isDrawing && waypointCount > 0;
   const canMarkEnd = isDrawing && Boolean(startCoordinate) && drawingStage === 'middle';
@@ -811,6 +805,8 @@ export function TrailCreator({
     setMiddleCoordinates(coordinates.slice(1, -1));
     setEndCoordinate(lastCoordinate);
     setRouteCoordinates(coordinates);
+    setAccessPointCoordinate(null);
+    setIsSelectingAccessPoint(false);
     setStats({
       length_meters: initialGeneratedTrail.length_meters,
       elevation_gain_meters: initialGeneratedTrail.elevation_gain_meters,
@@ -866,6 +862,8 @@ export function TrailCreator({
     setMiddleCoordinates([]);
     setEndCoordinate(null);
     setRouteCoordinates([]);
+    setAccessPointCoordinate(null);
+    setIsSelectingAccessPoint(false);
     setIsLoop(false);
     setDrawingStage('start');
     setIsDrawing(true);
@@ -894,6 +892,8 @@ export function TrailCreator({
     setMiddleCoordinates([]);
     setEndCoordinate(null);
     setRouteCoordinates([]);
+    setAccessPointCoordinate(null);
+    setIsSelectingAccessPoint(false);
     setIsLoop(false);
     setDrawingStage('start');
     setIsDrawing(false);
@@ -917,6 +917,8 @@ export function TrailCreator({
       setStartCoordinate(initialCoordinate);
       setEndCoordinate(initialCoordinate);
       setRouteCoordinates([initialCoordinate]);
+      setAccessPointCoordinate(null);
+      setIsSelectingAccessPoint(false);
       setIsRecordingTrail(true);
       setRecordingStartedAt(Date.now());
       cameraRef.current?.setCamera({
@@ -1007,6 +1009,8 @@ export function TrailCreator({
       setRouteCoordinates(cleanedRouteCoordinates);
       setStartCoordinate(cleanedRouteCoordinates[0]);
       setEndCoordinate(cleanedRouteCoordinates[cleanedRouteCoordinates.length - 1]);
+      setAccessPointCoordinate(null);
+      setIsSelectingAccessPoint(false);
       const cleanedDistanceMeters = getPathDistanceMeters(cleanedRouteCoordinates);
 
       try {
@@ -1033,6 +1037,8 @@ export function TrailCreator({
     setStats(null);
     setRouteCoordinates([]);
     setIsFinished(false);
+    setAccessPointCoordinate(null);
+    setIsSelectingAccessPoint(false);
 
     if (endCoordinate) {
       setEndCoordinate(null);
@@ -1188,20 +1194,16 @@ export function TrailCreator({
       try {
         json = await createTrail(payload);
       } catch (error) {
-        const errorPayload = error instanceof ApiError ? error.payload as { warnings?: unknown[] } | undefined : undefined;
+        const errorPayload = error instanceof ApiError ? error.payload as CreateTrailErrorPayload | undefined : undefined;
         if (
           error instanceof ApiError &&
           error.status === 400 &&
           Array.isArray(errorPayload?.warnings) &&
           errorPayload.warnings.length > 0
         ) {
-          const shouldProceed = await confirmHazardWarning(errorPayload.warnings);
-          if (!shouldProceed) {
-            return;
-          }
-
-          payload.confirm_hazard = true;
-          json = await createTrail(payload);
+          await showHazardBlockedWarning(errorPayload.warnings);
+          setSaveError('This trail cannot be created because the route passes through hazardous or settlement areas.');
+          return;
         } else {
           throw error;
         }
@@ -1212,6 +1214,20 @@ export function TrailCreator({
         } catch (uploadError) {
           console.warn('Trail photo upload failed:', uploadError);
           setSaveError('Trail saved, but photo upload failed.');
+        }
+      }
+
+      if (accessPointCoordinate) {
+        try {
+          await setTrailAccess(json.data.id, {
+            latitude: accessPointCoordinate[1],
+            longitude: accessPointCoordinate[0],
+            name: `${name.trim()} access point`,
+            access_notes: 'Access point selected during trail creation.',
+          });
+        } catch (accessError) {
+          console.warn('Trail access point save failed:', accessError);
+          setSaveError('Trail saved, but access point setup failed.');
         }
       }
 
@@ -1232,6 +1248,19 @@ export function TrailCreator({
   };
 
   const handleMapPress = (coord: LngLat | null) => {
+    if (isSelectingAccessPoint) {
+      if (!coord || coord.length !== 2 || isCalculating) {
+        return;
+      }
+
+      setAccessPointCoordinate(coord);
+      setIsSelectingAccessPoint(false);
+      setSaveSuccess(null);
+      setSaveError(null);
+      setCalcError(null);
+      return;
+    }
+
     if (!isDrawing || !coord || coord.length !== 2 || isCalculating) {
       return;
     }
@@ -1262,6 +1291,8 @@ export function TrailCreator({
   const stageTitle =
     isRecordingTrail
       ? 'Recording your walk'
+      : isSelectingAccessPoint
+      ? 'Tap anywhere for an access point'
       : drawingStage === 'start'
       ? 'Tap a starting point'
       : drawingStage === 'middle'
@@ -1274,6 +1305,7 @@ export function TrailCreator({
         startCoordinate ? 'Start set' : 'Choose a start',
         middleCoordinates.length ? `${middleCoordinates.length} middle point${middleCoordinates.length === 1 ? '' : 's'}` : 'No middle points',
         endCoordinate ? 'End set' : 'Choose an end',
+        accessPointCoordinate ? 'Access point set' : 'No access point',
         isLoop ? 'Loop on' : 'Loop off',
       ].join(' | ');
   const shouldShowTrailInfoPanel = isDrawing || isRecordingTrail || isFinished;
@@ -1355,6 +1387,20 @@ export function TrailCreator({
             }}
           />
         </Mapbox.ShapeSource>
+
+        {accessPointCoordinate ? (
+          <Mapbox.ShapeSource id="trail-access-source" shape={accessPointGeojson}>
+            <Mapbox.CircleLayer
+              id="trail-access-point"
+              style={{
+                circleColor: '#F4E6B0',
+                circleStrokeColor: '#D4A843',
+                circleStrokeWidth: 3,
+                circleRadius: 8,
+              }}
+            />
+          </Mapbox.ShapeSource>
+        ) : null}
       </Mapbox.MapView>
 
       <View style={[styles.mapControls, { bottom: mapControlsBottom }]}>
@@ -1402,6 +1448,14 @@ export function TrailCreator({
               >
                 <Ionicons name="sync-outline" size={18} color={isLoop ? '#FFFFFF' : '#2C2418'} />
                 <Text style={[styles.iconText, isLoop && styles.loopText]}>Loop</Text>
+              </Pressable>
+
+              <Pressable
+                style={[styles.iconButton, isSelectingAccessPoint && styles.primaryIconButton]}
+                onPress={beginAccessPointSelection}
+              >
+                <Ionicons name="location-outline" size={18} color={isSelectingAccessPoint ? '#fff' : '#2C2418'} />
+                <Text style={[styles.iconText, isSelectingAccessPoint && styles.primaryIconText]}>Access point</Text>
               </Pressable>
 
               <Pressable
@@ -1573,6 +1627,31 @@ export function TrailCreator({
                       placeholderTextColor="#9E8E80"
                       style={styles.input}
                     />
+                  </View>
+                  <View style={styles.formRow}>
+                    <View style={styles.labelRow}>
+                      <Text style={styles.inputLabel}>Access point</Text>
+                      <Pressable
+                        style={[styles.parseDescriptionButton, isSelectingAccessPoint && styles.disabledButton]}
+                        onPress={beginAccessPointSelection}
+                        disabled={isSelectingAccessPoint}
+                      >
+                        <Ionicons name="map-outline" size={14} color="#630E13" />
+                        <Text style={styles.parseDescriptionText}>
+                          {isSelectingAccessPoint ? 'Tap anywhere on the map' : accessPointCoordinate ? 'Change on map' : 'Pick on map'}
+                        </Text>
+                      </Pressable>
+                    </View>
+                    <View style={styles.accessPointCard}>
+                      <Text style={styles.accessPointTitle}>
+                        {accessPointCoordinate ? 'Access point selected' : 'No access point selected'}
+                      </Text>
+                      <Text style={styles.accessPointText}>
+                        {accessPointCoordinate
+                          ? `${accessPointCoordinate[1].toFixed(5)}, ${accessPointCoordinate[0].toFixed(5)}`
+                          : 'Choose any point you want hikers to use when approaching this trail.'}
+                      </Text>
+                    </View>
                   </View>
                   <View style={styles.formRow}>
                     <Text style={styles.inputLabel}>Features</Text>
@@ -1872,6 +1951,26 @@ const styles = StyleSheet.create({
     color: '#2C2418',
     fontWeight: '800',
     fontSize: 13,
+  },
+  accessPointCard: {
+    marginTop: 2,
+    padding: 14,
+    borderRadius: 16,
+    backgroundColor: '#FFF8EF',
+    borderWidth: 1,
+    borderColor: 'rgba(212,168,67,0.18)',
+    gap: 10,
+  },
+  accessPointTitle: {
+    color: '#2C2418',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  accessPointText: {
+    color: '#6B5D4E',
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: '600',
   },
 
   statsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 8, marginBottom: 10 },

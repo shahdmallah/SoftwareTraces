@@ -1,5 +1,6 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
+import { trackUserActivity } from "../analytics/analytics.service";
 import { requireAuth } from "../../middleware/auth";
 import {
   archiveChallenge,
@@ -32,10 +33,10 @@ const challengeBaseSchema = z.object({
   description: z.string().trim().min(1).max(2000),
   goal_type: goalTypeSchema,
   goal_value: z.coerce.number().positive(),
-  goal_metadata: goalMetadataSchema.optional(),
+  goal_metadata: goalMetadataSchema.nullable().optional(),
   start_at: z.string().datetime(),
   end_at: z.string().datetime(),
-  reward_badge_id: z.string().uuid().nullable().optional(),
+  reward_badge_id: z.string().trim().min(1).nullable().optional(),
   reward_points: z.coerce.number().int().min(0).max(100000).optional(),
   visibility: z.enum(["public", "private"]).optional(),
   status: z.enum(["draft", "published", "archived"]).optional(),
@@ -184,7 +185,14 @@ export async function getPublicChallenge(req: Request, res: Response): Promise<v
 export async function postJoinChallenge(req: Request, res: Response): Promise<void> {
   try {
     const auth = requireAuth(req);
-    res.status(201).json({ data: await joinChallenge(uuidSchema.parse(req.params.id), auth.sub) });
+    const challengeId = uuidSchema.parse(req.params.id);
+    const data = await joinChallenge(challengeId, auth.sub);
+    await trackUserActivity({
+      userId: auth.sub,
+      eventType: "challenge_joined",
+      metadata: { challenge_id: challengeId },
+    });
+    res.status(201).json({ data });
   } catch (error) {
     sendChallengeError("postJoinChallenge", res, error);
   }

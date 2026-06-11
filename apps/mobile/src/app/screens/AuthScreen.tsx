@@ -14,11 +14,12 @@ import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { Ionicons } from '@expo/vector-icons';
 import { RootStackParamList } from '../navigation/types';
+import { BrandBadge } from '../components/BrandBadge';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAuth } from '../contexts/AuthContext';
 import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
 import { ltrText, rtlText } from '../utils/direction';
-import { login, signup } from '../lib/auth';
+import { login, markFirstLoginSetupPending, signup } from '../lib/auth';
 
 type AuthNavigationProp = StackNavigationProp<RootStackParamList, 'Auth'>;
 type AuthRouteProp = RouteProp<RootStackParamList, 'Auth'>;
@@ -70,6 +71,14 @@ export function AuthScreen() {
         password,
       });
 
+      if (mode === 'signup') {
+        try {
+          await markFirstLoginSetupPending(session.user.id);
+        } catch (setupError) {
+          console.warn('[auth] Failed to queue first-login setup:', setupError);
+        }
+      }
+
       setSession(session);
       navigation.navigate('AppTabs');
     } catch (error) {
@@ -104,9 +113,13 @@ export function AuthScreen() {
               />
             </Pressable>
 
-            <View style={styles.logoBadge}>
-              <Ionicons name="map" size={24} color="#F5D16F" />
-            </View>
+            <BrandBadge
+              size="xl"
+              showText={false}
+              backgroundColor="#FBF7EE"
+              borderColor="rgba(99,14,19,0.14)"
+              containerStyle={styles.authBrandBadge}
+            />
             <Text style={[styles.appTitle, isArabic ? rtlText : ltrText]}>Traces</Text>
             <Text style={[styles.appSubtitle, isArabic ? rtlText : ltrText]}>
               {mode === 'signin' ? t('authWelcomeBack') : t('authCreateAccount')}
@@ -273,15 +286,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: 'rgba(255,255,255,0.15)',
   },
-  logoBadge: {
-    width: 62,
-    height: 62,
-    borderRadius: 31,
-    backgroundColor: 'rgba(255,255,255,0.16)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.2)',
+  authBrandBadge: {
+    marginBottom: 2,
+    shadowColor: '#1B120D',
+    shadowOpacity: 0.16,
+    shadowOffset: { width: 0, height: 8 },
+    shadowRadius: 14,
+    elevation: 5,
   },
   appTitle: {
     marginTop: 14,

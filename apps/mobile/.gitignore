@@ -41,3 +41,4 @@ yarn-error.*
 /ios
 /android
 .expo*
+apps/mobile/google-services.json

@@ -15,7 +15,7 @@ import {
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
+import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -33,6 +33,7 @@ import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
 import { RootStackParamList } from '../navigation/types';
 
 type SafetyCenterNavigationProp = StackNavigationProp<RootStackParamList, 'SafetyCenter'>;
+type SafetyCenterRouteProp = RouteProp<RootStackParamList, 'SafetyCenter'>;
 
 type ContactDraft = {
   id?: string;
@@ -104,7 +105,9 @@ function compact(value: string): string | null {
 
 export function SafetyCenterScreen() {
   const navigation = useNavigation<SafetyCenterNavigationProp>();
+  const route = useRoute<SafetyCenterRouteProp>();
   const insets = useSafeAreaInsets();
+  const isOnboarding = route.params?.onboarding === true;
   const [contacts, setContacts] = useState<EmergencyContact[]>([]);
   const [sosAlerts, setSosAlerts] = useState<SosAlert[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -119,6 +122,13 @@ export function SafetyCenterScreen() {
     [contacts],
   );
   const latestSos = sosAlerts[0] ?? null;
+
+  const goToRecommendationSetup = useCallback((notice?: string) => {
+    navigation.replace('RecommendationPreferences', {
+      onboarding: true,
+      ...(notice ? { notice } : {}),
+    });
+  }, [navigation]);
 
   const loadSafetyCenter = useCallback(async (mode: 'initial' | 'refresh' = 'initial') => {
     if (mode === 'initial') {
@@ -269,6 +279,18 @@ export function SafetyCenterScreen() {
     );
   };
 
+  const handleSkipOnboarding = useCallback(() => {
+    const notice = 'You can update your emergency contacts later from Profile > Settings.';
+
+    Alert.alert('Skip for now', notice, [
+      { text: 'Keep editing', style: 'cancel' },
+      {
+        text: 'Continue',
+        onPress: () => goToRecommendationSetup(notice),
+      },
+    ]);
+  }, [goToRecommendationSetup]);
+
   return (
     <AnimatedScreen style={styles.container}>
       <ScrollView
@@ -277,18 +299,40 @@ export function SafetyCenterScreen() {
       >
         <AnimatedBlock delay={30}>
           <View style={styles.header}>
-            <Pressable style={styles.iconButton} onPress={() => navigation.goBack()}>
-              <Ionicons name="chevron-back" size={20} color="#2C2418" />
-            </Pressable>
+            {isOnboarding ? (
+              <View style={styles.stepBadge}>
+                <Text style={styles.stepBadgeText}>1 of 2</Text>
+              </View>
+            ) : (
+              <Pressable style={styles.iconButton} onPress={() => navigation.goBack()}>
+                <Ionicons name="chevron-back" size={20} color="#2C2418" />
+              </Pressable>
+            )}
             <View style={styles.headerCopy}>
-              <Text style={styles.title}>Safety Center</Text>
-              <Text style={styles.subtitle}>Manage SOS contacts and review emergency alerts.</Text>
+              <Text style={styles.title}>{isOnboarding ? 'Safety setup' : 'Safety Center'}</Text>
+              <Text style={styles.subtitle}>
+                {isOnboarding
+                  ? 'Add emergency contacts before your first hike, or skip and update them later from Profile.'
+                  : 'Manage SOS contacts and review emergency alerts.'}
+              </Text>
             </View>
             <Pressable style={styles.addButton} onPress={() => setDraft(emptyContactDraft)}>
               <Ionicons name="add" size={20} color="#FFFFFF" />
             </Pressable>
           </View>
         </AnimatedBlock>
+
+        {isOnboarding ? (
+          <AnimatedBlock delay={55} style={styles.onboardingBanner}>
+            <Ionicons name="shield-checkmark-outline" size={20} color="#630E13" />
+            <View style={styles.onboardingBannerCopy}>
+              <Text style={styles.onboardingBannerTitle}>Set this up now or skip it</Text>
+              <Text style={styles.onboardingBannerText}>
+                We&apos;ll only ask once, and you can always edit your SOS contacts from your profile later.
+              </Text>
+            </View>
+          </AnimatedBlock>
+        ) : null}
 
         {isLoading ? (
           <View style={styles.stateBlock}>
@@ -421,6 +465,19 @@ export function SafetyCenterScreen() {
                 })
               )}
             </AnimatedBlock>
+
+            {isOnboarding ? (
+              <AnimatedBlock delay={190} style={styles.onboardingActions}>
+                <Pressable style={styles.onboardingSecondaryButton} onPress={handleSkipOnboarding}>
+                  <Text style={styles.onboardingSecondaryButtonText}>Skip for now</Text>
+                </Pressable>
+                <Pressable style={styles.onboardingPrimaryButton} onPress={() => goToRecommendationSetup()}>
+                  <Text style={styles.onboardingPrimaryButtonText}>
+                    {activeContactCount > 0 ? 'Continue to trail preferences' : 'Continue without contacts'}
+                  </Text>
+                </Pressable>
+              </AnimatedBlock>
+            ) : null}
           </>
         )}
       </ScrollView>
@@ -511,7 +568,31 @@ const styles = StyleSheet.create({
   headerCopy: { flex: 1 },
   title: { color: '#2C2418', fontSize: 25, lineHeight: 30, fontWeight: '900' },
   subtitle: { marginTop: 2, color: '#7B6D5A', fontSize: 12, lineHeight: 17, fontWeight: '700' },
+  stepBadge: {
+    minWidth: 54,
+    height: 42,
+    borderRadius: 21,
+    paddingHorizontal: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F7EBE8',
+  },
+  stepBadgeText: { color: '#630E13', fontSize: 12, fontWeight: '900' },
   addButton: { width: 42, height: 42, borderRadius: 21, backgroundColor: '#630E13', alignItems: 'center', justifyContent: 'center' },
+  onboardingBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+    borderRadius: 20,
+    backgroundColor: '#FFF6E8',
+    borderWidth: 1,
+    borderColor: '#F0DBC1',
+    padding: 14,
+    marginBottom: 14,
+  },
+  onboardingBannerCopy: { flex: 1 },
+  onboardingBannerTitle: { color: '#2C2418', fontSize: 14, lineHeight: 18, fontWeight: '900' },
+  onboardingBannerText: { marginTop: 4, color: '#7B6D5A', fontSize: 12, lineHeight: 17, fontWeight: '700' },
   stateBlock: { minHeight: 260, alignItems: 'center', justifyContent: 'center' },
   errorBlock: { borderRadius: 18, backgroundColor: '#FFFDF8', padding: 18, alignItems: 'center' },
   errorText: { color: '#9B1C1C', fontSize: 13, lineHeight: 19, fontWeight: '800', textAlign: 'center' },
@@ -566,4 +647,24 @@ const styles = StyleSheet.create({
   saveButton: { minHeight: 48, borderRadius: 16, backgroundColor: '#630E13', alignItems: 'center', justifyContent: 'center', marginTop: 16 },
   disabledButton: { opacity: 0.7 },
   saveButtonText: { color: '#FFFFFF', fontSize: 14, fontWeight: '900' },
+  onboardingActions: { gap: 10, marginBottom: 8 },
+  onboardingSecondaryButton: {
+    minHeight: 48,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#D9C9B3',
+    backgroundColor: '#FFFDF8',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  onboardingSecondaryButtonText: { color: '#6B5D4E', fontSize: 14, fontWeight: '800' },
+  onboardingPrimaryButton: {
+    minHeight: 50,
+    borderRadius: 17,
+    backgroundColor: '#630E13',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 18,
+  },
+  onboardingPrimaryButtonText: { color: '#FFFFFF', fontSize: 14, lineHeight: 18, fontWeight: '900', textAlign: 'center' },
 });

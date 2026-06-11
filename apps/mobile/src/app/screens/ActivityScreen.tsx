@@ -1,9 +1,10 @@
 import React, { memo, useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, FlatList, Image, ListRenderItem, Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, FlatList, Image, LayoutChangeEvent, ListRenderItem, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { LinearGradient } from 'expo-linear-gradient';
+import { ScrollView as GestureScrollView } from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
 import { deleteActivityPost } from '../api/activitiesApi';
@@ -16,6 +17,7 @@ import { getMyChallenges, joinChallenge, listChallenges, type Challenge } from '
 import { type FeedCommentPreview, type FeedItem } from '../data/activitySocial';
 import { getLocalFeedItems } from '../data/localSocial';
 import { mapMeetupToFeedItem } from '../utils/meetupFeedMap';
+import { groupSocialMediaPosts } from '../utils/groupMediaFeedPosts';
 import { mapSocialFeedItemToFeedItem } from '../utils/socialFeedMap';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
@@ -546,7 +548,13 @@ const RecapCard = memo(function RecapCard({
   const [commentDraft, setCommentDraft] = useState('');
   const [commentOpen, setCommentOpen] = useState(false);
   const [pendingAction, setPendingAction] = useState<'like' | 'comment' | 'follow' | 'delete' | null>(null);
-  const imageUri = hasImageUri(item.image) ? item.image.trim() : null;
+  const [mediaWidth, setMediaWidth] = useState(0);
+  const [activeMediaIndex, setActiveMediaIndex] = useState(0);
+  const mediaScrollRef = React.useRef<ScrollView | null>(null);
+  const galleryUris = (item.photoUris?.length ? item.photoUris : item.image ? [item.image] : [])
+    .map((uri) => (hasImageUri(uri) ? uri.trim() : ''))
+    .filter(Boolean);
+  const imageUri = galleryUris[0] ?? null;
   const visibleComments = item.previewComments ?? [];
   const firstNatureSighting = item.natureSightings?.find((sighting) => getNatureSightingName(sighting));
   const natureLabel = getNatureSightingName(firstNatureSighting);
@@ -616,6 +624,31 @@ const RecapCard = memo(function RecapCard({
   const showFollowButton = item.userId && item.userId !== currentUserId;
   const showDeleteButton = supportsComments && item.userId && item.userId === currentUserId;
 
+  const handleMediaLayout = (event: LayoutChangeEvent) => {
+    const nextWidth = event.nativeEvent.layout.width;
+    if (nextWidth && nextWidth !== mediaWidth) {
+      setMediaWidth(nextWidth);
+    }
+  };
+
+  const handleMediaScrollEnd = (offsetX: number) => {
+    if (!mediaWidth) {
+      return;
+    }
+
+    setActiveMediaIndex(Math.round(offsetX / mediaWidth));
+  };
+
+  const scrollMediaBy = (direction: -1 | 1) => {
+    if (!mediaWidth || galleryUris.length <= 1) {
+      return;
+    }
+
+    const nextIndex = Math.min(Math.max(activeMediaIndex + direction, 0), galleryUris.length - 1);
+    mediaScrollRef.current?.scrollTo({ x: nextIndex * mediaWidth, animated: true });
+    setActiveMediaIndex(nextIndex);
+  };
+
   return (
     <Pressable style={styles.card} onPress={canOpenRecap ? () => onOpenRecap(item) : undefined}>
       <CardHeader
@@ -671,7 +704,70 @@ const RecapCard = memo(function RecapCard({
       />
 
       <View style={styles.mediaWrap}>
-        {imageUri ? (
+        {galleryUris.length > 1 ? (
+          <View style={styles.mediaCarouselFrame} onLayout={handleMediaLayout}>
+            <GestureScrollView
+              ref={mediaScrollRef}
+              horizontal
+              nestedScrollEnabled
+              directionalLockEnabled
+              bounces={false}
+              decelerationRate="fast"
+              scrollEnabled={galleryUris.length > 1}
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.mediaCarouselContent}
+              onMomentumScrollEnd={(event) => {
+                handleMediaScrollEnd(event.nativeEvent.contentOffset.x);
+              }}
+            >
+              {galleryUris.map((uri, index) => (
+                <Image
+                  key={`${uri}-${index}`}
+                  source={{ uri }}
+                  style={[styles.media, mediaWidth ? { width: mediaWidth } : null]}
+                  resizeMode="cover"
+                />
+              ))}
+            </GestureScrollView>
+
+            {activeMediaIndex > 0 ? (
+              <Pressable
+                style={[styles.mediaNavButton, styles.mediaNavButtonLeft]}
+                onPress={(event) => {
+                  event.stopPropagation();
+                  scrollMediaBy(-1);
+                }}
+                hitSlop={12}
+              >
+                <Ionicons name="chevron-back" size={18} color="#fff" />
+              </Pressable>
+            ) : null}
+
+            {activeMediaIndex < galleryUris.length - 1 ? (
+              <Pressable
+                style={[styles.mediaNavButton, styles.mediaNavButtonRight]}
+                onPress={(event) => {
+                  event.stopPropagation();
+                  scrollMediaBy(1);
+                }}
+                hitSlop={12}
+              >
+                <Ionicons name="chevron-forward" size={18} color="#fff" />
+              </Pressable>
+            ) : null}
+
+            {galleryUris.length > 1 ? (
+              <View style={styles.mediaPaginationDots}>
+                {galleryUris.map((uri, index) => (
+                  <View
+                    key={`${uri}-${index}`}
+                    style={[styles.mediaPaginationDot, index === activeMediaIndex && styles.mediaPaginationDotActive]}
+                  />
+                ))}
+              </View>
+            ) : null}
+          </View>
+        ) : imageUri ? (
           <Image source={{ uri: imageUri }} style={styles.media} resizeMode="cover" />
         ) : (
           <View style={[styles.media, styles.mediaFallback]}>
@@ -1166,7 +1262,7 @@ export function ActivityScreen() {
       setIsFeedLoading(true);
       try {
         const response = await getSocialFeed({ page: 1, limit: 30 });
-        const mappedItems = response.data.map(mapSocialFeedItemToFeedItem);
+        const mappedItems = groupSocialMediaPosts(response.data).map(mapSocialFeedItemToFeedItem);
         if (!cancelled) {
           setRemoteRecaps(mappedItems);
           setFeedError('');
@@ -2039,9 +2135,56 @@ const styles = StyleSheet.create({
     height: 240,
     position: 'relative',
   },
+  mediaCarouselFrame: {
+    width: '100%',
+    height: '100%',
+    position: 'relative',
+  },
+  mediaCarouselContent: {
+    flexGrow: 1,
+    flexDirection: 'row',
+  },
   media: {
     width: '100%',
     height: '100%',
+  },
+  mediaPaginationDots: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 14,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 8,
+    zIndex: 2,
+  },
+  mediaPaginationDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.56)',
+  },
+  mediaPaginationDotActive: {
+    backgroundColor: '#fff',
+  },
+  mediaNavButton: {
+    position: 'absolute',
+    top: '50%',
+    marginTop: -18,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.32)',
+    zIndex: 3,
+  },
+  mediaNavButtonLeft: {
+    left: 10,
+  },
+  mediaNavButtonRight: {
+    right: 10,
   },
   mediaFallback: {
     alignItems: 'center',

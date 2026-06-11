@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router';
 import { Bell, CheckCheck, Trash2 } from 'lucide-react';
 import { getAccessToken } from '../api/client';
 import {
@@ -76,6 +77,11 @@ export function NotificationsPage() {
                   <p className="font-medium text-foreground">{notification.title}</p>
                   <p className="text-sm text-secondary mt-1">{notification.body}</p>
                   <p className="text-xs text-secondary mt-2">{new Date(notification.created_at).toLocaleString()}</p>
+                  {(notification.type === 'sos_alert' || notification.type === 'danger_alert') && (
+                    <Link to="/safety" className="inline-block mt-2 text-xs text-primary hover:underline">
+                      Open Safety Center
+                    </Link>
+                  )}
                 </div>
                 <div className="flex gap-2">
                   {!notification.read_at && (

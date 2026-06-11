@@ -60,9 +60,9 @@ export function ActivityPage() {
             <h1 className="mb-2">Activity</h1>
             <p className="text-secondary">Activities, challenges, meetups, and journal entries from the API.</p>
           </div>
-          <Link to="/recording" className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors">
+          <Link to="/activity" className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors">
             <Play className="w-4 h-4" />
-            <span>Start Recording</span>
+            <span>Open Activity</span>
           </Link>
         </div>
 
@@ -89,8 +89,8 @@ export function ActivityPage() {
               <div><p className="text-2xl font-semibold text-foreground">{Math.round(durationHours(activeActivity) * 60)} min</p><p className="text-sm text-secondary">Duration</p></div>
               <div><p className="text-2xl font-semibold text-foreground">{Math.round(elevation(activeActivity))}m</p><p className="text-sm text-secondary">Elevation</p></div>
             </div>
-            <Link to="/recording" className="block w-full px-4 py-3 bg-primary text-primary-foreground text-center rounded-lg hover:bg-primary/90 transition-colors">
-              View Recording
+            <Link to="/activity" className="block w-full px-4 py-3 bg-primary text-primary-foreground text-center rounded-lg hover:bg-primary/90 transition-colors">
+              View Activity
             </Link>
           </div>
         )}

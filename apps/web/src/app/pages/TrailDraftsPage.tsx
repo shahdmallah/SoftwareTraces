@@ -103,7 +103,7 @@ export function TrailDraftsPage() {
         <div className="flex items-center justify-between mb-6">
           <div>
             <h1 className="mb-2">Trail Drafts</h1>
-            <p className="text-secondary">Drafts from /api/trails/drafts</p>
+            <p className="text-secondary">Your trail drafts</p>
           </div>
           <Link to="/create" className="px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors">
             New Trail
@@ -191,25 +191,42 @@ export function TrailDraftsPage() {
                       <div className="flex flex-wrap gap-2">
                         {isEditing ? (
                           <>
-                            <button onClick={() => handleSave(draft.id)} className="flex items-center gap-2 px-4 py-2 bg-success text-success-foreground rounded-lg hover:bg-success/90 transition-colors">
+                            <button
+                              onClick={() => handleSave(draft.id)}
+                              className="flex items-center gap-2 px-4 py-2 bg-success text-success-foreground rounded-lg hover:bg-success/90 transition-colors"
+                            >
                               <Save className="w-4 h-4" />
                               <span>Save</span>
                             </button>
-                            <button onClick={() => setEditingId(null)} className="px-4 py-2 border border-border rounded-lg hover:bg-muted/20 transition-colors">Cancel</button>
+                            <button
+                              onClick={() => setEditingId(null)}
+                              className="px-4 py-2 border border-border rounded-lg hover:bg-muted/20 transition-colors"
+                            >
+                              Cancel
+                            </button>
                           </>
                         ) : (
                           <>
-                            <button onClick={() => handleEdit(draft)} className="flex items-center gap-2 px-4 py-2 border border-border rounded-lg hover:bg-muted/20 transition-colors">
+                            <button
+                              onClick={() => handleEdit(draft)}
+                              className="flex items-center gap-2 px-4 py-2 border border-border rounded-lg hover:bg-muted/20 transition-colors"
+                            >
                               <Edit className="w-4 h-4" />
                               <span>Edit</span>
                             </button>
                             {isReady && (
-                              <button onClick={() => handlePublish(draft.id)} className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors">
+                              <button
+                                onClick={() => handlePublish(draft.id)}
+                                className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors"
+                              >
                                 <Send className="w-4 h-4" />
                                 <span>Publish</span>
                               </button>
                             )}
-                            <button onClick={() => handleDelete(draft.id)} className="flex items-center gap-2 px-4 py-2 border border-destructive/30 text-destructive rounded-lg hover:bg-destructive/10 transition-colors">
+                            <button
+                              onClick={() => handleDelete(draft.id)}
+                              className="flex items-center gap-2 px-4 py-2 border border-destructive/30 text-destructive rounded-lg hover:bg-destructive/10 transition-colors"
+                            >
                               <Trash2 className="w-4 h-4" />
                               <span>Delete</span>
                             </button>

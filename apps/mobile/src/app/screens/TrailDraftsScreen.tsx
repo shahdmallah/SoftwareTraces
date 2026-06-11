@@ -196,6 +196,10 @@ export function TrailDraftsScreen() {
     ]);
   };
 
+  const openTrailDetail = (trailId: string) => {
+    navigation.navigate('TrailDetail', { trailId });
+  };
+
   return (
     <AnimatedScreen style={styles.container}>
       <ScrollView contentContainerStyle={[styles.content, { paddingTop: Math.max(insets.top + 16, 32) }]} showsVerticalScrollIndicator={false}>
@@ -241,7 +245,15 @@ export function TrailDraftsScreen() {
         ) : (
           drafts.map((trail, index) => (
             <AnimatedBlock key={trail.id} delay={80 + index * 35}>
-              <View style={styles.card}>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => {
+                  if (editingTrailId !== trail.id) {
+                    openTrailDetail(trail.id);
+                  }
+                }}
+                style={({ pressed }) => [styles.card, pressed && styles.cardPressed]}
+              >
                 <Image source={{ uri: trail.image }} style={styles.image} />
                 <View style={styles.cardBody}>
                   <View style={[styles.cardHeader, isArabic ? rtlRow : ltrRow]}>
@@ -269,12 +281,20 @@ export function TrailDraftsScreen() {
                       <View style={styles.photoEditRow}>
                         <Image source={{ uri: draftPhotoUri ?? trail.image }} style={styles.photoEditPreview} />
                         <View style={styles.photoEditActions}>
-                          <Pressable style={styles.secondaryButton} onPress={handlePickDraftPhoto} disabled={busyTrailId === trail.id}>
+                          <Pressable
+                            style={styles.secondaryButton}
+                            onPress={handlePickDraftPhoto}
+                            disabled={busyTrailId === trail.id}
+                          >
                             <Ionicons name="image-outline" size={15} color="#630E13" />
                             <Text style={styles.secondaryButtonText}>{draftPhotoUri ? 'Change photo' : 'Edit photo'}</Text>
                           </Pressable>
                           {draftPhotoUri ? (
-                            <Pressable style={styles.secondaryButton} onPress={() => setDraftPhotoUri(null)} disabled={busyTrailId === trail.id}>
+                            <Pressable
+                              style={styles.secondaryButton}
+                              onPress={() => setDraftPhotoUri(null)}
+                              disabled={busyTrailId === trail.id}
+                            >
                               <Text style={styles.secondaryButtonText}>Remove change</Text>
                             </Pressable>
                           ) : null}
@@ -314,7 +334,7 @@ export function TrailDraftsScreen() {
                     </Pressable>
                   </View>
                 </View>
-              </View>
+              </Pressable>
             </AnimatedBlock>
           ))
         )}
@@ -342,6 +362,7 @@ const styles = StyleSheet.create({
   summaryValue: { color: '#2C2418', fontSize: 17, fontWeight: '900' },
   summaryLabel: { marginTop: 4, color: '#8A7A6A', fontSize: 11, fontWeight: '700' },
   card: { overflow: 'hidden', borderRadius: 22, backgroundColor: '#fff', marginBottom: 16 },
+  cardPressed: { opacity: 0.96 },
   image: { width: '100%', height: 136, backgroundColor: '#D8CCB8' },
   cardBody: { padding: 14 },
   cardHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },

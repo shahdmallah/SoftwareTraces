@@ -2,8 +2,10 @@ import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 
-const rootDir = process.cwd();
+const scriptDir = path.dirname(fileURLToPath(import.meta.url));
+const rootDir = path.resolve(scriptDir, "..");
 const apiEnvPath = path.join(rootDir, "apps", "api", ".env");
 
 function readApiEnv() {
@@ -39,7 +41,7 @@ const intervalMs = Number(process.env.API_HEALTH_INTERVAL_MS || 10000);
 const timeoutMs = Number(process.env.API_HEALTH_TIMEOUT_MS || 4000);
 const maxFailures = Number(process.env.API_HEALTH_MAX_FAILURES || 3);
 const restartGraceMs = Number(process.env.API_HEALTH_RESTART_GRACE_MS || 15000);
-const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
+const npmCommand = "npm";
 
 let apiProcess = null;
 let consecutiveFailures = 0;
@@ -56,11 +58,18 @@ function startApi() {
   consecutiveFailures = 0;
   log("starting API dev server");
 
-  const child = spawn(npmCommand, ["run", "dev", "--workspace", "@traces/api"], {
-    cwd: rootDir,
-    env: process.env,
-    stdio: "inherit",
-  });
+  const child =
+    process.platform === "win32"
+      ? spawn(process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", "npm run dev:raw --workspace @traces/api"], {
+          cwd: rootDir,
+          env: process.env,
+          stdio: "inherit",
+        })
+      : spawn(npmCommand, ["run", "dev:raw", "--workspace", "@traces/api"], {
+          cwd: rootDir,
+          env: process.env,
+          stdio: "inherit",
+        });
   apiProcess = child;
 
   child.on("exit", (code, signal) => {
@@ -129,11 +138,11 @@ async function restartApi(reason) {
 }
 
 async function tick() {
-  if (!apiProcess || restartInProgress) {
+  if (restartInProgress) {
     return;
   }
 
-  if (Date.now() - lastStartedAt < restartGraceMs) {
+  if (apiProcess && Date.now() - lastStartedAt < restartGraceMs) {
     return;
   }
 
@@ -150,7 +159,13 @@ async function tick() {
   log(`health check failed ${consecutiveFailures}/${maxFailures}: ${healthUrl}`);
 
   if (consecutiveFailures >= maxFailures) {
-    await restartApi("health check threshold reached");
+    if (apiProcess) {
+      await restartApi("health check threshold reached");
+      return;
+    }
+
+    log("health check threshold reached with no managed API process; starting API dev server");
+    startApi();
   }
 }
 
@@ -173,7 +188,14 @@ process.on("SIGTERM", async () => {
 });
 
 log(`watching ${healthUrl} every ${intervalMs}ms`);
-startApi();
+
+const alreadyHealthy = await checkHealth();
+if (alreadyHealthy) {
+  log("existing API is already healthy; watchdog will monitor without starting a duplicate process");
+} else {
+  startApi();
+}
+
 setInterval(() => {
   void tick();
 }, intervalMs);

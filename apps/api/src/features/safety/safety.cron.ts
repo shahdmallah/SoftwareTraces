@@ -1,8 +1,13 @@
 import cron from "node-cron";
+import { env } from "../../config/env";
 import { pool } from "../../db/pool";
 import { fetchOchaIncidents } from "./ocha.fetcher";
 
 let hasStartedSafetyCron = false;
+
+function getHourlyCronExpression(intervalHours: number): string {
+  return intervalHours === 24 ? "0 0 * * *" : `0 */${intervalHours} * * *`;
+}
 
 export function startSafetyCron(): void {
   console.log("[startSafetyCron] Starting safety cron jobs");
@@ -14,11 +19,14 @@ export function startSafetyCron(): void {
 
   hasStartedSafetyCron = true;
 
-  cron.schedule("0 */6 * * *", async () => {
+  const ochaCronExpression = getHourlyCronExpression(env.OCHA_FETCH_INTERVAL_HOURS);
+  console.log(`[safety.cron] Scheduling OCHA fetch every ${env.OCHA_FETCH_INTERVAL_HOURS} hour(s): ${ochaCronExpression}`);
+
+  cron.schedule(ochaCronExpression, async () => {
     console.log("[safety.cron] Starting scheduled OCHA fetch");
     try {
       const result = await fetchOchaIncidents();
-      console.log("[safety.cron] OCHA fetch complete:", result);
+      console.log("[safety.cron] OCHA fetch succeeded:", result);
     } catch (error) {
       console.error("[safety.cron] OCHA fetch failed:", error);
     }
