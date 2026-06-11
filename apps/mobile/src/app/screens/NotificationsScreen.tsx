@@ -14,6 +14,7 @@ import { StackNavigationProp } from '@react-navigation/stack';
 import { Ionicons } from '@expo/vector-icons';
 import { RootStackParamList } from '../navigation/types';
 import { AnimatedScreen } from '../components/AnimatedUI';
+import { getMeetup } from '../api/meetupsApi';
 import { getSocialFeedItem } from '../api/socialApi';
 import {
   deleteNotification,
@@ -30,6 +31,7 @@ import {
   registerDeviceForPushNotifications,
   type PushNotificationActivationStatus,
 } from '../services/pushNotifications';
+import { mapMeetupToFeedItem } from '../utils/meetupFeedMap';
 import { mapSocialFeedItemToFeedItem } from '../utils/socialFeedMap';
 
 type NotificationsNavigationProp = StackNavigationProp<RootStackParamList, 'Notifications'>;
@@ -38,6 +40,7 @@ const PAGE_LIMIT = 30;
 
 const typeIcon: Record<NotificationType, keyof typeof Ionicons.glyphMap> = {
   follow: 'person-add-outline',
+  message: 'chatbubble-ellipses-outline',
   review_like: 'heart-outline',
   review_comment: 'chatbubble-outline',
   activity_like: 'heart-circle-outline',
@@ -53,6 +56,7 @@ const typeIcon: Record<NotificationType, keyof typeof Ionicons.glyphMap> = {
 
 const typeTone: Record<NotificationType, string> = {
   follow: '#315D8C',
+  message: '#7A4B20',
   review_like: '#B94A63',
   review_comment: '#6A4A9A',
   activity_like: '#B94A63',
@@ -97,6 +101,25 @@ function getConversationId(notification: AppNotification): string | null {
   return asString(notification.data.conversation_id);
 }
 
+function getContextType(notification: AppNotification): RootStackParamList['ActivityThread']['contextType'] | undefined {
+  const value = asString(notification.data.context_type) || asString(notification.data.conversation_type);
+
+  if (
+    value === 'direct' ||
+    value === 'meetup' ||
+    value === 'trail' ||
+    value === 'activity' ||
+    value === 'safety' ||
+    value === 'profile' ||
+    value === 'photo' ||
+    value === 'review'
+  ) {
+    return value;
+  }
+
+  return undefined;
+}
+
 function isNavigationAlert(notification: AppNotification): boolean {
   return asString(notification.data.notification_kind) === 'navigation_off_track' || Boolean(getNavigationSessionId(notification));
 }
@@ -105,6 +128,13 @@ function getReviewId(notification: AppNotification): string | null {
   return (
     asString(notification.data.review_id) ||
     (notification.entity?.type === 'review' ? asString(notification.entity.id) : null)
+  );
+}
+
+function getMeetupId(notification: AppNotification): string | null {
+  return (
+    asString(notification.data.meetup_id) ||
+    (notification.entity?.type === 'meetup' ? asString(notification.entity.id) : null)
   );
 }
 
@@ -228,6 +258,25 @@ export function NotificationsScreen() {
   }, []);
 
   const openNotificationDestination = useCallback(async (notification: AppNotification) => {
+    if (notification.type === 'message') {
+      const conversationId = getConversationId(notification);
+      if (conversationId) {
+        navigation.navigate('ActivityThread', {
+          conversationId,
+          participantId: asString(notification.data.sender_profile_id) ?? notification.actor?.id ?? undefined,
+          participantName: asString(notification.data.sender_name) ?? notification.actor?.full_name ?? notification.title,
+          participantAvatar: asString(notification.data.sender_avatar_url) ?? notification.actor?.avatar_url ?? undefined,
+          contextType: getContextType(notification) ?? 'direct',
+          contextId: asString(notification.data.context_id) ?? undefined,
+          contextTitle: asString(notification.data.context_title) ?? undefined,
+        });
+        return;
+      }
+
+      navigation.navigate('ActivityMessages');
+      return;
+    }
+
     if (notification.type === 'sos_alert') {
       const conversationId = getConversationId(notification);
       if (conversationId) {
@@ -326,6 +375,17 @@ export function NotificationsScreen() {
     }
 
     if (notification.type === 'meetup_invite' || notification.type === 'meetup_join' || notification.type === 'meetup_update') {
+      const meetupId = getMeetupId(notification);
+      if (meetupId) {
+        try {
+          const meetup = await getMeetup(meetupId);
+          navigation.navigate('ActivityPlanJoin', { plan: mapMeetupToFeedItem(meetup) });
+          return;
+        } catch {
+          // Fall through to the broader activity destination if the meetup is unavailable.
+        }
+      }
+
       navigation.navigate('AppTabs', { screen: 'Activity' });
       return;
     }
@@ -534,7 +594,7 @@ export function NotificationsScreen() {
                   <Text style={styles.pushCardText}>
                     {pushStatus === 'unavailable'
                       ? 'Use a physical development build to receive navigation alerts.'
-                      : 'Get navigation and safety alerts even when Traces is in the background.'}
+                      : 'Get message, navigation, and safety alerts even when Traces is in the background.'}
                   </Text>
                 </View>
                 {pushStatus === 'unavailable' ? null : (
@@ -564,7 +624,7 @@ export function NotificationsScreen() {
             <View style={styles.emptyState}>
               <Ionicons name="notifications-off-outline" size={42} color="#8A7A6A" />
               <Text style={styles.emptyTitle}>No notifications yet</Text>
-              <Text style={styles.emptyText}>Follows, review replies, activity reactions, and danger alerts will show up here.</Text>
+              <Text style={styles.emptyText}>Messages, follows, reactions, and safety alerts will show up here.</Text>
             </View>
           }
         />

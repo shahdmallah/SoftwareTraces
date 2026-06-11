@@ -1,6 +1,7 @@
 import type { PoolClient } from "pg";
 import { pool } from "../../db/pool";
 import { updateUserStats } from "../achievements/achievements.service";
+import { createNotification } from "../notifications/notifications.service";
 import type {
   CreateMeetupInput,
   JoinMeetupResult,
@@ -218,6 +219,59 @@ function formatMeetup(row: MeetupRow): Meetup {
   };
 }
 
+function buildMeetupInviteNotificationBody(hostName: string, meetupTitle: string): string {
+  return `${hostName} invited you to ${meetupTitle}`;
+}
+
+async function notifyMeetupInvitees(meetup: Meetup, inviteeIds: string[]): Promise<void> {
+  const uniqueInviteeIds = Array.from(new Set(inviteeIds)).filter(Boolean);
+  if (uniqueInviteeIds.length === 0) {
+    return;
+  }
+
+  const hostName = meetup.host.full_name?.trim() || "A trail host";
+  const title = "Meetup invite";
+  const body = buildMeetupInviteNotificationBody(hostName, meetup.title);
+
+  const results = await Promise.allSettled(
+    uniqueInviteeIds.map((inviteeId) =>
+      createNotification({
+        user_id: inviteeId,
+        actor_id: meetup.host.id,
+        type: "meetup_invite",
+        title,
+        body,
+        entity_type: "meetup",
+        entity_id: meetup.id,
+        data: {
+          meetup_id: meetup.id,
+          trail_id: meetup.trail_id,
+          host_id: meetup.host.id,
+          host_name: meetup.host.full_name,
+          meetup_title: meetup.title,
+          meetup_title_ar: meetup.title_ar,
+          meetup_note: meetup.note,
+          meetup_note_ar: meetup.note_ar,
+          starts_at: meetup.starts_at,
+          meeting_place: meetup.meeting_place,
+          cover_url: meetup.cover_url,
+          notification_kind: "meetup_invite",
+        },
+      })
+    )
+  );
+
+  for (const [index, result] of results.entries()) {
+    if (result.status === "rejected") {
+      console.error("[meetups.service] Failed to create meetup invite notification:", {
+        meetupId: meetup.id,
+        inviteeId: uniqueInviteeIds[index],
+        error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+      });
+    }
+  }
+}
+
 async function fetchMeetupById(client: PoolClient, meetupId: string, userId: string | null): Promise<Meetup | null> {
   console.log("[meetups.service] Fetching meetup by id:", { meetupId, userId });
   const result = await client.query<MeetupRow>(
@@ -401,6 +455,7 @@ export async function createMeetupFull(userId: string, input: CreateMeetupInput)
     );
 
     const invitedUserIds = Array.from(new Set(input.invited_user_ids ?? [])).filter((id) => id !== userId);
+    const notifiedInviteeIds: string[] = [];
     console.log("[meetups.createMeetupFull] 7. Sending invites to:", invitedUserIds);
 
     for (const inviteeId of invitedUserIds) {
@@ -413,6 +468,8 @@ export async function createMeetupFull(userId: string, input: CreateMeetupInput)
         console.log(`[meetups.createMeetupFull] User ${inviteeId} not found, skipping invite`);
         continue;
       }
+
+      notifiedInviteeIds.push(inviteeId);
 
       console.log("[meetups.createMeetupFull] 9. Upserting invite:", inviteeId);
       await client.query(
@@ -446,6 +503,7 @@ export async function createMeetupFull(userId: string, input: CreateMeetupInput)
     await client.query("COMMIT");
     console.log("[meetups.createMeetupFull] Updating achievement stats");
     await updateUserStats(userId, { meetupsHosted: 1 });
+    await notifyMeetupInvitees(meetup, notifiedInviteeIds);
     console.log("[meetups.createMeetupFull] createMeetupFull complete:", meetupId);
     return meetup;
   } catch (error) {

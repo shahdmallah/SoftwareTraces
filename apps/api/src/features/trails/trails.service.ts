@@ -1,5 +1,6 @@
 import type { Difficulty } from "@traces/shared-types";
 import { calculateElevationGain, getElevationForPoints } from "../../services/elevationService";
+import { classifyDifficulty } from "../../utils/trailDifficulty";
 import { totalDistance } from "../../utils/distance";
 
 export interface TrailStats {
@@ -13,22 +14,6 @@ function estimateDurationMinutes(distanceKm: number, elevationGainMeters: number
   const distanceMinutes = (distanceKm / 5) * 60;
   const climbingMinutes = (elevationGainMeters / 600) * 60;
   return distanceMinutes + climbingMinutes;
-}
-
-function classifyDifficulty(distanceKm: number, elevationGainMeters: number): Difficulty {
-  if (distanceKm >= 16 || elevationGainMeters >= 1000) {
-    return "expert";
-  }
-
-  if (distanceKm >= 10 || elevationGainMeters >= 600) {
-    return "hard";
-  }
-
-  if (distanceKm >= 5 || elevationGainMeters >= 250) {
-    return "moderate";
-  }
-
-  return "easy";
 }
 
 export async function calculateTrailStats(coordinates: [number, number][]): Promise<TrailStats> {

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { ltrRow, ltrText, rtlRow, rtlText } from '../utils/direction';
@@ -12,6 +12,11 @@ interface CommunityPostsSectionProps {
   onOpenProfile?: (profileId: string) => void;
 }
 
+function getRecapImages(post: Extract<FeedItem, { kind: 'recap' }>) {
+  const candidates = post.photoUris?.length ? post.photoUris : post.image ? [post.image] : [];
+  return candidates.filter((uri, index, collection) => Boolean(uri) && collection.indexOf(uri) === index);
+}
+
 export function CommunityPostsSection({ posts, onOpenActivity, onOpenProfile }: CommunityPostsSectionProps) {
   const { t, language } = useLanguage();
   const isArabic = language === 'ar';
@@ -22,7 +27,7 @@ export function CommunityPostsSection({ posts, onOpenActivity, onOpenProfile }: 
         <View style={styles.sectionTitleGroup}>
           <Text style={[styles.sectionTitle, isArabic ? rtlText : ltrText]}>{t('detailCommunityTitle')}</Text>
           <Text style={[styles.sectionSubtitle, isArabic ? rtlText : ltrText]}>
-            {isArabic ? 'منشورات وخطط مرتبطة بهذا المسار' : 'Posts and plans linked to this trail'}
+            {isArabic ? '\u0645\u0646\u0634\u0648\u0631\u0627\u062a \u0648\u062e\u0637\u0637 \u0645\u0631\u062a\u0628\u0637\u0629 \u0628\u0647\u0630\u0627 \u0627\u0644\u0645\u0633\u0627\u0631' : 'Posts and plans linked to this trail'}
           </Text>
         </View>
         {onOpenActivity ? (
@@ -48,33 +53,64 @@ export function CommunityPostsSection({ posts, onOpenActivity, onOpenProfile }: 
                       {post.user}
                     </Text>
                     <Text style={[styles.handle, isArabic ? rtlText : ltrText]} numberOfLines={1}>
-                      {post.handle} · {isArabic ? post.timeAr : post.timeEn}
+                      {post.handle} - {isArabic ? post.timeAr : post.timeEn}
                     </Text>
                   </View>
                 </Pressable>
                 <View style={styles.typeBadge}>
                   <Ionicons name="footsteps-outline" size={12} color="#630E13" />
-                  <Text style={styles.typeBadgeText}>{isArabic ? 'رحلة' : 'Recap'}</Text>
+                  <Text style={styles.typeBadgeText}>{isArabic ? '\u0631\u062d\u0644\u0629' : 'Recap'}</Text>
                 </View>
               </View>
 
-              <View style={styles.mediaWrap}>
-                <Image source={{ uri: post.image }} style={styles.media} />
-                <LinearGradient colors={['transparent', 'rgba(0,0,0,0.6)']} style={styles.mediaOverlay}>
-                  <View style={styles.mediaTags}>
-                    <View style={styles.mediaTag}>
-                      <Ionicons name="location-outline" size={12} color="#fff" />
-                      <Text style={styles.mediaTagText} numberOfLines={1}>
-                        {isArabic ? post.trailNameAr : post.trailNameEn}
-                      </Text>
-                    </View>
-                    <View style={styles.mediaTag}>
-                      <Ionicons name="walk-outline" size={12} color="#fff" />
-                      <Text style={styles.mediaTagText}>{post.distance}</Text>
-                    </View>
+              {(() => {
+                const recapImages = getRecapImages(post);
+
+                if (!recapImages.length) {
+                  return null;
+                }
+
+                return (
+                  <View style={styles.mediaWrap}>
+                    <ScrollView
+                      horizontal
+                      showsHorizontalScrollIndicator={false}
+                      contentContainerStyle={styles.mediaCarouselContent}
+                    >
+                      {recapImages.map((imageUri, imageIndex) => (
+                        <View
+                          key={`${post.id}-${imageUri}-${imageIndex}`}
+                          style={[styles.mediaCard, imageIndex === recapImages.length - 1 ? styles.mediaCardLast : null]}
+                        >
+                          <Image source={{ uri: imageUri }} style={styles.media} />
+                          <LinearGradient colors={['transparent', 'rgba(0,0,0,0.6)']} style={styles.mediaOverlay}>
+                            <View style={styles.mediaTags}>
+                              <View style={styles.mediaTag}>
+                                <Ionicons name="location-outline" size={12} color="#fff" />
+                                <Text style={styles.mediaTagText} numberOfLines={1}>
+                                  {isArabic ? post.trailNameAr : post.trailNameEn}
+                                </Text>
+                              </View>
+                              <View style={styles.mediaTag}>
+                                <Ionicons name="walk-outline" size={12} color="#fff" />
+                                <Text style={styles.mediaTagText}>{post.distance}</Text>
+                              </View>
+                              {recapImages.length > 1 ? (
+                                <View style={styles.mediaTag}>
+                                  <Ionicons name="images-outline" size={12} color="#fff" />
+                                  <Text style={styles.mediaTagText}>
+                                    {imageIndex + 1}/{recapImages.length}
+                                  </Text>
+                                </View>
+                              ) : null}
+                            </View>
+                          </LinearGradient>
+                        </View>
+                      ))}
+                    </ScrollView>
                   </View>
-                </LinearGradient>
-              </View>
+                );
+              })()}
 
               <View style={styles.postBody}>
                 <Text style={[styles.caption, isArabic ? rtlText : ltrText]} numberOfLines={3}>
@@ -116,7 +152,7 @@ export function CommunityPostsSection({ posts, onOpenActivity, onOpenProfile }: 
                   </Pressable>
                   <View style={styles.planBadge}>
                     <Ionicons name="calendar" size={12} color="#fff" />
-                    <Text style={styles.planBadgeText}>{isArabic ? 'لقاء' : 'Meetup'}</Text>
+                    <Text style={styles.planBadgeText}>{isArabic ? '\u0644\u0642\u0627\u0621' : 'Meetup'}</Text>
                   </View>
                 </View>
 
@@ -133,11 +169,11 @@ export function CommunityPostsSection({ posts, onOpenActivity, onOpenProfile }: 
                   <View style={[styles.planMetaRow, isArabic ? rtlRow : ltrRow]}>
                     <View style={styles.planMetaPill}>
                       <Ionicons name="people-outline" size={13} color="#fff" />
-                      <Text style={styles.planMetaText}>{isArabic ? `${post.peopleJoined} منضمون` : `${post.peopleJoined} joined`}</Text>
+                      <Text style={styles.planMetaText}>{isArabic ? `${post.peopleJoined} \u0645\u0646\u0636\u0645\u0648\u0646` : `${post.peopleJoined} joined`}</Text>
                     </View>
                     <View style={styles.planMetaPill}>
                       <Ionicons name="sparkles-outline" size={13} color="#fff" />
-                      <Text style={styles.planMetaText}>{isArabic ? `${post.spotsLeft} أماكن` : `${post.spotsLeft} spots`}</Text>
+                      <Text style={styles.planMetaText}>{isArabic ? `${post.spotsLeft} \u0623\u0645\u0627\u0643\u0646` : `${post.spotsLeft} spots`}</Text>
                     </View>
                   </View>
                 </View>
@@ -149,10 +185,10 @@ export function CommunityPostsSection({ posts, onOpenActivity, onOpenProfile }: 
         <View style={styles.emptyState}>
           <Ionicons name="chatbubbles-outline" size={24} color="#8A7A6A" />
           <Text style={[styles.emptyTitle, isArabic ? rtlText : ltrText]}>
-            {isArabic ? 'لا توجد منشورات لهذا المسار بعد' : 'No posts for this trail yet'}
+            {isArabic ? '\u0644\u0627 \u062a\u0648\u062c\u062f \u0645\u0646\u0634\u0648\u0631\u0627\u062a \u0644\u0647\u0630\u0627 \u0627\u0644\u0645\u0633\u0627\u0631 \u0628\u0639\u062f' : 'No posts for this trail yet'}
           </Text>
           <Text style={[styles.emptyCopy, isArabic ? rtlText : ltrText]}>
-            {isArabic ? 'عند مشاركة رحلة أو خطة لهذا المسار ستظهر هنا.' : 'Shared recaps and meetups for this trail will appear here.'}
+            {isArabic ? '\u0639\u0646\u062f \u0645\u0634\u0627\u0631\u0643\u0629 \u0631\u062d\u0644\u0629 \u0623\u0648 \u062e\u0637\u0629 \u0644\u0647\u0630\u0627 \u0627\u0644\u0645\u0633\u0627\u0631 \u0633\u062a\u0638\u0647\u0631 \u0647\u0646\u0627.' : 'Shared recaps and meetups for this trail will appear here.'}
           </Text>
         </View>
       )}
@@ -255,6 +291,20 @@ const styles = StyleSheet.create({
   mediaWrap: {
     height: 190,
     position: 'relative',
+  },
+  mediaCarouselContent: {
+    paddingHorizontal: 12,
+  },
+  mediaCard: {
+    width: 250,
+    height: 190,
+    marginRight: 10,
+    borderRadius: 16,
+    overflow: 'hidden',
+    backgroundColor: '#E7D8C3',
+  },
+  mediaCardLast: {
+    marginRight: 0,
   },
   media: {
     width: '100%',

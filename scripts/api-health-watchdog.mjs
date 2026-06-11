@@ -37,10 +37,10 @@ function readApiEnv() {
 const apiEnv = readApiEnv();
 const port = process.env.PORT || apiEnv.PORT || "3000";
 const healthUrl = process.env.API_HEALTH_URL || `http://localhost:${port}/health`;
-const intervalMs = Number(process.env.API_HEALTH_INTERVAL_MS || 10000);
+const intervalMs = Number(process.env.API_HEALTH_INTERVAL_MS || 1000);
 const timeoutMs = Number(process.env.API_HEALTH_TIMEOUT_MS || 4000);
 const maxFailures = Number(process.env.API_HEALTH_MAX_FAILURES || 3);
-const restartGraceMs = Number(process.env.API_HEALTH_RESTART_GRACE_MS || 15000);
+const restartGraceMs = Number(process.env.API_HEALTH_RESTART_GRACE_MS || 1500);
 const npmCommand = "npm";
 
 let apiProcess = null;

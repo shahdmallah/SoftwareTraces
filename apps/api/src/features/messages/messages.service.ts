@@ -1,6 +1,12 @@
 import { pool } from "../../db/pool";
+import { createNotification } from "../notifications/notifications.service";
 
 type ConversationType = "direct" | "meetup" | "trail" | "activity" | "safety";
+type Queryable = {
+  query: (queryText: string, values?: unknown[]) => Promise<unknown>;
+};
+
+const sharedConversationTypes = new Set<ConversationType>(["meetup", "trail"]);
 
 export interface CreateConversationInput {
   type: ConversationType;
@@ -77,6 +83,28 @@ interface MessageRow {
   deleted_at: string | Date | null;
 }
 
+interface ConversationMessageNotificationRow {
+  conversation_id: string;
+  conversation_type: ConversationType;
+  context_type: string | null;
+  context_id: string | null;
+  conversation_title: string | null;
+  sender_profile_id: string;
+  sender_user_id: string | null;
+  sender_full_name: string | null;
+  sender_avatar_url: string | null;
+}
+
+interface ConversationMessageRecipientRow {
+  recipient_profile_id: string;
+  recipient_user_id: string | null;
+}
+
+interface NotificationEntityReference {
+  entityType: string | null;
+  entityId: string | null;
+}
+
 export class ProfileResolutionError extends Error {
   unresolvedIds: string[];
 
@@ -85,6 +113,14 @@ export class ProfileResolutionError extends Error {
     this.name = "ProfileResolutionError";
     this.unresolvedIds = unresolvedIds;
   }
+}
+
+function isSharedConversationType(type: ConversationType): boolean {
+  return sharedConversationTypes.has(type);
+}
+
+function isUniqueViolation(error: unknown): error is { code: string } {
+  return typeof error === "object" && error !== null && "code" in error && (error as { code?: string }).code === "23505";
 }
 
 function toIsoString(value: string | Date | null | undefined): string | null {
@@ -97,6 +133,15 @@ function toIsoString(value: string | Date | null | undefined): string | null {
 
 function uniqueIds(ids: string[]): string[] {
   return Array.from(new Set(ids.map((id) => id.trim()).filter(Boolean)));
+}
+
+function truncateMessagePreview(content: string, maxLength = 140): string {
+  const normalized = content.replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, Math.max(0, maxLength - 1)).trimEnd()}...`;
 }
 
 function formatMessage(row: MessageRow): Message {
@@ -135,6 +180,53 @@ function formatConversation(row: ConversationRow): Conversation {
     })),
     last_message: row.last_message ? formatMessage(row.last_message) : null,
     unread_count: Number(row.unread_count ?? 0),
+  };
+}
+
+function buildConversationNotificationTitle(
+  senderName: string,
+  conversationType: ConversationType,
+  conversationTitle: string | null
+): string {
+  if (conversationType === "direct") {
+    return senderName;
+  }
+
+  if (conversationTitle?.trim()) {
+    return `${senderName} in ${conversationTitle.trim()}`;
+  }
+
+  return `New ${conversationType} message from ${senderName}`;
+}
+
+function resolveMessageNotificationEntity(
+  conversationType: ConversationType,
+  contextType: string | null,
+  contextId: string | null
+): NotificationEntityReference {
+  const candidateType = (contextType ?? conversationType).trim();
+
+  if (
+    contextId &&
+    (
+      candidateType === "trail" ||
+      candidateType === "activity" ||
+      candidateType === "meetup" ||
+      candidateType === "achievement" ||
+      candidateType === "challenge" ||
+      candidateType === "review" ||
+      candidateType === "user"
+    )
+  ) {
+    return {
+      entityType: candidateType,
+      entityId: contextId,
+    };
+  }
+
+  return {
+    entityType: null,
+    entityId: null,
   };
 }
 
@@ -208,6 +300,68 @@ async function assertProfileIdsExist(profileIds: string[]): Promise<void> {
   if (missingIds.length > 0) {
     throw new ProfileResolutionError(missingIds);
   }
+}
+
+async function addConversationParticipants(executor: Queryable, conversationId: string, participantIds: string[]): Promise<void> {
+  for (const participantId of uniqueIds(participantIds)) {
+    await executor.query(
+      `INSERT INTO conversation_participants (conversation_id, user_id)
+       VALUES ($1::uuid, $2::uuid)
+       ON CONFLICT (conversation_id, user_id) DO NOTHING`,
+      [conversationId, participantId]
+    );
+  }
+}
+
+async function findSharedConversation(type: ConversationType, contextId: string): Promise<string | null> {
+  const result = await pool.query<{ id: string }>(
+    `SELECT id
+     FROM conversations
+     WHERE type = $1
+       AND context_id = $2::uuid
+     ORDER BY created_at ASC, id ASC
+     LIMIT 1`,
+    [type, contextId]
+  );
+
+  return result.rows[0]?.id ?? null;
+}
+
+async function getMeetupConversationParticipantIds(meetupId: string): Promise<string[]> {
+  const result = await pool.query<{ user_id: string }>(
+    `SELECT DISTINCT user_id
+     FROM (
+       SELECT m.host_id AS user_id
+       FROM meetups m
+       WHERE m.id = $1::uuid
+         AND m.deleted_at IS NULL
+
+       UNION
+
+       SELECT ma.user_id
+       FROM meetup_attendees ma
+       JOIN meetups m ON m.id = ma.meetup_id
+       WHERE ma.meetup_id = $1::uuid
+         AND ma.status IN ('joined', 'invited')
+         AND m.deleted_at IS NULL
+
+       UNION
+
+       SELECT mi.invitee_id AS user_id
+       FROM meetup_invites mi
+       JOIN meetups m ON m.id = mi.meetup_id
+       WHERE mi.meetup_id = $1::uuid
+         AND mi.status IN ('pending', 'accepted')
+         AND m.deleted_at IS NULL
+     ) meetup_users`,
+    [meetupId]
+  );
+
+  if (result.rows.length === 0) {
+    throw new Error("Meetup not found");
+  }
+
+  return uniqueIds(result.rows.map((row) => row.user_id));
 }
 
 export async function isConversationParticipant(conversationId: string, profileId: string): Promise<boolean> {
@@ -318,7 +472,18 @@ export async function createConversation(userId: string, input: CreateConversati
     throw new ProfileResolutionError(resolvedParticipants.unresolvedIds);
   }
 
-  const participantIds = uniqueIds([creatorProfileId, ...resolvedParticipants.resolvedIds]);
+  if (isSharedConversationType(input.type) && !input.context_id) {
+    throw new Error(`${input.type[0].toUpperCase()}${input.type.slice(1)} conversations require a context_id`);
+  }
+
+  let participantIds = uniqueIds([creatorProfileId, ...resolvedParticipants.resolvedIds]);
+  if (input.type === "meetup" && input.context_id) {
+    participantIds = uniqueIds([
+      ...participantIds,
+      ...(await getMeetupConversationParticipantIds(input.context_id)),
+    ]);
+  }
+
   await assertProfileIdsExist(participantIds);
 
   if (input.type === "direct" && participantIds.length !== 2) {
@@ -332,6 +497,19 @@ export async function createConversation(userId: string, input: CreateConversati
   const existingDirectConversationId = input.type === "direct" ? await findDirectConversation(participantIds) : null;
   if (existingDirectConversationId) {
     const existingConversation = await getConversationById(existingDirectConversationId, creatorProfileId);
+    if (existingConversation) {
+      return existingConversation;
+    }
+  }
+
+  const existingSharedConversationId =
+    isSharedConversationType(input.type) && input.context_id
+      ? await findSharedConversation(input.type, input.context_id)
+      : null;
+
+  if (existingSharedConversationId) {
+    await addConversationParticipants(pool, existingSharedConversationId, participantIds);
+    const existingConversation = await getConversationById(existingSharedConversationId, creatorProfileId);
     if (existingConversation) {
       return existingConversation;
     }
@@ -354,14 +532,7 @@ export async function createConversation(userId: string, input: CreateConversati
     );
     const conversationId = conversationResult.rows[0].id;
 
-    for (const participantId of participantIds) {
-      await client.query(
-        `INSERT INTO conversation_participants (conversation_id, user_id)
-         VALUES ($1::uuid, $2::uuid)
-         ON CONFLICT (conversation_id, user_id) DO NOTHING`,
-        [conversationId, participantId]
-      );
-    }
+    await addConversationParticipants(client, conversationId, participantIds);
 
     await client.query("COMMIT");
     const conversation = await getConversationById(conversationId, creatorProfileId);
@@ -372,6 +543,18 @@ export async function createConversation(userId: string, input: CreateConversati
     return conversation;
   } catch (error) {
     await client.query("ROLLBACK");
+
+    if (isUniqueViolation(error) && isSharedConversationType(input.type) && input.context_id) {
+      const sharedConversationId = await findSharedConversation(input.type, input.context_id);
+      if (sharedConversationId) {
+        await addConversationParticipants(pool, sharedConversationId, participantIds);
+        const existingConversation = await getConversationById(sharedConversationId, creatorProfileId);
+        if (existingConversation) {
+          return existingConversation;
+        }
+      }
+    }
+
     throw error;
   } finally {
     client.release();
@@ -512,7 +695,15 @@ export async function sendConversationMessageWithMetadata(
       [result.rows[0].id]
     );
 
-    return formatMessage(messageResult.rows[0]);
+    const message = formatMessage(messageResult.rows[0]);
+
+    try {
+      await createMessageNotifications(message);
+    } catch (notificationError) {
+      console.error("[messages.service] Failed to create message notifications:", notificationError);
+    }
+
+    return message;
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -548,4 +739,89 @@ export async function markConversationRead(userId: string, conversationId: strin
     last_read_at: toIsoString(result.rows[0].last_read_at) ?? new Date().toISOString(),
     unread_count: 0,
   };
+}
+
+async function createMessageNotifications(message: Message): Promise<void> {
+  const conversationResult = await pool.query<ConversationMessageNotificationRow>(
+    `SELECT
+       c.id AS conversation_id,
+       c.type AS conversation_type,
+       c.context_type,
+       c.context_id,
+       c.title AS conversation_title,
+       sender.id AS sender_profile_id,
+       sender.user_id AS sender_user_id,
+       sender.full_name AS sender_full_name,
+       sender.avatar_url AS sender_avatar_url
+     FROM conversations c
+     JOIN profiles sender ON sender.id = $2::uuid
+     WHERE c.id = $1::uuid
+     LIMIT 1`,
+    [message.conversation_id, message.sender_id]
+  );
+
+  const conversation = conversationResult.rows[0];
+  if (!conversation) {
+    return;
+  }
+
+  const recipientsResult = await pool.query<ConversationMessageRecipientRow>(
+    `SELECT
+       cp.user_id AS recipient_profile_id,
+       recipient.user_id AS recipient_user_id
+     FROM conversation_participants cp
+     JOIN profiles recipient ON recipient.id = cp.user_id
+     WHERE cp.conversation_id = $1::uuid
+       AND cp.user_id <> $2::uuid
+       AND recipient.user_id IS NOT NULL`,
+    [message.conversation_id, message.sender_id]
+  );
+
+  if (recipientsResult.rows.length === 0) {
+    return;
+  }
+
+  const senderName = conversation.sender_full_name?.trim() || "New message";
+  const title = buildConversationNotificationTitle(
+    senderName,
+    conversation.conversation_type,
+    conversation.conversation_title
+  );
+  const body = truncateMessagePreview(message.content);
+  const entityReference = resolveMessageNotificationEntity(
+    conversation.conversation_type,
+    conversation.context_type,
+    conversation.context_id
+  );
+
+  await Promise.all(
+    recipientsResult.rows.map(async (recipient) => {
+      if (!recipient.recipient_user_id) {
+        return;
+      }
+
+      await createNotification({
+        user_id: recipient.recipient_user_id,
+        actor_id: conversation.sender_profile_id,
+        type: "message",
+        title,
+        body,
+        entity_type: entityReference.entityType,
+        entity_id: entityReference.entityId,
+        data: {
+          conversation_id: conversation.conversation_id,
+          conversation_type: conversation.conversation_type,
+          context_type: conversation.context_type,
+          context_id: conversation.context_id,
+          context_title: conversation.conversation_title,
+          message_id: message.id,
+          sender_profile_id: conversation.sender_profile_id,
+          sender_user_id: conversation.sender_user_id,
+          sender_name: conversation.sender_full_name,
+          sender_avatar_url: conversation.sender_avatar_url,
+          notification_kind: "message",
+        },
+      });
+    })
+  );
 }

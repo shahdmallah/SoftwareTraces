@@ -211,6 +211,7 @@ export function ActivityThreadScreen() {
   }, [route.params.contextId, route.params.contextSubtitle, route.params.contextTitle, route.params.contextType]);
   const contextTitle = route.params.contextTitle || conversation?.context?.title;
   const contextSubtitle = route.params.contextSubtitle || conversation?.context?.subtitle;
+  const isSharedContextConversation = route.params.contextType === 'trail' || route.params.contextType === 'meetup';
 
   const ensureConversation = async () => {
     if (conversationId) {
@@ -232,20 +233,20 @@ export function ActivityThreadScreen() {
   useEffect(() => {
     let cancelled = false;
 
-    if (conversationId || route.params.contextType !== 'trail' || !route.params.contextId) {
+    if (conversationId || !isSharedContextConversation || !route.params.contextId) {
       return () => {
         cancelled = true;
       };
     }
 
-    const openTrailConversation = async () => {
+    const openSharedConversation = async () => {
       setIsLoading(true);
       try {
         const participantIds = routeParticipantId ? [routeParticipantId] : [];
         const nextConversation = await startConversation({
           participant_ids: participantIds,
           recipient_id: routeParticipantId,
-          type: 'trail',
+          type: route.params.contextType === 'meetup' ? 'meetup' : 'trail',
           context,
         });
 
@@ -262,12 +263,12 @@ export function ActivityThreadScreen() {
       }
     };
 
-    void openTrailConversation();
+    void openSharedConversation();
 
     return () => {
       cancelled = true;
     };
-  }, [context, conversationId, isArabic, route.params.contextId, route.params.contextType, routeParticipantId]);
+  }, [context, conversationId, isArabic, isSharedContextConversation, route.params.contextId, route.params.contextType, routeParticipantId]);
 
   const handleSend = async () => {
     const body = draft.trim();

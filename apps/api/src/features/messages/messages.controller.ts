@@ -50,7 +50,19 @@ function handleMessagesError(res: Response, error: unknown): void {
     return;
   }
 
-  if (error instanceof Error && error.message.includes("Direct conversations require")) {
+  if (error instanceof Error && error.message === "Meetup not found") {
+    res.status(404).json({ error: error.message });
+    return;
+  }
+
+  if (
+    error instanceof Error &&
+    (
+      error.message.includes("Direct conversations require") ||
+      error.message.includes("conversations require a context_id") ||
+      error.message === "At least one participant is required"
+    )
+  ) {
     res.status(400).json({ error: error.message });
     return;
   }

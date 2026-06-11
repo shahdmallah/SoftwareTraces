@@ -10,6 +10,23 @@ interface TrailSummaryCardProps {
   isArabic: boolean;
 }
 
+function getDistanceMeters(from: [number, number], to: [number, number]) {
+  const earthRadiusMeters = 6371000;
+  const toRadians = (value: number) => (value * Math.PI) / 180;
+  const [fromLng, fromLat] = from;
+  const [toLng, toLat] = to;
+  const deltaLat = toRadians(toLat - fromLat);
+  const deltaLng = toRadians(toLng - fromLng);
+  const a =
+    Math.sin(deltaLat / 2) * Math.sin(deltaLat / 2) +
+    Math.cos(toRadians(fromLat)) *
+      Math.cos(toRadians(toLat)) *
+      Math.sin(deltaLng / 2) *
+      Math.sin(deltaLng / 2);
+
+  return earthRadiusMeters * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
 function formatNumericValue(value: number | string | undefined | null, digits = 1) {
   const parsed = typeof value === 'number' ? value : Number(value);
   return Number.isFinite(parsed) ? parsed.toFixed(digits) : `0.${'0'.repeat(Math.max(1, digits))}`;
@@ -31,6 +48,24 @@ function buildTrailLabels(trail: Trail, isArabic: boolean) {
   return labels.slice(0, 5);
 }
 
+function isLoopTrail(trail: Trail) {
+  const labels = [...(trail.features ?? []), ...(trail.featuresAr ?? []), ...(trail.tags ?? [])]
+    .filter((label): label is string => typeof label === 'string')
+    .map((label) => label.trim().toLowerCase());
+
+  if (labels.includes('loop_trail') || labels.includes('loop trail') || labels.includes('loop')) {
+    return true;
+  }
+
+  if (!Array.isArray(trail.routeCoordinates) || trail.routeCoordinates.length < 2) {
+    return false;
+  }
+
+  const start = trail.routeCoordinates[0];
+  const end = trail.routeCoordinates[trail.routeCoordinates.length - 1];
+  return getDistanceMeters(start, end) <= 75;
+}
+
 export function TrailSummaryCard({ trail, isArabic }: TrailSummaryCardProps) {
   const displayName = isArabic ? trail.nameAr : trail.name;
   const displayRegion = isArabic ? trail.regionAr : trail.region;
@@ -40,6 +75,9 @@ export function TrailSummaryCard({ trail, isArabic }: TrailSummaryCardProps) {
   const durationText = trail.duration || 'N/A';
   const difficultyText = trail.difficulty || 'Easy';
   const trailLabels = buildTrailLabels(trail, isArabic);
+  const loopTrail = isLoopTrail(trail);
+  const routeTypeLabel = isArabic ? 'حلقة' : 'Loop';
+  const pointToPointLabel = isArabic ? 'من نقطة لنقطة' : 'Point to point';
 
   return (
     <View style={styles.summaryCard}>
@@ -88,8 +126,8 @@ export function TrailSummaryCard({ trail, isArabic }: TrailSummaryCardProps) {
           <Text style={styles.statsLabel}>Est. time</Text>
         </View>
         <View style={styles.statsItem}>
-          <Ionicons name="arrow-forward-outline" size={18} color="#1F211A" />
-          <Text style={styles.statsLabel}>Point to point</Text>
+          <Ionicons name={loopTrail ? 'sync-outline' : 'arrow-forward-outline'} size={18} color="#1F211A" />
+          <Text style={styles.statsLabel}>{loopTrail ? routeTypeLabel : pointToPointLabel}</Text>
         </View>
       </View>
 

@@ -51,7 +51,30 @@ export type TrailSafety = {
   nearest_checkpoint: { name: string; distance_meters: number } | null;
   incident_count_48h: number;
   warnings: string[];
+  recent_incidents: TrailSafetyIncident[];
   cached?: boolean;
+};
+
+export type TrailSafetyIncident = {
+  id: string;
+  incident_type: IncidentType;
+  severity: SafetySeverity;
+  headline?: string | null;
+  description?: string | null;
+  source?: string;
+  source_name?: string | null;
+  source_url?: string | null;
+  reported_at?: string | null;
+  expires_at?: string | null;
+  distance_meters: number;
+  moderation_status?: string | null;
+  confirmations_count: number;
+  disputes_count: number;
+  community_confidence_score: number;
+  trust_level?: string;
+  verification_label: string;
+  confirmation_label: string;
+  dispute_label: string;
 };
 
 type Envelope<T> = { data: T };
@@ -228,7 +251,11 @@ export async function getNearbySafetyAlerts(params: { lat: number; lng: number; 
 
 export async function getTrailSafety(trailId: string) {
   const response = await apiRequest<Envelope<TrailSafety>>(`/api/safety/trails/${trailId}/safety`);
-  return response.data;
+  return {
+    ...response.data,
+    warnings: response.data.warnings ?? [],
+    recent_incidents: response.data.recent_incidents ?? [],
+  };
 }
 
 export async function getTrailAccess(trailId: string, params: { from_lat: number; from_lng: number }) {

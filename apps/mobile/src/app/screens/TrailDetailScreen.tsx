@@ -36,7 +36,7 @@ import { getMyActivities, type Activity } from '../api/activitiesApi';
 import { getSocialFeed } from '../api/socialApi';
 import { downloadOfflineMap } from '../api/offlineApi';
 import { getProfile, type Profile } from '../api/profilesApi';
-import { formatSafetyDistance, getSafetyBand, getTrailSafety, type TrailSafety } from '../api/safetyApi';
+import { formatSafetyDistance, getRiskColor, getSafetyBand, getTrailSafety, type TrailSafety, type TrailSafetyIncident } from '../api/safetyApi';
 import { type FeedItem } from '../data/activitySocial';
 import { mapSocialFeedItemToFeedItem } from '../utils/socialFeedMap';
 import { getApprovedTrailPhotos, getTrailPhotoUrls } from '../utils/trailPhotos';
@@ -83,6 +83,47 @@ function formatConditionDate(value?: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return 'Recently';
   return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(date);
+}
+
+function formatIncidentTypeLabel(value: string) {
+  return value
+    .split('_')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function formatSafetyIncidentTime(value?: string | null) {
+  if (!value) return 'Recently';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Recently';
+
+  const diffMs = Date.now() - date.getTime();
+  const diffHours = Math.floor(diffMs / (60 * 60 * 1000));
+
+  if (diffHours <= 0) return 'Just now';
+  if (diffHours < 24) return `${diffHours}h ago`;
+
+  const diffDays = Math.floor(diffHours / 24);
+  if (diffDays < 7) return `${diffDays}d ago`;
+
+  return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(date);
+}
+
+function buildSafetyIncidentMeta(incident: TrailSafetyIncident) {
+  const parts = [incident.verification_label];
+
+  if (incident.community_confidence_score > 0) {
+    parts.push(`${incident.community_confidence_score}% confidence`);
+  } else if (incident.confirmations_count > 0) {
+    parts.push(`${incident.confirmations_count} confirmations`);
+  }
+
+  if (incident.source_name && incident.source_name !== 'User report') {
+    parts.push(incident.source_name);
+  }
+
+  return parts.join(' · ');
 }
 
 type OfflineSafetySnapshot = {
@@ -742,6 +783,49 @@ export function TrailDetailScreen() {
                         <Text style={styles.safetyWarningText}>{warning}</Text>
                       </View>
                     ))}
+                  </View>
+                ) : null}
+
+                {trailSafety.recent_incidents.length ? (
+                  <View style={styles.safetyIncidentSection}>
+                    <View style={styles.safetyIncidentSectionHeader}>
+                      <Text style={styles.safetyIncidentSectionTitle}>Recent incidents nearby</Text>
+                      <Text style={styles.safetyIncidentSectionCount}>{trailSafety.recent_incidents.length}</Text>
+                    </View>
+                    {trailSafety.recent_incidents.map((incident) => {
+                      const incidentTone = getRiskColor(incident.severity);
+                      const incidentTitle = incident.headline?.trim() || formatIncidentTypeLabel(incident.incident_type);
+
+                      return (
+                        <View key={incident.id} style={styles.safetyIncidentCard}>
+                          <View style={styles.safetyIncidentTopRow}>
+                            <View style={[styles.safetyIncidentSeverityPill, { backgroundColor: `${incidentTone}18` }]}>
+                              <Text style={[styles.safetyIncidentSeverityText, { color: incidentTone }]}>
+                                {formatIncidentTypeLabel(incident.severity)}
+                              </Text>
+                            </View>
+                            <Text style={styles.safetyIncidentTime}>{formatSafetyIncidentTime(incident.reported_at)}</Text>
+                          </View>
+                          <Text style={styles.safetyIncidentTitle}>{incidentTitle}</Text>
+                          {incident.description ? (
+                            <Text style={styles.safetyIncidentDescription} numberOfLines={3}>
+                              {incident.description}
+                            </Text>
+                          ) : null}
+                          <Text style={styles.safetyIncidentMeta}>{buildSafetyIncidentMeta(incident)}</Text>
+                          <View style={styles.safetyIncidentFooter}>
+                            <Text style={styles.safetyIncidentDistance}>
+                              {formatSafetyDistance(incident.distance_meters)} from trail
+                            </Text>
+                            {incident.confirmations_count || incident.disputes_count ? (
+                              <Text style={styles.safetyIncidentFeedback}>
+                                {incident.confirmations_count} confirm · {incident.disputes_count} dispute
+                              </Text>
+                            ) : null}
+                          </View>
+                        </View>
+                      );
+                    })}
                   </View>
                 ) : null}
 
@@ -1413,6 +1497,96 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 18,
     fontWeight: '700',
+  },
+  safetyIncidentSection: {
+    marginTop: 16,
+    gap: 10,
+  },
+  safetyIncidentSectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  safetyIncidentSectionTitle: {
+    color: '#2C2418',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  safetyIncidentSectionCount: {
+    minWidth: 24,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 999,
+    backgroundColor: '#F7EBE8',
+    color: '#630E13',
+    fontSize: 11,
+    fontWeight: '900',
+    textAlign: 'center',
+  },
+  safetyIncidentCard: {
+    borderRadius: 16,
+    padding: 12,
+    backgroundColor: '#FFF8F1',
+    borderWidth: 1,
+    borderColor: '#F1E4D5',
+    gap: 7,
+  },
+  safetyIncidentTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  safetyIncidentSeverityPill: {
+    borderRadius: 999,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+  },
+  safetyIncidentSeverityText: {
+    fontSize: 10,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
+  safetyIncidentTime: {
+    color: '#7B6D5A',
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  safetyIncidentTitle: {
+    color: '#2C2418',
+    fontSize: 14,
+    lineHeight: 19,
+    fontWeight: '900',
+  },
+  safetyIncidentDescription: {
+    color: '#5C5143',
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: '700',
+  },
+  safetyIncidentMeta: {
+    color: '#7B6D5A',
+    fontSize: 11,
+    lineHeight: 16,
+    fontWeight: '800',
+  },
+  safetyIncidentFooter: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  safetyIncidentDistance: {
+    color: '#2C2418',
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  safetyIncidentFeedback: {
+    color: '#7B6D5A',
+    fontSize: 11,
+    fontWeight: '800',
   },
   safetyMetaGrid: {
     flexDirection: 'row',

@@ -1129,8 +1129,6 @@ export async function getTrailReviews(req: Request, res: Response): Promise<void
        ) AS photos
      FROM trail_reviews tr
      LEFT JOIN review_photos rp ON rp.review_id = tr.id
-       AND rp.approved_for_trail_page = true
-       AND COALESCE(rp.manual_review_required, false) = false
      WHERE tr.trail_id = $1
      GROUP BY tr.id
      ORDER BY tr.created_at DESC`,

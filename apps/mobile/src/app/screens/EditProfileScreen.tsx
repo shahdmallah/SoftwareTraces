@@ -7,8 +7,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 
 import { ApiError } from '../api/client';
-import { uploadMedia, type ReactNativeFile } from '../api/mediaApi';
-import { getProfile } from '../api/profilesApi';
+import type { ReactNativeFile } from '../api/mediaApi';
+import { getProfile, updateMyProfile } from '../api/profilesApi';
 import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
@@ -120,20 +120,15 @@ export function EditProfileScreen() {
 
     try {
       setIsSaving(true);
-      const uploadedAvatar = selectedAvatar
-        ? await uploadMedia({
-            file: imageUriToFile(selectedAvatar.uri, selectedAvatar.mimeType, selectedAvatar.fileName),
-            caption: `${name.trim()} avatar`,
-          })
-        : null;
-
-      const nextProfile = {
-        id: user?.id ?? '',
+      const nextProfile = await updateMyProfile({
         full_name: name.trim(),
         location: location.trim() || null,
         bio: bio.trim() || null,
-        avatar_url: uploadedAvatar?.url ?? (avatarUrl || null),
-      };
+        avatar: selectedAvatar ? imageUriToFile(selectedAvatar.uri, selectedAvatar.mimeType, selectedAvatar.fileName) : null,
+      });
+
+      setAvatarUrl(nextProfile.avatar_url ?? '');
+      setSelectedAvatar(null);
 
       if (session) {
         setSession({

@@ -1004,6 +1004,22 @@ export function ActivityShareComposerScreen() {
   );
   const primaryPhotoUri = photos[0] ?? '';
 
+  useEffect(() => {
+    if (isLocationMedia) return;
+
+    if (selectedTrail) {
+      const localizedName = isArabic ? selectedTrail.nameAr || selectedTrail.name : selectedTrail.name;
+      if (trail !== localizedName) {
+        setTrail(localizedName);
+      }
+      return;
+    }
+
+    if (route.params?.trailName && trail !== route.params.trailName) {
+      setTrail(route.params.trailName);
+    }
+  }, [isArabic, isLocationMedia, route.params?.trailName, selectedTrail, trail]);
+
   const filteredTrailOptions = useMemo(() => {
     const q = trailSearch.trim().toLowerCase();
     if (!q) return trailOptions;
@@ -1313,8 +1329,13 @@ export function ActivityShareComposerScreen() {
       return;
     }
 
-    if (!isPlan && !selectedTrailId) {
-      Alert.alert(isArabic ? 'اختر مساراً' : 'Choose a trail', isArabic ? 'اختر مساراً من قائمة Explore قبل النشر.' : 'Choose a trail from Explore before posting.');
+    if (!isLocationMedia && !selectedTrailId) {
+      Alert.alert(
+        isArabic ? 'اختر مساراً' : 'Choose a trail',
+        isPlan
+          ? (isArabic ? 'اختر مساراً لهذه الخطة قبل إنشاء اللقاء.' : 'Choose a trail for this meetup plan before creating it.')
+          : (isArabic ? 'اختر مساراً من قائمة Explore قبل النشر.' : 'Choose a trail from Explore before posting.'),
+      );
       return;
     }
 
@@ -1349,7 +1370,7 @@ export function ActivityShareComposerScreen() {
         }
 
         await createMeetup({
-          trail_id: route.params?.trailId ?? null,
+          trail_id: route.params?.trailId ?? selectedTrailId ?? null,
           title: trimmedTrail,
           title_ar: trimmedTrail,
           note: trimmedNote,
@@ -1691,7 +1712,7 @@ export function ActivityShareComposerScreen() {
                 </Text>
               </Pressable>
             </FieldRow>
-          ) : !isPlan ? (
+          ) : (
             <FieldRow icon="trail-sign-outline" label={isArabic ? 'المسار' : 'Trail'} isArabic={isArabic}>
               <SelectPill
                 value={trail}
@@ -1701,7 +1722,7 @@ export function ActivityShareComposerScreen() {
                 iconRight="list-outline"
               />
             </FieldRow>
-          ) : null}
+          )}
 
           {isPlan && (
             <>

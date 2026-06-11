@@ -71,6 +71,10 @@ interface SafetyIncidentRow {
   expires_at: string | Date;
 }
 
+type PublicTrailSafetyIncident = ReturnType<typeof enrichIncidentForPublic> & {
+  distance_meters: number;
+};
+
 const router = Router();
 const SAFETY_PUSH_NOTIFICATION_DISTANCE_METERS = 500;
 
@@ -570,9 +574,112 @@ router.get(
          WHERE trail_id = $1::uuid AND last_calculated > NOW() - INTERVAL '1 hour'`,
         [trailId]
       );
+      const cached = (cachedResult.rowCount ?? 0) > 0 ? cachedResult.rows[0] : null;
 
-      if ((cachedResult.rowCount ?? 0) > 0) {
-        const cached = cachedResult.rows[0];
+      const routePoints = await getTrailRoutePoints(trailId);
+      if (routePoints.length === 0) {
+        if (cached) {
+          res.json({
+            data: {
+              safety_score: Number(cached.safety_score),
+              risk_level: cached.risk_level,
+              nearest_settlement: cached.nearest_settlement_name
+                ? {
+                    name: cached.nearest_settlement_name,
+                    distance_meters: Number(cached.nearest_settlement_distance_meters ?? 0),
+                  }
+                : null,
+              nearest_checkpoint: cached.nearest_checkpoint_name
+                ? {
+                    name: cached.nearest_checkpoint_name,
+                    distance_meters: Number(cached.nearest_checkpoint_distance_meters ?? 0),
+                  }
+                : null,
+              incident_count_48h: Number(cached.incident_count_48h ?? 0),
+              warnings: [],
+              recent_incidents: [],
+              cached: true,
+            },
+          });
+          return;
+        }
+
+        res.status(404).json({ error: "Trail route not found" });
+        return;
+      }
+
+      const samplePoints = sampleRoutePoints(routePoints);
+      console.log(`[safety.routes] Sampled ${samplePoints.length} route points`);
+
+      const incidentsResult = await pool.query<SafetyIncidentRow>(
+          `SELECT id, incident_type, severity, latitude, longitude, description, headline,
+                  source, source_name, source_url, COALESCE(moderation_status, 'pending') AS moderation_status,
+                  COALESCE(confirmations_count, confirmed_count, 0) AS confirmations_count,
+                  COALESCE(disputes_count, 0) AS disputes_count,
+                  COALESCE(community_confidence_score, 0) AS community_confidence_score,
+                  reported_at, expires_at
+           FROM safety_incidents
+           WHERE is_resolved = false
+             AND reported_at > NOW() - INTERVAL '7 days'
+             AND COALESCE(moderation_status, 'pending') IN (${PUBLIC_INCIDENT_MODERATION_SQL})`
+      );
+
+      const nearbyIncidents = incidentsResult.rows
+        .map((incident): PublicTrailSafetyIncident | null => {
+          const distance = Math.round(
+            getMinimumDistanceToRoute(samplePoints, toNumber(incident.latitude), toNumber(incident.longitude))
+          );
+
+          if (distance > 2000) {
+            return null;
+          }
+
+          return {
+            ...enrichIncidentForPublic(incident),
+            distance_meters: distance,
+          };
+        })
+        .filter((incident): incident is PublicTrailSafetyIncident => Boolean(incident))
+        .sort((left, right) => {
+          const rightReported = new Date(right.reported_at).getTime();
+          const leftReported = new Date(left.reported_at).getTime();
+          if (rightReported !== leftReported) {
+            return rightReported - leftReported;
+          }
+          return left.distance_meters - right.distance_meters;
+        });
+
+      const twoDaysAgo = Date.now() - 48 * 60 * 60 * 1000;
+      const incidentCount48h = nearbyIncidents.filter((incident) => new Date(incident.reported_at).getTime() >= twoDaysAgo).length;
+      const incidentWarnings = nearbyIncidents
+        .slice(0, 3)
+        .map(
+          (incident) =>
+            `${incident.severity} incident nearby (${incident.verification_label}): ${incident.headline ?? incident.incident_type}`
+        );
+      const recentIncidents = nearbyIncidents.slice(0, 3).map((incident) => ({
+        id: incident.id,
+        incident_type: incident.incident_type,
+        severity: incident.severity,
+        headline: incident.headline,
+        description: incident.description,
+        source: incident.source,
+        source_name: incident.source_name,
+        source_url: incident.source_url,
+        reported_at: incident.reported_at,
+        expires_at: incident.expires_at,
+        distance_meters: incident.distance_meters,
+        moderation_status: incident.moderation_status,
+        confirmations_count: incident.confirmations_count,
+        disputes_count: incident.disputes_count,
+        community_confidence_score: incident.community_confidence_score,
+        trust_level: incident.trust_level,
+        verification_label: incident.verification_label,
+        confirmation_label: incident.confirmation_label,
+        dispute_label: incident.dispute_label,
+      }));
+
+      if (cached) {
         res.json({
           data: {
             safety_score: Number(cached.safety_score),
@@ -589,42 +696,20 @@ router.get(
                   distance_meters: Number(cached.nearest_checkpoint_distance_meters ?? 0),
                 }
               : null,
-            incident_count_48h: Number(cached.incident_count_48h ?? 0),
-            warnings: [],
+            incident_count_48h: incidentCount48h,
+            warnings: incidentWarnings,
+            recent_incidents: recentIncidents,
             cached: true,
           },
         });
         return;
       }
 
-      const routePoints = await getTrailRoutePoints(trailId);
-      if (routePoints.length === 0) {
-        res.status(404).json({ error: "Trail route not found" });
-        return;
-      }
-
-      const samplePoints = sampleRoutePoints(routePoints);
-      console.log(`[safety.routes] Sampled ${samplePoints.length} route points`);
-
-      const [locationsResult, incidentsResult] = await Promise.all([
-        pool.query<DangerousLocationRow>(
-          `SELECT id, name, name_ar, location_type, latitude, longitude, danger_radius_meters, risk_level
-           FROM dangerous_locations
-           WHERE is_active = true`
-        ),
-        pool.query<SafetyIncidentRow>(
-          `SELECT id, incident_type, severity, latitude, longitude, description, headline,
-                  source, source_name, source_url, COALESCE(moderation_status, 'pending') AS moderation_status,
-                  COALESCE(confirmations_count, confirmed_count, 0) AS confirmations_count,
-                  COALESCE(disputes_count, 0) AS disputes_count,
-                  COALESCE(community_confidence_score, 0) AS community_confidence_score,
-                  reported_at, expires_at
-           FROM safety_incidents
-           WHERE is_resolved = false
-             AND reported_at > NOW() - INTERVAL '7 days'
-             AND COALESCE(moderation_status, 'pending') IN (${PUBLIC_INCIDENT_MODERATION_SQL})`
-        ),
-      ]);
+      const locationsResult = await pool.query<DangerousLocationRow>(
+        `SELECT id, name, name_ar, location_type, latitude, longitude, danger_radius_meters, risk_level
+         FROM dangerous_locations
+         WHERE is_active = true`
+      );
 
       let safetyScore = 100;
       const warnings: string[] = [];
@@ -649,21 +734,9 @@ router.get(
         }
       }
 
-      let incidentCount48h = 0;
-      const twoDaysAgo = Date.now() - 48 * 60 * 60 * 1000;
-
-      for (const incident of incidentsResult.rows) {
-        const distance = getMinimumDistanceToRoute(samplePoints, toNumber(incident.latitude), toNumber(incident.longitude));
-        if (distance > 2000) {
-          continue;
-        }
-
+      for (const incident of nearbyIncidents) {
         safetyScore -= getRiskPenalty(incident.severity);
-        warnings.push(`${incident.severity} incident nearby (${getIncidentVerificationLabel(incident)}): ${incident.headline ?? incident.incident_type}`);
-
-        if (new Date(incident.reported_at).getTime() >= twoDaysAgo) {
-          incidentCount48h += 1;
-        }
+        warnings.push(`${incident.severity} incident nearby (${incident.verification_label}): ${incident.headline ?? incident.incident_type}`);
       }
 
       safetyScore = Math.max(0, safetyScore);
@@ -689,6 +762,7 @@ router.get(
           nearest_checkpoint: nearestCheckpoint,
           incident_count_48h: incidentCount48h,
           warnings,
+          recent_incidents: recentIncidents,
         },
       });
     } catch (error) {

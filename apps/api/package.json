@@ -4,8 +4,9 @@
   "private": true,
   "main": "dist/index.js",
   "scripts": {
-    "dev": "node ../../scripts/api-health-watchdog.mjs",
+    "dev": "tsx watch src/index.ts",
     "dev:raw": "tsx watch src/index.ts",
+    "dev:watchdog": "node ../../scripts/api-health-watchdog.mjs",
     "build": "tsc -p tsconfig.json",
     "db:migrate": "tsx src/db/runSchema.ts",
     "db:seed": "tsx src/db/seed.ts",

@@ -1,4 +1,5 @@
 import { apiRequest } from './client';
+import type { ReactNativeFile } from './mediaApi';
 
 type Envelope<T> = {
   data: T;
@@ -79,10 +80,11 @@ export type ProfilePhoto = {
 };
 
 export type UpdateProfilePayload = {
-  full_name: string;
+  full_name?: string;
   bio?: string | null;
   location?: string | null;
   avatar_url?: string | null;
+  avatar?: ReactNativeFile | null;
 };
 
 export async function getProfile(profileId: string) {
@@ -106,5 +108,45 @@ export async function searchProfiles(query: string, params: { page?: number; lim
     page: params.page,
     limit: params.limit,
   });
+  return response.data;
+}
+
+export async function updateMyProfile(payload: UpdateProfilePayload) {
+  const hasAvatar = Boolean(payload.avatar);
+
+  if (!hasAvatar) {
+    const { avatar, ...jsonPayload } = payload;
+    const response = await apiRequest<Envelope<Profile>>('/api/profiles/me', {
+      method: 'PATCH',
+      body: JSON.stringify(jsonPayload),
+    });
+    return response.data;
+  }
+
+  const formData = new FormData();
+
+  if (Object.prototype.hasOwnProperty.call(payload, 'full_name')) {
+    formData.append('full_name', payload.full_name ?? '');
+  }
+
+  if (Object.prototype.hasOwnProperty.call(payload, 'bio')) {
+    formData.append('bio', payload.bio ?? '');
+  }
+
+  if (Object.prototype.hasOwnProperty.call(payload, 'location')) {
+    formData.append('location', payload.location ?? '');
+  }
+
+  if (Object.prototype.hasOwnProperty.call(payload, 'avatar_url')) {
+    formData.append('avatar_url', payload.avatar_url ?? '');
+  }
+
+  formData.append('avatar', payload.avatar as unknown as Blob);
+
+  const response = await apiRequest<Envelope<Profile>>('/api/profiles/me', {
+    method: 'PATCH',
+    body: formData,
+  });
+
   return response.data;
 }

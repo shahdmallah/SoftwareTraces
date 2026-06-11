@@ -2,6 +2,7 @@ import { apiRequest } from './client';
 
 export type NotificationType =
   | 'follow'
+  | 'message'
   | 'review_like'
   | 'review_comment'
   | 'activity_like'

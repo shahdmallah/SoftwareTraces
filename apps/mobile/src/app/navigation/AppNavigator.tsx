@@ -59,9 +59,11 @@ import {
   type PushNotificationData,
 } from '../services/pushNotifications';
 import { getNotifications } from '../api/notificationsApi';
+import { getMeetup } from '../api/meetupsApi';
 import { getSocialFeedItem } from '../api/socialApi';
 import type { FeedItem } from '../data/activitySocial';
 import type { TrailCompletionDraft } from '../features/trailCompletion/types';
+import { mapMeetupToFeedItem } from '../utils/meetupFeedMap';
 import { mapSocialFeedItemToFeedItem } from '../utils/socialFeedMap';
 
 const Stack = createStackNavigator<RootStackParamList>();
@@ -323,9 +325,34 @@ async function openPushNotificationDestination(data: PushNotificationData): Prom
   const trailId = getPushString(data, ['trail_id']) || (entity.type === 'trail' ? entity.id : null);
   const activityId = getPushString(data, ['activity_id']) || (entity.type === 'activity' ? entity.id : null);
   const reviewId = getPushString(data, ['review_id']) || (entity.type === 'review' ? entity.id : null);
+  const meetupId = getPushString(data, ['meetup_id']) || (entity.type === 'meetup' ? entity.id : null);
   const conversationId = getPushString(data, ['conversation_id']);
+  const messageContextType = getPushString(data, ['context_type', 'conversation_type']);
+  const messageContextId = getPushString(data, ['context_id']);
+  const messageContextTitle = getPushString(data, ['context_title']);
+  const senderProfileId = getPushString(data, ['sender_profile_id', 'actor_id', 'profile_id']);
+  const senderName = getPushString(data, ['sender_name', 'title']);
+  const senderAvatar = getPushString(data, ['sender_avatar_url']);
   const navigationSessionId = getPushString(data, ['navigation_session_id']);
   const isNavigationAlert = getPushString(data, ['notification_kind']) === 'navigation_off_track' || Boolean(navigationSessionId);
+
+  if (type === 'message') {
+    if (conversationId) {
+      navigationRef.navigate('ActivityThread', {
+        conversationId,
+        participantId: senderProfileId ?? undefined,
+        participantName: senderName ?? undefined,
+        participantAvatar: senderAvatar ?? undefined,
+        contextType: (messageContextType as RootStackParamList['ActivityThread']['contextType']) ?? 'direct',
+        contextId: messageContextId ?? undefined,
+        contextTitle: messageContextTitle ?? undefined,
+      });
+      return;
+    }
+
+    navigationRef.navigate('ActivityMessages');
+    return;
+  }
 
   if (type === 'sos_alert') {
     if (conversationId) {
@@ -419,6 +446,16 @@ async function openPushNotificationDestination(data: PushNotificationData): Prom
   }
 
   if (type === 'meetup_invite' || type === 'meetup_join' || type === 'meetup_update') {
+    if (meetupId) {
+      try {
+        const meetup = await getMeetup(meetupId);
+        navigationRef.navigate('ActivityPlanJoin', { plan: mapMeetupToFeedItem(meetup) });
+        return;
+      } catch {
+        // Fall back to the broader activity destination below.
+      }
+    }
+
     navigationRef.navigate('AppTabs', { screen: 'Activity' });
     return;
   }
