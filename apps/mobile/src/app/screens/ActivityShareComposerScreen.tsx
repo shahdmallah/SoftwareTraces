@@ -43,6 +43,12 @@ type LngLat = [number, number];
 type PlanVisibility = 'public' | 'private' | 'friends';
 type DeparturePeriod = 'AM' | 'PM';
 type SpeciesResultTab = 'details' | 'ecology' | 'funfacts';
+type SelectedPhoto = {
+  id: string;
+  uri: string;
+  fileName?: string | null;
+  mimeType?: string | null;
+};
 
 const MAPBOX_ACCESS_TOKEN = process.env.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN ?? '';
 const MAPBOX_STYLE_URL =
@@ -198,18 +204,41 @@ function buildStartsAtIso(dateIso: string, hour: number, minute: number, period:
   return date.toISOString();
 }
 
-function imageUriToFile(uri: string): ReactNativeFile {
-  const cleanName = uri.split('/').pop()?.split('?')[0] || `meetup-cover-${Date.now()}.jpg`;
-  const extension = cleanName.split('.').pop()?.toLowerCase();
-  const type = extension === 'png'
-    ? 'image/png'
-    : extension === 'webp'
-      ? 'image/webp'
-      : extension === 'gif'
-        ? 'image/gif'
-        : 'image/jpeg';
+function buildSelectedPhoto(asset: ImagePicker.ImagePickerAsset): SelectedPhoto {
+  return {
+    id: asset.assetId || `${asset.uri}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    uri: asset.uri,
+    fileName: asset.fileName ?? null,
+    mimeType: asset.mimeType ?? null,
+  };
+}
 
-  return { uri, name: cleanName, type };
+function imageAssetToFile(photo: SelectedPhoto): ReactNativeFile {
+  const inferredName = photo.fileName || photo.uri.split('/').pop()?.split('?')[0] || `meetup-cover-${Date.now()}.jpg`;
+  const extension = inferredName.split('.').pop()?.toLowerCase();
+  const normalizedMimeType = photo.mimeType?.toLowerCase();
+
+  const type = normalizedMimeType === 'image/png'
+    ? 'image/png'
+    : normalizedMimeType === 'image/webp'
+      ? 'image/webp'
+      : normalizedMimeType === 'image/gif'
+        ? 'image/gif'
+        : extension === 'png'
+          ? 'image/png'
+          : extension === 'webp'
+            ? 'image/webp'
+            : extension === 'gif'
+              ? 'image/gif'
+              : 'image/jpeg';
+
+  const baseName = inferredName.replace(/\.[^.]+$/, '');
+  const hasSupportedExtension = /\.(png|webp|gif|jpe?g)$/i.test(inferredName);
+  const normalizedName = hasSupportedExtension
+    ? inferredName
+    : `${baseName || `meetup-cover-${Date.now()}`}.${type === 'image/png' ? 'png' : type === 'image/webp' ? 'webp' : type === 'image/gif' ? 'gif' : 'jpg'}`;
+
+  return { uri: photo.uri, name: normalizedName, type };
 }
 
 type DepartureTimePickerProps = {
@@ -548,20 +577,20 @@ const calStyles = StyleSheet.create({
 // ─── Photo grid ────────────────────────────────────────────────────────────────
 
 type PhotoGridProps = {
-  photos: string[];
+  photos: SelectedPhoto[];
   onAddFromCamera: () => void;
   onAddFromLibrary: () => void;
-  onRemove: (uri: string) => void;
+  onRemove: (photoId: string) => void;
   isArabic: boolean;
 };
 
 function PhotoGrid({ photos, onAddFromCamera, onAddFromLibrary, onRemove, isArabic }: PhotoGridProps) {
   return (
     <View style={photoStyles.grid}>
-      {photos.map((uri) => (
-        <View key={uri} style={photoStyles.thumb}>
-          <Image source={{ uri }} style={photoStyles.img} resizeMode="cover" />
-          <Pressable style={photoStyles.remove} onPress={() => onRemove(uri)}>
+      {photos.map((photo) => (
+        <View key={photo.id} style={photoStyles.thumb}>
+          <Image source={{ uri: photo.uri }} style={photoStyles.img} resizeMode="cover" />
+          <Pressable style={photoStyles.remove} onPress={() => onRemove(photo.id)}>
             <Ionicons name="close-circle" size={20} color="#fff" />
           </Pressable>
         </View>
@@ -899,7 +928,7 @@ export function ActivityShareComposerScreen() {
   const [isLoadingTrails, setIsLoadingTrails] = useState(false);
   const [trailSearch, setTrailSearch] = useState('');
   const [note, setNote] = useState('');
-  const [photos, setPhotos] = useState<string[]>([]);
+  const [photos, setPhotos] = useState<SelectedPhoto[]>([]);
   const [speciesResult, setSpeciesResult] = useState<SpeciesIdentification | null>(null);
   const [speciesPredictions, setSpeciesPredictions] = useState<SpeciesPrediction[]>([]);
   const [speciesIsFallback, setSpeciesIsFallback] = useState(false);
@@ -1002,7 +1031,8 @@ export function ActivityShareComposerScreen() {
     () => trailOptions.find((item) => item.id === selectedTrailId) ?? null,
     [selectedTrailId, trailOptions],
   );
-  const primaryPhotoUri = photos[0] ?? '';
+  const primaryPhoto = photos[0] ?? null;
+  const primaryPhotoUri = primaryPhoto?.uri ?? '';
 
   useEffect(() => {
     if (isLocationMedia) return;
@@ -1106,7 +1136,7 @@ export function ActivityShareComposerScreen() {
   useEffect(() => {
     let cancelled = false;
 
-    if (isPlan || !primaryPhotoUri) {
+    if (isPlan || !primaryPhoto) {
       setSpeciesResult(null);
       setSpeciesPredictions([]);
       setSpeciesIsFallback(false);
@@ -1122,7 +1152,7 @@ export function ActivityShareComposerScreen() {
     setSpeciesIsFallback(false);
     setSpeciesResultTab('details');
 
-    identifySpeciesDetails(imageUriToFile(primaryPhotoUri), isArabic ? 'ar' : 'en')
+    identifySpeciesDetails(imageAssetToFile(primaryPhoto), isArabic ? 'ar' : 'en')
       .then((identification) => {
         if (!cancelled) {
           setSpeciesResult(identification.result);
@@ -1148,7 +1178,7 @@ export function ActivityShareComposerScreen() {
     return () => {
       cancelled = true;
     };
-  }, [isArabic, isPlan, primaryPhotoUri]);
+  }, [isArabic, isPlan, primaryPhoto]);
 
   const toggleSelectedValue = useCallback(
     (value: string, setter: React.Dispatch<React.SetStateAction<string[]>>) => {
@@ -1158,12 +1188,12 @@ export function ActivityShareComposerScreen() {
   );
 
   const getClassificationForUpload = useCallback(
-    async (photoUri: string, index: number) => {
+    async (photo: SelectedPhoto, index: number) => {
       if (index === 0 && speciesResult) {
         return speciesResult;
       }
 
-      return (await identifySpeciesDetails(imageUriToFile(photoUri), isArabic ? 'ar' : 'en')).result;
+      return (await identifySpeciesDetails(imageAssetToFile(photo), isArabic ? 'ar' : 'en')).result;
     },
     [isArabic, speciesResult],
   );
@@ -1183,9 +1213,11 @@ export function ActivityShareComposerScreen() {
       allowsMultipleSelection: true,
       selectionLimit: 6 - photos.length,
       quality: 0.85,
+      preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
+      shouldDownloadFromNetwork: true,
     });
     if (!result.canceled) {
-      setPhotos(prev => [...prev, ...result.assets.map(a => a.uri)].slice(0, 6));
+      setPhotos((prev) => [...prev, ...result.assets.map(buildSelectedPhoto)].slice(0, 6));
     }
   };
 
@@ -1205,7 +1237,7 @@ export function ActivityShareComposerScreen() {
     });
 
     if (!result.canceled) {
-      setPhotos(prev => [...prev, ...result.assets.map(a => a.uri)].slice(0, 6));
+      setPhotos((prev) => [...prev, ...result.assets.map(buildSelectedPhoto)].slice(0, 6));
     }
   };
 
@@ -1277,7 +1309,7 @@ export function ActivityShareComposerScreen() {
             }
 
             return uploadMedia({
-              file: imageUriToFile(photo),
+              file: imageAssetToFile(photo),
               caption: trimmedNote,
               latitude: mediaLatitude,
               longitude: mediaLongitude,
@@ -1299,7 +1331,7 @@ export function ActivityShareComposerScreen() {
           user: user?.full_name || 'You',
           handle: '@you',
           avatar: user?.avatar_url || 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?crop=faces&fit=crop&w=240&h=240',
-          image: uploaded[0]?.url ?? photos[0],
+          image: uploaded[0]?.url ?? photos[0]?.uri,
           trailNameEn: locationLabel.trim() || 'Current location',
           trailNameAr: locationLabel.trim() || 'الموقع الحالي',
           regionEn: 'Pinned to current location',
@@ -1355,11 +1387,11 @@ export function ActivityShareComposerScreen() {
 
       setIsPosting(true);
       try {
-        let coverUrl = photos[0] && /^https?:\/\//i.test(photos[0]) ? photos[0] : null;
+        let coverUrl = photos[0]?.uri && /^https?:\/\//i.test(photos[0].uri) ? photos[0].uri : null;
 
         if (photos[0] && !coverUrl) {
           const uploaded = await uploadMedia({
-            file: imageUriToFile(photos[0]),
+            file: imageAssetToFile(photos[0]),
             caption: trimmedTrail,
             latitude: meetingCoords?.lat ?? null,
             longitude: meetingCoords?.lng ?? null,
@@ -1419,7 +1451,7 @@ export function ActivityShareComposerScreen() {
           }
 
           return uploadMedia({
-            file: imageUriToFile(photo),
+            file: imageAssetToFile(photo),
             caption: trimmedNote,
             latitude: selectedTrailLatitude,
             longitude: selectedTrailLongitude,
@@ -1441,7 +1473,7 @@ export function ActivityShareComposerScreen() {
         user: user?.full_name || 'You',
         handle: '@you',
         avatar: user?.avatar_url || 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?crop=faces&fit=crop&w=240&h=240',
-        image: uploaded[0]?.url ?? photos[0],
+        image: uploaded[0]?.url ?? photos[0]?.uri,
         trailNameEn: selectedTrail?.name || trimmedTrail,
         trailNameAr: selectedTrail?.nameAr || selectedTrail?.name || trimmedTrail,
         regionEn: selectedTrail?.region || 'Trail recap',
@@ -1530,7 +1562,7 @@ export function ActivityShareComposerScreen() {
                 photos={photos}
                 onAddFromCamera={handleTakePhoto}
                 onAddFromLibrary={handlePickPhoto}
-                onRemove={uri => setPhotos(p => p.filter(u => u !== uri))}
+                onRemove={(photoId) => setPhotos((current) => current.filter((photo) => photo.id !== photoId))}
                 isArabic={isArabic}
               />
             )}

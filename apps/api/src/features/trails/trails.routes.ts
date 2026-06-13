@@ -29,6 +29,7 @@ import {
   searchOrGenerateTrail,
   searchTrails,
   setPrimaryPhoto,
+  unpublishTrail,
   unsaveTrail,
   updateReviewPhotoCaption,
   updateTrail,
@@ -70,6 +71,7 @@ router.get("/:id/nature-sightings", asyncHandler(getTrailNatureSightings));
 router.post("/:id/nature-sightings", authenticate, asyncHandler(createTrailNatureSighting));
 router.get("/:id", asyncHandler(getTrailById));
 router.patch("/:id/publish", authenticate, asyncHandler(publishTrail));
+router.patch("/:id/unpublish", authenticate, asyncHandler(unpublishTrail));
 router.get("/:id/reviews", asyncHandler(getTrailReviews));
 router.post("/:id/reviews", authenticate, upload.array("photos", 10), asyncHandler(createTrailReview));
 router.delete("/reviews/:id", authenticate, asyncHandler(deleteTrailReview));

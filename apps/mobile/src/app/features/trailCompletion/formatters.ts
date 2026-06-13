@@ -28,3 +28,19 @@ export function formatElevation(m: number | undefined, isArabic: boolean): strin
   if (m == null || !Number.isFinite(m)) return isArabic ? '—' : '—';
   return isArabic ? `${Math.round(m)} م` : `${Math.round(m)} m`;
 }
+
+export function formatSpeedKph(kph: number | undefined, isArabic: boolean): string {
+  if (kph == null || !Number.isFinite(kph) || kph <= 0) return isArabic ? '—' : '—';
+  return isArabic ? `${kph.toFixed(1)} كم/س` : `${kph.toFixed(1)} km/h`;
+}
+
+export function formatPaceMinPerKm(minPerKm: number | undefined, isArabic: boolean): string {
+  if (minPerKm == null || !Number.isFinite(minPerKm) || minPerKm <= 0) return isArabic ? '—' : '—';
+
+  const totalSeconds = Math.max(1, Math.round(minPerKm * 60));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  const suffix = isArabic ? '/كم' : '/km';
+
+  return `${minutes}:${String(seconds).padStart(2, '0')} ${suffix}`;
+}

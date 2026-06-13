@@ -49,6 +49,7 @@ const typeIcon: Record<NotificationType, keyof typeof Ionicons.glyphMap> = {
   meetup_join: 'people-outline',
   meetup_update: 'calendar-number-outline',
   sos_alert: 'warning-outline',
+  emergency_contact_alert: 'shield-checkmark-outline',
   danger_alert: 'shield-outline',
   achievement: 'trophy-outline',
   system: 'notifications-outline',
@@ -65,6 +66,7 @@ const typeTone: Record<NotificationType, string> = {
   meetup_join: '#2F6B4F',
   meetup_update: '#7A5B1E',
   sos_alert: '#9B1C1C',
+  emergency_contact_alert: '#9B1C1C',
   danger_alert: '#9B1C1C',
   achievement: '#946200',
   system: '#5E646D',
@@ -291,6 +293,11 @@ export function NotificationsScreen() {
       }
 
       navigation.navigate('AppTabs', { screen: 'Activity' });
+      return;
+    }
+
+    if (notification.type === 'emergency_contact_alert') {
+      navigation.navigate('SafetyCenter');
       return;
     }
 

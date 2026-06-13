@@ -26,9 +26,30 @@ interface LeaderboardRow {
   achievements_count: string | number;
 }
 
+type UserStatsUpdate = {
+  distance?: number;
+  trails?: number;
+  meetupsHosted?: number;
+  meetups?: number;
+  incidents?: number;
+  reviews?: number;
+  photos?: number;
+  meetupsJoined?: number;
+  summit?: number;
+  uniqueSpring?: string;
+  uniqueValley?: string;
+  uniqueHeritageSite?: string;
+  regionTrail?: { region: string; count?: number };
+  regionVisited?: string;
+};
+
 function toNumber(value: unknown): number {
   const parsed = Number(value ?? 0);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function normalizeNonNegativeNumber(value: unknown): number {
+  return Math.max(0, toNumber(value));
 }
 
 function normalizeStatsKey(value: string): string {
@@ -232,6 +253,86 @@ async function createAchievementNotification(userId: string, achievement: Achiev
   }
 }
 
+function shouldRetryDistanceAsInteger(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  const code = "code" in error ? String((error as { code?: unknown }).code ?? "") : "";
+  const message = "message" in error ? String((error as { message?: unknown }).message ?? "") : "";
+
+  return code === "22P02" || code === "42804" || code === "42846" || /integer/i.test(message);
+}
+
+async function writeProfileAchievementStats(
+  userId: string,
+  stats: UserStatsUpdate,
+  distanceKm: number,
+  distanceCast: "numeric" | "int",
+  regionVisitedKey: string | null,
+  regionTrailKey: string | null
+): Promise<void> {
+  await pool.query(
+    `UPDATE profiles
+     SET total_distance_km = COALESCE(total_distance_km, 0) + $2::${distanceCast},
+         total_trails_completed = COALESCE(total_trails_completed, 0) + $3::int,
+         total_meetups_hosted = COALESCE(total_meetups_hosted, 0) + $4::int,
+         total_incidents_reported = COALESCE(total_incidents_reported, 0) + $5::int,
+         total_reviews_written = COALESCE(total_reviews_written, 0) + $6::int,
+         total_photos_uploaded = COALESCE(total_photos_uploaded, 0) + $7::int,
+         total_meetups_joined = COALESCE(total_meetups_joined, 0) + $8::int,
+         total_summit_count = COALESCE(total_summit_count, 0) + $9::int,
+         unique_springs_visited = CASE
+           WHEN $10::text IS NULL THEN COALESCE(unique_springs_visited, ARRAY[]::text[])
+           WHEN $10::text = ANY(COALESCE(unique_springs_visited, ARRAY[]::text[])) THEN COALESCE(unique_springs_visited, ARRAY[]::text[])
+           ELSE array_append(COALESCE(unique_springs_visited, ARRAY[]::text[]), $10::text)
+         END,
+         unique_valleys_visited = CASE
+           WHEN $11::text IS NULL THEN COALESCE(unique_valleys_visited, ARRAY[]::text[])
+           WHEN $11::text = ANY(COALESCE(unique_valleys_visited, ARRAY[]::text[])) THEN COALESCE(unique_valleys_visited, ARRAY[]::text[])
+           ELSE array_append(COALESCE(unique_valleys_visited, ARRAY[]::text[]), $11::text)
+         END,
+         unique_heritage_sites_visited = CASE
+           WHEN $12::text IS NULL THEN COALESCE(unique_heritage_sites_visited, ARRAY[]::text[])
+           WHEN $12::text = ANY(COALESCE(unique_heritage_sites_visited, ARRAY[]::text[])) THEN COALESCE(unique_heritage_sites_visited, ARRAY[]::text[])
+           ELSE array_append(COALESCE(unique_heritage_sites_visited, ARRAY[]::text[]), $12::text)
+         END,
+         regions_visited = CASE
+           WHEN $13::text IS NULL THEN COALESCE(regions_visited, ARRAY[]::text[])
+           WHEN $13::text = ANY(COALESCE(regions_visited, ARRAY[]::text[])) THEN COALESCE(regions_visited, ARRAY[]::text[])
+           ELSE array_append(COALESCE(regions_visited, ARRAY[]::text[]), $13::text)
+         END,
+         region_trail_counts = CASE
+           WHEN $14::text IS NULL THEN COALESCE(region_trail_counts, '{}'::jsonb)
+           ELSE jsonb_set(
+             COALESCE(region_trail_counts, '{}'::jsonb),
+             ARRAY[$14::text],
+             to_jsonb(COALESCE((COALESCE(region_trail_counts, '{}'::jsonb)->>$14::text)::int, 0) + $15::int),
+             true
+           )
+         END,
+         updated_at = NOW()
+     WHERE user_id = $1::uuid OR id = $1::uuid`,
+    [
+      userId,
+      distanceKm,
+      stats.trails ?? 0,
+      stats.meetupsHosted ?? stats.meetups ?? 0,
+      stats.incidents ?? 0,
+      stats.reviews ?? 0,
+      stats.photos ?? 0,
+      stats.meetupsJoined ?? 0,
+      stats.summit ?? 0,
+      stats.uniqueSpring ?? null,
+      stats.uniqueValley ?? null,
+      stats.uniqueHeritageSite ?? null,
+      regionVisitedKey,
+      regionTrailKey,
+      stats.regionTrail?.count ?? 1,
+    ]
+  );
+}
+
 export async function checkAndAwardAchievements(userId: string): Promise<Achievement[]> {
   console.log("[achievements.checkAndAwardAchievements] ========== START ==========");
   console.log("[achievements.checkAndAwardAchievements] userId:", userId);
@@ -303,87 +404,44 @@ export async function checkAndAwardAchievements(userId: string): Promise<Achieve
 
 export async function updateUserStats(
   userId: string,
-  stats: {
-    distance?: number;
-    trails?: number;
-    meetupsHosted?: number;
-    meetups?: number;
-    incidents?: number;
-    reviews?: number;
-    photos?: number;
-    meetupsJoined?: number;
-    summit?: number;
-    uniqueSpring?: string;
-    uniqueValley?: string;
-    uniqueHeritageSite?: string;
-    regionTrail?: { region: string; count?: number };
-    regionVisited?: string;
-  }
+  stats: UserStatsUpdate
 ): Promise<void> {
   console.log("[achievements.updateUserStats] ========== START ==========");
   console.log("[achievements.updateUserStats] Params:", { userId, stats });
   const regionTrailKey = stats.regionTrail?.region ? normalizeStatsKey(stats.regionTrail.region) : null;
   const regionVisitedKey = stats.regionVisited ? normalizeStatsKey(stats.regionVisited) : null;
+  const normalizedDistanceKm = normalizeNonNegativeNumber(stats.distance);
 
-  await pool.query(
-    `UPDATE profiles
-     SET total_distance_km = COALESCE(total_distance_km, 0) + $2,
-         total_trails_completed = COALESCE(total_trails_completed, 0) + $3::int,
-         total_meetups_hosted = COALESCE(total_meetups_hosted, 0) + $4::int,
-         total_incidents_reported = COALESCE(total_incidents_reported, 0) + $5::int,
-         total_reviews_written = COALESCE(total_reviews_written, 0) + $6::int,
-         total_photos_uploaded = COALESCE(total_photos_uploaded, 0) + $7::int,
-         total_meetups_joined = COALESCE(total_meetups_joined, 0) + $8::int,
-         total_summit_count = COALESCE(total_summit_count, 0) + $9::int,
-         unique_springs_visited = CASE
-           WHEN $10::text IS NULL THEN COALESCE(unique_springs_visited, ARRAY[]::text[])
-           WHEN $10::text = ANY(COALESCE(unique_springs_visited, ARRAY[]::text[])) THEN COALESCE(unique_springs_visited, ARRAY[]::text[])
-           ELSE array_append(COALESCE(unique_springs_visited, ARRAY[]::text[]), $10::text)
-         END,
-         unique_valleys_visited = CASE
-           WHEN $11::text IS NULL THEN COALESCE(unique_valleys_visited, ARRAY[]::text[])
-           WHEN $11::text = ANY(COALESCE(unique_valleys_visited, ARRAY[]::text[])) THEN COALESCE(unique_valleys_visited, ARRAY[]::text[])
-           ELSE array_append(COALESCE(unique_valleys_visited, ARRAY[]::text[]), $11::text)
-         END,
-         unique_heritage_sites_visited = CASE
-           WHEN $12::text IS NULL THEN COALESCE(unique_heritage_sites_visited, ARRAY[]::text[])
-           WHEN $12::text = ANY(COALESCE(unique_heritage_sites_visited, ARRAY[]::text[])) THEN COALESCE(unique_heritage_sites_visited, ARRAY[]::text[])
-           ELSE array_append(COALESCE(unique_heritage_sites_visited, ARRAY[]::text[]), $12::text)
-         END,
-         regions_visited = CASE
-           WHEN $13::text IS NULL THEN COALESCE(regions_visited, ARRAY[]::text[])
-           WHEN $13::text = ANY(COALESCE(regions_visited, ARRAY[]::text[])) THEN COALESCE(regions_visited, ARRAY[]::text[])
-           ELSE array_append(COALESCE(regions_visited, ARRAY[]::text[]), $13::text)
-         END,
-         region_trail_counts = CASE
-           WHEN $14::text IS NULL THEN COALESCE(region_trail_counts, '{}'::jsonb)
-           ELSE jsonb_set(
-             COALESCE(region_trail_counts, '{}'::jsonb),
-             ARRAY[$14::text],
-             to_jsonb(COALESCE((COALESCE(region_trail_counts, '{}'::jsonb)->>$14::text)::int, 0) + $15::int),
-             true
-           )
-         END,
-         updated_at = NOW()
-     WHERE user_id = $1::uuid OR id = $1::uuid`,
-    [
+  try {
+    await writeProfileAchievementStats(
       userId,
-      stats.distance ?? 0,
-      stats.trails ?? 0,
-      stats.meetupsHosted ?? stats.meetups ?? 0,
-      stats.incidents ?? 0,
-      stats.reviews ?? 0,
-      stats.photos ?? 0,
-      stats.meetupsJoined ?? 0,
-      stats.summit ?? 0,
-      stats.uniqueSpring ?? null,
-      stats.uniqueValley ?? null,
-      stats.uniqueHeritageSite ?? null,
+      stats,
+      normalizedDistanceKm,
+      "numeric",
       regionVisitedKey,
-      regionTrailKey,
-      stats.regionTrail?.count ?? 1,
-    ]
-  );
+      regionTrailKey
+    );
+  } catch (error) {
+    if (!shouldRetryDistanceAsInteger(error) || Number.isInteger(normalizedDistanceKm)) {
+      throw error;
+    }
+
+    const roundedDistanceKm = Math.round(normalizedDistanceKm);
+    console.warn("[achievements.updateUserStats] Retrying with integer distance increment", {
+      userId,
+      distance_km: normalizedDistanceKm,
+      rounded_distance_km: roundedDistanceKm,
+    });
+
+    await writeProfileAchievementStats(
+      userId,
+      stats,
+      roundedDistanceKm,
+      "int",
+      regionVisitedKey,
+      regionTrailKey
+    );
+  }
 
   console.log("[achievements.updateUserStats] Stats updated; checking achievements");
   await checkAndAwardAchievements(userId);

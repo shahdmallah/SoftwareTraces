@@ -1,17 +1,28 @@
 import type { SocialFeedItem, SocialFeedMediaItem } from '../api/socialApi';
 
-const MEDIA_GROUP_WINDOW_MS = 2 * 60 * 1000;
+function getPublishWindowKey(value: string) {
+  const timestamp = new Date(value).getTime();
+
+  if (!Number.isFinite(timestamp)) {
+    return value;
+  }
+
+  return String(Math.floor(timestamp / (5 * 60 * 1000)));
+}
 
 function getMediaPostGroupKey(item: SocialFeedMediaItem): string {
-  const createdAt = new Date(item.created_at).getTime();
-  const timeBucket = Number.isFinite(createdAt) ? Math.floor(createdAt / MEDIA_GROUP_WINDOW_MS) : 0;
+  const trailOrLocationId = item.trail.id ?? '';
+  const trailOrLocationName = (item.trail.name ?? '').trim().toLowerCase();
+
+  if (!trailOrLocationId && !trailOrLocationName) {
+    return item.id;
+  }
 
   return [
     item.user.id,
-    item.trail.id ?? '',
-    (item.caption ?? '').trim(),
-    (item.trail.name ?? '').trim(),
-    timeBucket,
+    trailOrLocationId,
+    trailOrLocationName,
+    getPublishWindowKey(item.created_at),
   ].join('|');
 }
 

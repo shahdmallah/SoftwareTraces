@@ -99,6 +99,14 @@ function assertNumber(value: unknown, fieldName: string): asserts value is numbe
   }
 }
 
+function normalizeInteger(value: number): number {
+  return Math.round(value);
+}
+
+function normalizeNonNegativeInteger(value: number): number {
+  return Math.max(0, normalizeInteger(value));
+}
+
 function getSupabaseStorageClient() {
   if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) {
     throw new Error("Supabase configuration missing");
@@ -281,6 +289,37 @@ export async function getActivityMedia(req: Request, res: Response): Promise<voi
         am.captured_at,
         am.caption,
         am.created_at,
+        (
+          SELECT row_to_json(sighting)
+          FROM (
+            SELECT
+              ns.id,
+              ns.trail_id,
+              ns.activity_id,
+              ns.user_id,
+              ns.latitude,
+              ns.longitude,
+              ns.category,
+              ns.species,
+              ns.common_name,
+              ns.confidence,
+              ns.photo_url,
+              ns.photo_id,
+              ns.photo_type,
+              ns.media_id,
+              ns.activity_media_id,
+              ns.classification,
+              ns.language,
+              ns.source,
+              ns.created_at,
+              ns.updated_at
+            FROM nature_sightings ns
+            WHERE ns.photo_id = am.id
+              AND ns.photo_type = 'activity_media'
+            ORDER BY ns.created_at DESC
+            LIMIT 1
+          ) sighting
+        ) AS nature_sighting,
         'activity_media' AS source
       FROM activity_media am
       WHERE am.activity_id = $1::uuid
@@ -556,9 +595,11 @@ export async function getActivityById(req: Request, res: Response): Promise<void
         a.trail_id,
         a.user_id,
         p.full_name,
+        a.notes,
         a.distance_meters,
         a.elapsed_time_seconds,
         a.elevation_gain_meters,
+        a.avg_speed_mps,
         a.start_time,
         a.end_time,
         a.status,
@@ -778,10 +819,13 @@ export async function completeActivity(req: Request, res: Response): Promise<voi
     assertUuid(req.params.id, "Activity id");
 
     console.log("[activities.completeActivity] verifying activity", { activity_id: req.params.id });
-    const activityResult = await pool.query("SELECT user_id, status, start_time, user_id = $2::uuid AS is_owner FROM activities WHERE id = $1::uuid", [
+    const activityResult = await pool.query(
+      "SELECT user_id, status, start_time, COALESCE(paused_duration_sec, 0) AS paused_duration_sec, user_id = $2::uuid AS is_owner FROM activities WHERE id = $1::uuid",
+      [
       req.params.id,
       auth.sub
-    ]);
+      ]
+    );
     const activity = activityResult.rows[0];
 
     if (!activity) {
@@ -792,8 +836,8 @@ export async function completeActivity(req: Request, res: Response): Promise<voi
       throw new HttpError(403, "Forbidden");
     }
 
-    if (activity.status !== "recording") {
-      throw new HttpError(400, "Activity is not recording");
+    if (activity.status !== "recording" && activity.status !== "paused") {
+      throw new HttpError(400, "Activity must be recording or paused before completion");
     }
 
     console.log("[activities.completeActivity] validating ended_at");
@@ -816,10 +860,48 @@ export async function completeActivity(req: Request, res: Response): Promise<voi
     assertNumber(min_elevation_meters, "min_elevation_meters");
     assertNumber(max_speed_mps, "max_speed_mps");
     assertNumber(avg_speed_mps, "avg_speed_mps");
+    const normalizedDistanceMeters = normalizeNonNegativeInteger(distance_meters);
+    const normalizedElevationGainMeters = normalizeNonNegativeInteger(elevation_gain_meters);
+    const normalizedElevationLossMeters = normalizeNonNegativeInteger(elevation_loss_meters);
+    const normalizedMaxElevationMeters = normalizeInteger(max_elevation_meters);
+    const normalizedMinElevationMeters = normalizeInteger(min_elevation_meters);
 
-    const elapsedTimeSeconds = Math.floor((endTime - startTime) / 1000);
+    let totalPausedSeconds = Number(activity.paused_duration_sec ?? 0);
 
-    console.log("[activities.completeActivity] updating activity", { elapsed_time_seconds: elapsedTimeSeconds });
+    if (activity.status === "paused") {
+      console.log("[activities.completeActivity] activity is paused, resolving active pause duration");
+      const pauseResult = await pool.query(
+        `
+        SELECT occurred_at
+        FROM activity_events
+        WHERE activity_id = $1::uuid AND event_type = 'paused'
+        ORDER BY occurred_at DESC
+        LIMIT 1
+        `,
+        [req.params.id]
+      );
+      const pauseEvent = pauseResult.rows[0];
+
+      if (!pauseEvent) {
+        throw new HttpError(400, "Cannot complete a paused activity without a pause event");
+      }
+
+      const pauseStartedMs = new Date(pauseEvent.occurred_at).getTime();
+
+      if (!Number.isFinite(pauseStartedMs) || endTime < pauseStartedMs) {
+        throw new HttpError(400, "ended_at must be after the latest pause time");
+      }
+
+      totalPausedSeconds += Math.floor((endTime - pauseStartedMs) / 1000);
+    }
+
+    const elapsedTimeSeconds = Math.max(0, Math.floor((endTime - startTime) / 1000) - totalPausedSeconds);
+
+    console.log("[activities.completeActivity] updating activity", {
+      elapsed_time_seconds: elapsedTimeSeconds,
+      total_paused_seconds: totalPausedSeconds,
+      prior_status: activity.status,
+    });
     const updateResult = await pool.query(
       `
       UPDATE activities
@@ -827,7 +909,7 @@ export async function completeActivity(req: Request, res: Response): Promise<voi
           elevation_gain_meters = $5, elevation_loss_meters = $6,
           max_elevation_meters = $7, min_elevation_meters = $8,
           max_speed_mps = $9, avg_speed_mps = $10,
-          elapsed_time_seconds = $11, status = 'completed', updated_at = NOW()
+          elapsed_time_seconds = $11, paused_duration_sec = $12, status = 'completed', updated_at = NOW()
       WHERE id = $1::uuid AND user_id = $2::uuid
       RETURNING *
       `,
@@ -835,14 +917,15 @@ export async function completeActivity(req: Request, res: Response): Promise<voi
         req.params.id,
         auth.sub,
         ended_at,
-        distance_meters ?? null,
-        elevation_gain_meters ?? null,
-        elevation_loss_meters ?? null,
-        max_elevation_meters ?? null,
-        min_elevation_meters ?? null,
+        normalizedDistanceMeters,
+        normalizedElevationGainMeters,
+        normalizedElevationLossMeters,
+        normalizedMaxElevationMeters,
+        normalizedMinElevationMeters,
         max_speed_mps ?? null,
         avg_speed_mps ?? null,
-        elapsedTimeSeconds
+        elapsedTimeSeconds,
+        totalPausedSeconds
       ]
     );
 
@@ -861,29 +944,37 @@ export async function completeActivity(req: Request, res: Response): Promise<voi
       [req.params.id, ended_at]
     );
 
-    console.log("[activities.completeActivity] updating achievement stats");
-    const achievementStats: Parameters<typeof updateUserStats>[1] = {
-      distance: distance_meters / 1000,
-      trails: updatedActivity.trail_id ? 1 : 0,
-      summit: 1
-    };
+    try {
+      console.log("[activities.completeActivity] updating achievement stats");
+      const achievementStats: Parameters<typeof updateUserStats>[1] = {
+        distance: normalizedDistanceMeters / 1000,
+        trails: updatedActivity.trail_id ? 1 : 0,
+        summit: 1
+      };
 
-    if (updatedActivity.trail_id) {
-      const trailResult = await pool.query<{ region: string | null }>(
-        "SELECT region FROM trails WHERE id = $1::uuid",
-        [updatedActivity.trail_id]
-      );
-      const region = trailResult.rows[0]?.region;
+      if (updatedActivity.trail_id) {
+        const trailResult = await pool.query<{ region: string | null }>(
+          "SELECT region FROM trails WHERE id = $1::uuid",
+          [updatedActivity.trail_id]
+        );
+        const region = trailResult.rows[0]?.region;
 
-      if (region) {
-        achievementStats.regionTrail = { region };
-        achievementStats.regionVisited = region;
+        if (region) {
+          achievementStats.regionTrail = { region };
+          achievementStats.regionVisited = region;
+        }
       }
-    }
 
-    await updateUserStats(auth.sub, {
-      ...achievementStats
-    });
+      await updateUserStats(auth.sub, {
+        ...achievementStats
+      });
+    } catch (achievementError) {
+      console.error("[activities.completeActivity] achievement sync failed after completion", {
+        activity_id: req.params.id,
+        user_id: auth.sub,
+        error: achievementError instanceof Error ? achievementError.message : String(achievementError),
+      });
+    }
 
     console.log("[activities.completeActivity] returning updated activity", { activity_id: req.params.id });
     res.status(200).json(updatedActivity);

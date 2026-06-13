@@ -137,6 +137,10 @@ function getWildlifeReachabilityMessage(baseUrl: string) {
   return `Unable to reach the wildlife server at ${baseUrl}. Check your local IP and port 8000.`;
 }
 
+function getWildlifeTimeoutMessage(baseUrl: string) {
+  return `The wildlife server at ${baseUrl} took too long to respond. Try a smaller photo or try again.`;
+}
+
 export async function identifySpecies(file: ReactNativeFile, language: SpeciesLanguage = 'en') {
   const formData = new FormData();
   formData.append('file', file as unknown as Blob);
@@ -155,6 +159,10 @@ export async function identifySpecies(file: ReactNativeFile, language: SpeciesLa
   } catch (error) {
     if (axios.isAxiosError(error)) {
       if (!error.response) {
+        if (error.code === 'ECONNABORTED') {
+          throw new Error(getWildlifeTimeoutMessage(baseUrl));
+        }
+
         throw new Error(getWildlifeReachabilityMessage(baseUrl));
       }
 
@@ -186,6 +194,10 @@ export async function identifySpeciesDetails(file: ReactNativeFile, language: Sp
   } catch (error) {
     if (axios.isAxiosError(error)) {
       if (!error.response) {
+        if (error.code === 'ECONNABORTED') {
+          throw new Error(getWildlifeTimeoutMessage(baseUrl));
+        }
+
         throw new Error(getWildlifeReachabilityMessage(baseUrl));
       }
 

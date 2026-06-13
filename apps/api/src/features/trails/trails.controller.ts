@@ -1869,6 +1869,56 @@ export async function publishTrail(req: Request, res: Response): Promise<void> {
   }
 }
 
+export async function unpublishTrail(req: Request, res: Response): Promise<void> {
+  console.log("[unpublishTrail] ========== START ==========");
+  console.log("[unpublishTrail] Trail ID:", req.params.id);
+
+  try {
+    const auth = requireAuth(req);
+    const trailId = req.params.id;
+
+    console.log("[unpublishTrail] 1. Auth passed, userId:", auth.sub);
+    console.log("[unpublishTrail] 2. Checking trail ownership and status...");
+
+    const trailCheck = await pool.query(
+      "SELECT user_id, status FROM trails WHERE id = $1 AND deleted_at IS NULL",
+      [trailId]
+    );
+
+    if (trailCheck.rows.length === 0) {
+      console.log("[unpublishTrail] Trail not found or deleted:", trailId);
+      res.status(404).json({ error: "Trail not found" });
+      return;
+    }
+
+    if (trailCheck.rows[0].user_id !== auth.sub) {
+      console.warn("[unpublishTrail] Unauthorized: user", auth.sub, "tried to unpublish trail of user", trailCheck.rows[0].user_id);
+      res.status(403).json({ error: "Only the trail owner can unpublish" });
+      return;
+    }
+
+    if (trailCheck.rows[0].status === "draft") {
+      console.warn("[unpublishTrail] Trail already in draft state:", trailId);
+      res.status(400).json({ error: "Trail is already unpublished" });
+      return;
+    }
+
+    console.log("[unpublishTrail] 3. Reverting trail to draft...");
+    const result = await pool.query(
+      "UPDATE trails SET status = 'draft', published_at = NULL WHERE id = $1 RETURNING id, status, published_at",
+      [trailId]
+    );
+
+    console.log("[unpublishTrail] 4. Unpublish successful");
+    res.json({ data: result.rows[0], message: "Trail unpublished successfully" });
+  } catch (error) {
+    console.error("[unpublishTrail] ERROR CAUGHT:");
+    console.error("[unpublishTrail] Error message:", error instanceof Error ? error.message : String(error));
+    console.error("[unpublishTrail] Error stack:", error instanceof Error ? error.stack : "No stack");
+    res.status(500).json({ error: "Internal server error", details: error instanceof Error ? error.message : String(error) });
+  }
+}
+
 export async function saveTrail(req: Request, res: Response): Promise<void> {
   console.log("[saveTrail] ========== START ==========");
   console.log("[saveTrail] Trail ID:", req.params.id);

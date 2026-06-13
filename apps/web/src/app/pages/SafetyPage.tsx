@@ -21,6 +21,7 @@ import {
   getMySosEvents,
   updateEmergencyContact,
   updateSosStatus,
+  type CreateSosResult,
   type EmergencyContact,
   type SosAlert,
 } from '../api/sos';
@@ -43,6 +44,25 @@ const emptyContactDraft: ContactDraft = {
 };
 
 const TERMINAL_SOS_STATUSES = new Set(['resolved', 'cancelled']);
+
+function getDisplayedSosStatus(event: Pick<SosAlert, 'status' | 'notification_status'>): string {
+  if (event.status === 'notified' && event.notification_status === 'partial') {
+    return 'partial';
+  }
+
+  return event.status;
+}
+
+function getSosStatusMessage(result: CreateSosResult): string {
+  const headline =
+    result.notification_status === 'failed'
+      ? `Emergency contacts reached: ${result.contacts_notified}/${result.emergency_contacts_count}.`
+      : result.notification_status === 'partial'
+        ? `Some emergency contacts were reached: ${result.contacts_notified}/${result.emergency_contacts_count}.`
+        : `Emergency contacts reached: ${result.contacts_notified}/${result.emergency_contacts_count}.`;
+
+  return result.sos_event.status_note ? `${headline} ${result.sos_event.status_note}` : headline;
+}
 
 function formatDistance(meters: number) {
   if (meters >= 1000) return `${(meters / 1000).toFixed(1)} km`;
@@ -109,9 +129,8 @@ export function SafetyPage() {
             longitude: position.coords.longitude,
             message: sosMessage.trim() || undefined,
           });
-          const notified = result.contacts_notified;
           setStatusMessage(
-            `SOS sent. ${notified} contact${notified === 1 ? '' : 's'} notified (${result.notification_status}).`,
+            `SOS sent. ${getSosStatusMessage(result)}`,
           );
           setSosMessage('');
           const events = await getMySosEvents();
@@ -145,6 +164,10 @@ export function SafetyPage() {
     const fullName = contactDraft.full_name.trim();
     if (fullName.length < 2) {
       setErrorMessage('Contact name must be at least 2 characters.');
+      return;
+    }
+    if (!contactDraft.phone.trim()) {
+      setErrorMessage('Add a phone number. Web emergency contacts currently rely on SMS delivery.');
       return;
     }
 
@@ -326,6 +349,7 @@ export function SafetyPage() {
                 placeholder="Relationship (optional)"
                 className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
               />
+              <p className="text-xs text-secondary">SMS is the active SOS channel on web. Push-only contacts need a linked Traces account.</p>
               <label className="flex items-center gap-2 text-sm">
                 <input
                   type="checkbox"
@@ -450,9 +474,10 @@ export function SafetyPage() {
                   {event.contacts_notified != null && (
                     <p className="text-xs text-secondary">{event.contacts_notified} contacts notified</p>
                   )}
+                  {event.status_note && <p className="text-xs text-secondary">{event.status_note}</p>}
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="text-secondary capitalize">{event.status}</span>
+                  <span className="text-secondary capitalize">{getDisplayedSosStatus(event)}</span>
                   {!isGuest && !TERMINAL_SOS_STATUSES.has(event.status) && (
                     <button
                       type="button"

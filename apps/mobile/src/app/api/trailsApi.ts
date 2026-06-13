@@ -441,6 +441,12 @@ export async function publishTrail(id: string) {
   });
 }
 
+export async function unpublishTrail(id: string) {
+  return apiRequest<Envelope<{ id: string; status: string; published_at: string | null }>>(`/api/trails/${id}/unpublish`, {
+    method: 'PATCH',
+  });
+}
+
 export async function getTrailStats(payload: { coordinates: [number, number][] }) {
   const response = await apiRequest<Envelope<TrailStatsResponse>>('/api/trails/calculate', {
     method: 'POST',

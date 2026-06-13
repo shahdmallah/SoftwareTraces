@@ -4,7 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import type { StackNavigationProp } from '@react-navigation/stack';
 import { AnimatedEntrance } from '../AnimatedUI';
 import { shareActivityPost, uploadActivityMedia, type ActivityMediaFile } from '../../api/activitiesApi';
-import { saveNatureSighting } from '../../api/natureSightingsApi';
+import { saveNatureSighting, type NatureSighting } from '../../api/natureSightingsApi';
 import { hasDetectedSpecies, identifySpeciesDetails, type SpeciesLanguage } from '../../api/speciesApi';
 import { addLocalFeedItem } from '../../data/localSocial';
 import { completionRadii } from '../../features/trailCompletion/theme';
@@ -56,6 +56,25 @@ function coordinateForPhoto(draft: TrailCompletionDraft, uri: string): [number, 
 function capturedAtForPhoto(draft: TrailCompletionDraft, uri: string) {
   const taggedPhoto = draft.activityPhotoTags?.find((photo) => photo.uri === uri);
   return new Date(taggedPhoto?.capturedAt ?? draft.completedAtIso).toISOString();
+}
+
+function buildPhotoEntries(photoUris: string[], natureSightings: NatureSighting[] | undefined) {
+  const remainingSightings = [...(natureSightings ?? [])];
+
+  return photoUris.map((uri, index) => {
+    const normalizedUri = uri.trim();
+    const matchedIndex = remainingSightings.findIndex((sighting) => sighting.photo_url?.trim() === normalizedUri);
+    const matchedSighting = matchedIndex >= 0
+      ? remainingSightings.splice(matchedIndex, 1)[0]
+      : null;
+
+    return {
+      id: matchedSighting?.photo_id ?? `local-photo-${index}`,
+      uri,
+      photoType: matchedSighting?.photo_type ?? 'activity_media',
+      natureSighting: matchedSighting,
+    };
+  });
 }
 
 async function uploadRecapPhotosToActivity(draft: TrailCompletionDraft, caption: string, language: SpeciesLanguage) {
@@ -161,6 +180,9 @@ export function ShareActions({ draft, isArabic, navigation, isOwner = true, owne
       timeAr: 'الآن',
       likes: 1,
       comments: 0,
+      photoEntries: buildPhotoEntries(postPhotos, draft.natureSightings),
+      natureSightings: draft.natureSightings,
+      photoUris: postPhotos,
       distance: `${(draft.trailDistanceKm ?? 0).toFixed(1)} km`,
     };
 

@@ -6,7 +6,7 @@ import { useNavigation } from '@react-navigation/native';
 import type { StackNavigationProp } from '@react-navigation/stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { shareActivityPost, uploadActivityMedia, type ActivityMediaFile } from '../api/activitiesApi';
-import { saveNatureSighting } from '../api/natureSightingsApi';
+import { saveNatureSighting, type NatureSighting } from '../api/natureSightingsApi';
 import { hasDetectedSpecies, identifySpeciesDetails, type SpeciesLanguage } from '../api/speciesApi';
 import {
   addTrailCondition,
@@ -100,6 +100,124 @@ function capturedAtForPostPhoto(session: CompletedTrailSession, uri: string) {
   return new Date(taggedPhoto?.capturedAt ?? session.finishedAt).toISOString();
 }
 
+type CompletionSample = {
+  coordinate: [number, number];
+  recordedAt: number;
+  distanceKm: number;
+  elevationM?: number;
+};
+
+function getDistanceMeters(from: [number, number], to: [number, number]) {
+  const earthRadius = 6371000;
+  const toRadians = (value: number) => (value * Math.PI) / 180;
+  const latDelta = toRadians(to[1] - from[1]);
+  const lngDelta = toRadians(to[0] - from[0]);
+  const lat1 = toRadians(from[1]);
+  const lat2 = toRadians(to[1]);
+
+  const a =
+    Math.sin(latDelta / 2) * Math.sin(latDelta / 2) +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(lngDelta / 2) * Math.sin(lngDelta / 2);
+
+  return earthRadius * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function buildCompletionSamples(session: CompletedTrailSession): CompletionSample[] {
+  let cumulativeDistanceMeters = 0;
+
+  return session.recordedSamples.reduce<CompletionSample[]>((samples, sample) => {
+    const [lng, lat] = sample.coordinate;
+    if (!Number.isFinite(lng) || !Number.isFinite(lat) || !Number.isFinite(sample.recordedAt)) {
+      return samples;
+    }
+
+    const previous = samples[samples.length - 1];
+    if (previous) {
+      cumulativeDistanceMeters += getDistanceMeters(previous.coordinate, sample.coordinate);
+    }
+
+    samples.push({
+      coordinate: sample.coordinate,
+      recordedAt: sample.recordedAt,
+      distanceKm: cumulativeDistanceMeters / 1000,
+      elevationM: typeof sample.elevationM === 'number' && Number.isFinite(sample.elevationM) ? sample.elevationM : undefined,
+    });
+
+    return samples;
+  }, []);
+}
+
+function downsampleProfile<T>(points: T[], maxPoints: number) {
+  if (points.length <= maxPoints) {
+    return points;
+  }
+
+  const lastIndex = points.length - 1;
+  return Array.from({ length: maxPoints }, (_, index) => {
+    if (index === maxPoints - 1) {
+      return points[lastIndex];
+    }
+    const sourceIndex = Math.round((index / (maxPoints - 1)) * lastIndex);
+    return points[sourceIndex];
+  });
+}
+
+function buildElevationProfile(samples: CompletionSample[]) {
+  const points = samples.filter((sample) => typeof sample.elevationM === 'number');
+
+  return downsampleProfile(
+    points.map((sample) => ({
+      distanceKm: sample.distanceKm,
+      elevationM: sample.elevationM as number,
+      capturedAt: sample.recordedAt,
+    })),
+    48,
+  );
+}
+
+function findNearestSample(samples: CompletionSample[], capturedAt: number) {
+  if (!samples.length) {
+    return null;
+  }
+
+  return samples.reduce<CompletionSample | null>((closest, sample) => {
+    if (!closest) {
+      return sample;
+    }
+
+    return Math.abs(sample.recordedAt - capturedAt) < Math.abs(closest.recordedAt - capturedAt) ? sample : closest;
+  }, null);
+}
+
+function buildPhotoTags(
+  session: CompletedTrailSession,
+  samples: CompletionSample[],
+  uploadedUriMap: Record<string, string>,
+) {
+  return session.sessionPhotos.map((photo) => {
+    const matchedSample = findNearestSample(samples, photo.capturedAt);
+
+    return {
+      uri: uploadedUriMap[photo.uri] ?? photo.uri,
+      coordinate: photo.coordinate,
+      capturedAt: photo.capturedAt,
+      distanceKm: matchedSample?.distanceKm,
+      elevationM: matchedSample?.elevationM,
+    };
+  });
+}
+
+function calculateDistanceKm(session: CompletedTrailSession, samples: CompletionSample[]) {
+  if (samples.length > 0) {
+    return samples[samples.length - 1]?.distanceKm ?? 0;
+  }
+
+  return session.recordedPath.reduce((total, point, index) => {
+    const previous = session.recordedPath[index - 1];
+    return previous ? total + getDistanceMeters(previous, point) : total;
+  }, 0) / 1000;
+}
+
 async function uploadPostPhotosToActivity(
   session: CompletedTrailSession,
   uris: string[],
@@ -107,10 +225,11 @@ async function uploadPostPhotosToActivity(
   language: SpeciesLanguage,
 ) {
   if (!session.activityId) {
-    return [];
+    return { photoUris: [] as string[], natureSightings: [] as NatureSighting[], uriMap: {} as Record<string, string> };
   }
 
   const uploadedByLocalUri = new Map<string, string>();
+  const savedNatureSightings: NatureSighting[] = [];
   const uniqueLocalUris = Array.from(new Set(uris.filter((uri) => uri && !isRemoteUri(uri))));
 
   await Promise.all(
@@ -155,6 +274,9 @@ async function uploadPostPhotosToActivity(
               longitude: lng,
               language,
               classification: identification.result,
+            }).then((sighting) => {
+              savedNatureSightings.push(sighting);
+              return sighting;
             });
           })
           .catch((error) => {
@@ -164,7 +286,11 @@ async function uploadPostPhotosToActivity(
     }),
   );
 
-  return uris.map((uri) => uploadedByLocalUri.get(uri) ?? uri);
+  return {
+    photoUris: uris.map((uri) => uploadedByLocalUri.get(uri) ?? uri),
+    natureSightings: savedNatureSightings,
+    uriMap: Object.fromEntries(uploadedByLocalUri),
+  };
 }
 
 export function TrailReviewScreen() {
@@ -208,7 +334,19 @@ export function TrailReviewScreen() {
     }
 
     const minutes = Math.max(1, Math.round(finishedSession.elapsedMs / 60000));
-    return `${minutes} min, ${finishedSession.stepCount} steps, ${finishedSession.sessionPhotos.length} photos`;
+    const completionSamples = buildCompletionSamples(finishedSession);
+    const distanceKm = calculateDistanceKm(finishedSession, completionSamples);
+    const paceMinPerKm = distanceKm > 0 ? finishedSession.elapsedMs / 60000 / distanceKm : null;
+    const speedKph = distanceKm > 0 ? distanceKm / Math.max(finishedSession.elapsedMs / 3600000, 1 / 3600) : null;
+    const totalPaceSeconds = paceMinPerKm != null && Number.isFinite(paceMinPerKm)
+      ? Math.max(1, Math.round(paceMinPerKm * 60))
+      : null;
+    const paceLabel = totalPaceSeconds != null
+      ? `${Math.floor(totalPaceSeconds / 60)}:${String(totalPaceSeconds % 60).padStart(2, '0')} /km`
+      : '—';
+    const speedLabel = speedKph != null && Number.isFinite(speedKph) ? `${speedKph.toFixed(1)} km/h` : '—';
+
+    return `${minutes} min, ${distanceKm.toFixed(1)} km, ${speedLabel}, ${paceLabel}, ${finishedSession.sessionPhotos.length} photos`;
   }, [finishedSession]);
   const trailBuddyMessage = useMemo(() => {
     if (!finishedSession) {
@@ -315,7 +453,18 @@ export function TrailReviewScreen() {
       const savedPostCaption = postSkipped ? '' : trimmedPostCaption;
       const savedPostPhotos = postSkipped ? [] : postPhotoUris;
       const savedReviewPhotos = skipReview ? [] : reviewPhotoUris;
-      const durablePostPhotos =
+      const completionSamples = buildCompletionSamples(finishedSession);
+      const activityDistanceKm = calculateDistanceKm(finishedSession, completionSamples);
+      const avgSpeedKph =
+        activityDistanceKm > 0 && finishedSession.elapsedMs > 0
+          ? activityDistanceKm / (finishedSession.elapsedMs / 3600000)
+          : undefined;
+      const avgPaceMinPerKm =
+        activityDistanceKm > 0 && finishedSession.elapsedMs > 0
+          ? finishedSession.elapsedMs / 60000 / activityDistanceKm
+          : undefined;
+      const elevationProfile = buildElevationProfile(completionSamples);
+      const uploadedPostMedia =
         !postSkipped && finishedSession.activityId
           ? await uploadPostPhotosToActivity(
               finishedSession,
@@ -323,7 +472,8 @@ export function TrailReviewScreen() {
               savedPostCaption || savedReview || 'Completed this hike',
               language,
             )
-          : savedPostPhotos;
+          : { photoUris: savedPostPhotos, natureSightings: [], uriMap: {} as Record<string, string> };
+      const durablePostPhotos = uploadedPostMedia.photoUris;
       const draft: TrailCompletionDraft = {
         activityId: finishedSession.activityId,
         trailId: finishedSession.trailId,
@@ -340,17 +490,18 @@ export function TrailReviewScreen() {
         postSkipped,
         postCaption: savedPostCaption,
         postPhotoUris: durablePostPhotos,
-        activityPhotoTags: finishedSession.sessionPhotos.map((photo) => ({
-          uri: photo.uri,
-          coordinate: photo.coordinate,
-          capturedAt: photo.capturedAt,
-        })),
+        activityPhotoTags: buildPhotoTags(finishedSession, completionSamples, uploadedPostMedia.uriMap),
         postVisibility: visibility,
         photoUris: durablePostPhotos.length ? durablePostPhotos : savedReviewPhotos,
+        natureSightings: uploadedPostMedia.natureSightings,
         completedAtIso: new Date().toISOString(),
         durationMs: finishedSession.elapsedMs,
         stepCount: finishedSession.stepCount,
         routePointCount: finishedSession.recordedPath.length,
+        activityDistanceKm,
+        avgSpeedKph,
+        avgPaceMinPerKm,
+        elevationProfile,
         trailDistanceKm: finishedSession.trail?.distance,
         trailElevationGainM: finishedSession.trail?.elevationGain,
         trailCoordinates: finishedSession.trail?.coordinates,

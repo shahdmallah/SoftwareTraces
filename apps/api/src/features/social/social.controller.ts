@@ -144,6 +144,32 @@ function getPagination(query: Request["query"]) {
   return { page, limit, offset };
 }
 
+const mediaFeedGroupKeySql = `
+  CASE
+    WHEN (
+      m.trip_id IS NOT NULL
+      OR NULLIF(BTRIM(m.location_name), '') IS NOT NULL
+      OR (m.latitude IS NOT NULL AND m.longitude IS NOT NULL)
+    )
+    THEN CONCAT_WS(
+      '|',
+      m.uploader_id::text,
+      COALESCE(m.trip_id::text, 'no-trip'),
+      COALESCE(
+        NULLIF(LOWER(BTRIM(m.location_name)), ''),
+        CASE
+          WHEN m.latitude IS NOT NULL AND m.longitude IS NOT NULL
+          THEN CONCAT(ROUND(m.latitude::numeric, 5)::text, ',', ROUND(m.longitude::numeric, 5)::text)
+          ELSE NULL
+        END,
+        'no-location'
+      ),
+      FLOOR(EXTRACT(EPOCH FROM m.created_at) / 300)::bigint::text
+    )
+    ELSE m.id::text
+  END
+`;
+
 function formatFeedItem(row: FeedReviewRow): SocialFeedResponseItem {
   return {
     id: row.id,
@@ -651,7 +677,7 @@ export async function getFeed(req: Request, res: Response): Promise<void> {
     const countResult = await pool.query<{ count: string }>(
       `
       WITH feed_rows AS (
-        SELECT tr.id
+        SELECT tr.id::text
         FROM trail_reviews tr
         LEFT JOIN user_follows uf
           ON uf.following_id = tr.user_id
@@ -669,7 +695,7 @@ export async function getFeed(req: Request, res: Response): Promise<void> {
             )
           )
         UNION ALL
-        SELECT ap.id
+        SELECT ap.id::text
         FROM activity_posts ap
         LEFT JOIN user_follows uf
           ON uf.following_id = ap.user_id
@@ -699,7 +725,7 @@ export async function getFeed(req: Request, res: Response): Promise<void> {
             )
           )
         UNION ALL
-        SELECT m.id
+        SELECT ${mediaFeedGroupKeySql}
         FROM media m
         LEFT JOIN user_follows uf
           ON uf.following_id = m.uploader_id
@@ -717,6 +743,7 @@ export async function getFeed(req: Request, res: Response): Promise<void> {
                 AND reverse_follow.following_id = $1::uuid
             )
           )
+        GROUP BY ${mediaFeedGroupKeySql}
       )
       SELECT COUNT(*) AS count
       FROM feed_rows
@@ -966,59 +993,21 @@ export async function getFeed(req: Request, res: Response): Promise<void> {
         UNION ALL
 
         SELECT
-          m.id,
-          m.created_at,
+          media_group.id,
+          media_group.created_at,
           'media'::text AS type,
           NULL::integer AS rating,
           NULL::text AS title,
           NULL::text AS content,
-          m.caption,
-          CASE WHEN m.is_public THEN 'public' ELSE 'private' END AS visibility,
-          m.url AS photo_url,
-          json_build_array(
-            json_build_object(
-              'id', m.id,
-              'url', m.url,
-              'created_at', m.created_at,
-              'nature_sighting',
-              (
-                SELECT row_to_json(sighting)
-                FROM (
-                  SELECT
-                    ns.id,
-                    ns.trail_id,
-                    ns.activity_id,
-                    ns.user_id,
-                    ns.latitude,
-                    ns.longitude,
-                    ns.category,
-                    ns.species,
-                    ns.common_name,
-                    ns.confidence,
-                    ns.photo_url,
-                    ns.photo_id,
-                    ns.photo_type,
-                    ns.media_id,
-                    ns.activity_media_id,
-                    ns.classification,
-                    ns.language,
-                    ns.source,
-                    ns.created_at,
-                    ns.updated_at
-                  FROM nature_sightings ns
-                  WHERE ns.photo_id = m.id
-                    AND ns.photo_type = 'media'
-                  ORDER BY ns.created_at DESC
-                  LIMIT 1
-                ) sighting
-              )
-            )
-          ) AS photos,
-          m.uploader_id AS user_id,
+          media_group.caption,
+          CASE WHEN media_group.is_public THEN 'public' ELSE 'private' END AS visibility,
+          media_group.photo_url,
+          media_group.photos,
+          media_group.user_id,
           COALESCE(p.full_name, 'Trail friend') AS full_name,
           p.avatar_url,
           t.id AS trail_id,
-          COALESCE(t.name, m.location_name) AS trail_name,
+          COALESCE(t.name, media_group.location_name) AS trail_name,
           t.image AS trail_image,
           NULL::uuid AS activity_id,
           NULL::numeric AS distance_meters,
@@ -1030,25 +1019,120 @@ export async function getFeed(req: Request, res: Response): Promise<void> {
           '0'::text AS likes_count,
           '0'::text AS comments_count,
           false AS is_liked_by_user
-        FROM media m
-        LEFT JOIN user_follows uf
-          ON uf.following_id = m.uploader_id
-         AND uf.follower_id = $1::uuid
-        LEFT JOIN profiles p ON p.id = m.uploader_id
-        LEFT JOIN trails t ON t.id = m.trip_id
-        WHERE m.is_public = true
-          AND (m.uploader_id = $1::uuid OR uf.follower_id IS NOT NULL)
-          AND (
-            m.uploader_id = $1::uuid
-            OR
-            $4::text = 'all'
-            OR EXISTS (
-              SELECT 1
-              FROM user_follows reverse_follow
-              WHERE reverse_follow.follower_id = m.uploader_id
-                AND reverse_follow.following_id = $1::uuid
+        FROM (
+          SELECT
+            (ARRAY_AGG(m.id ORDER BY m.created_at ASC, m.id ASC))[1] AS id,
+            MAX(m.created_at) AS created_at,
+            ${mediaFeedGroupKeySql} AS group_key,
+            MAX(m.caption) AS caption,
+            BOOL_OR(m.is_public) AS is_public,
+            (json_agg(
+              json_build_object(
+                'id', m.id,
+                'url', m.url,
+                'created_at', m.created_at,
+                'nature_sighting',
+                (
+                  SELECT row_to_json(sighting)
+                  FROM (
+                    SELECT
+                      ns.id,
+                      ns.trail_id,
+                      ns.activity_id,
+                      ns.user_id,
+                      ns.latitude,
+                      ns.longitude,
+                      ns.category,
+                      ns.species,
+                      ns.common_name,
+                      ns.confidence,
+                      ns.photo_url,
+                      ns.photo_id,
+                      ns.photo_type,
+                      ns.media_id,
+                      ns.activity_media_id,
+                      ns.classification,
+                      ns.language,
+                      ns.source,
+                      ns.created_at,
+                      ns.updated_at
+                    FROM nature_sightings ns
+                    WHERE ns.photo_id = m.id
+                      AND ns.photo_type = 'media'
+                    ORDER BY ns.created_at DESC
+                    LIMIT 1
+                  ) sighting
+                )
+              )
+              ORDER BY m.created_at ASC
+            )->0->>'url') AS photo_url,
+            COALESCE(
+              json_agg(
+                json_build_object(
+                  'id', m.id,
+                  'url', m.url,
+                  'created_at', m.created_at,
+                  'nature_sighting',
+                  (
+                    SELECT row_to_json(sighting)
+                    FROM (
+                      SELECT
+                        ns.id,
+                        ns.trail_id,
+                        ns.activity_id,
+                        ns.user_id,
+                        ns.latitude,
+                        ns.longitude,
+                        ns.category,
+                        ns.species,
+                        ns.common_name,
+                        ns.confidence,
+                        ns.photo_url,
+                        ns.photo_id,
+                        ns.photo_type,
+                        ns.media_id,
+                        ns.activity_media_id,
+                        ns.classification,
+                        ns.language,
+                        ns.source,
+                        ns.created_at,
+                        ns.updated_at
+                      FROM nature_sightings ns
+                      WHERE ns.photo_id = m.id
+                        AND ns.photo_type = 'media'
+                      ORDER BY ns.created_at DESC
+                      LIMIT 1
+                    ) sighting
+                  )
+                )
+                ORDER BY m.created_at ASC
+              ),
+              '[]'::json
+            ) AS photos,
+            m.uploader_id AS user_id,
+            m.trip_id,
+            MAX(m.location_name) AS location_name
+          FROM media m
+          LEFT JOIN user_follows uf
+            ON uf.following_id = m.uploader_id
+           AND uf.follower_id = $1::uuid
+          WHERE m.is_public = true
+            AND (m.uploader_id = $1::uuid OR uf.follower_id IS NOT NULL)
+            AND (
+              m.uploader_id = $1::uuid
+              OR
+              $4::text = 'all'
+              OR EXISTS (
+                SELECT 1
+                FROM user_follows reverse_follow
+                WHERE reverse_follow.follower_id = m.uploader_id
+                  AND reverse_follow.following_id = $1::uuid
+              )
             )
-          )
+          GROUP BY ${mediaFeedGroupKeySql}, m.uploader_id, m.trip_id
+        ) media_group
+        LEFT JOIN profiles p ON p.id = media_group.user_id
+        LEFT JOIN trails t ON t.id = media_group.trip_id
       )
       SELECT *
       FROM feed_rows
@@ -1270,61 +1354,31 @@ export async function getFeedItemByEntity(req: Request, res: Response): Promise<
         ORDER BY ap.created_at DESC
         LIMIT 1
       ),
+      target_media_seed AS (
+        SELECT ${mediaFeedGroupKeySql} AS group_key
+        FROM media m
+        WHERE $2::text = 'media'
+          AND m.id = $3::uuid
+          AND (m.is_public = true OR m.uploader_id = $1::uuid)
+        LIMIT 1
+      ),
       target_media AS (
         SELECT
-          m.id,
-          m.created_at,
+          media_group.id,
+          media_group.created_at,
           'media'::text AS type,
           NULL::integer AS rating,
           NULL::text AS title,
           NULL::text AS content,
-          m.caption,
-          CASE WHEN m.is_public THEN 'public' ELSE 'private' END AS visibility,
-          m.url AS photo_url,
-          json_build_array(
-            json_build_object(
-              'id', m.id,
-              'url', m.url,
-              'created_at', m.created_at,
-              'nature_sighting',
-              (
-                SELECT row_to_json(sighting)
-                FROM (
-                  SELECT
-                    ns.id,
-                    ns.trail_id,
-                    ns.activity_id,
-                    ns.user_id,
-                    ns.latitude,
-                    ns.longitude,
-                    ns.category,
-                    ns.species,
-                    ns.common_name,
-                    ns.confidence,
-                    ns.photo_url,
-                    ns.photo_id,
-                    ns.photo_type,
-                    ns.media_id,
-                    ns.activity_media_id,
-                    ns.classification,
-                    ns.language,
-                    ns.source,
-                    ns.created_at,
-                    ns.updated_at
-                  FROM nature_sightings ns
-                  WHERE ns.photo_id = m.id
-                    AND ns.photo_type = 'media'
-                  ORDER BY ns.created_at DESC
-                  LIMIT 1
-                ) sighting
-              )
-            )
-          ) AS photos,
-          m.uploader_id AS user_id,
+          media_group.caption,
+          CASE WHEN media_group.is_public THEN 'public' ELSE 'private' END AS visibility,
+          media_group.photo_url,
+          media_group.photos,
+          media_group.user_id,
           COALESCE(p.full_name, 'Trail friend') AS full_name,
           p.avatar_url,
           t.id AS trail_id,
-          COALESCE(t.name, m.location_name) AS trail_name,
+          COALESCE(t.name, media_group.location_name) AS trail_name,
           t.image AS trail_image,
           NULL::uuid AS activity_id,
           NULL::numeric AS distance_meters,
@@ -1336,12 +1390,106 @@ export async function getFeedItemByEntity(req: Request, res: Response): Promise<
           '0'::text AS likes_count,
           '0'::text AS comments_count,
           false AS is_liked_by_user
-        FROM media m
-        LEFT JOIN profiles p ON p.id = m.uploader_id
-        LEFT JOIN trails t ON t.id = m.trip_id
-        WHERE $2::text = 'media'
-          AND m.id = $3::uuid
-          AND (m.is_public = true OR m.uploader_id = $1::uuid)
+        FROM (
+          SELECT
+            (ARRAY_AGG(m.id ORDER BY m.created_at ASC, m.id ASC))[1] AS id,
+            MAX(m.created_at) AS created_at,
+            ${mediaFeedGroupKeySql} AS group_key,
+            MAX(m.caption) AS caption,
+            BOOL_OR(m.is_public) AS is_public,
+            (json_agg(
+              json_build_object(
+                'id', m.id,
+                'url', m.url,
+                'created_at', m.created_at,
+                'nature_sighting',
+                (
+                  SELECT row_to_json(sighting)
+                  FROM (
+                    SELECT
+                      ns.id,
+                      ns.trail_id,
+                      ns.activity_id,
+                      ns.user_id,
+                      ns.latitude,
+                      ns.longitude,
+                      ns.category,
+                      ns.species,
+                      ns.common_name,
+                      ns.confidence,
+                      ns.photo_url,
+                      ns.photo_id,
+                      ns.photo_type,
+                      ns.media_id,
+                      ns.activity_media_id,
+                      ns.classification,
+                      ns.language,
+                      ns.source,
+                      ns.created_at,
+                      ns.updated_at
+                    FROM nature_sightings ns
+                    WHERE ns.photo_id = m.id
+                      AND ns.photo_type = 'media'
+                    ORDER BY ns.created_at DESC
+                    LIMIT 1
+                  ) sighting
+                )
+              )
+              ORDER BY m.created_at ASC
+            )->0->>'url') AS photo_url,
+            COALESCE(
+              json_agg(
+                json_build_object(
+                  'id', m.id,
+                  'url', m.url,
+                  'created_at', m.created_at,
+                  'nature_sighting',
+                  (
+                    SELECT row_to_json(sighting)
+                    FROM (
+                      SELECT
+                        ns.id,
+                        ns.trail_id,
+                        ns.activity_id,
+                        ns.user_id,
+                        ns.latitude,
+                        ns.longitude,
+                        ns.category,
+                        ns.species,
+                        ns.common_name,
+                        ns.confidence,
+                        ns.photo_url,
+                        ns.photo_id,
+                        ns.photo_type,
+                        ns.media_id,
+                        ns.activity_media_id,
+                        ns.classification,
+                        ns.language,
+                        ns.source,
+                        ns.created_at,
+                        ns.updated_at
+                      FROM nature_sightings ns
+                      WHERE ns.photo_id = m.id
+                        AND ns.photo_type = 'media'
+                      ORDER BY ns.created_at DESC
+                      LIMIT 1
+                    ) sighting
+                  )
+                )
+                ORDER BY m.created_at ASC
+              ),
+              '[]'::json
+            ) AS photos,
+            m.uploader_id AS user_id,
+            m.trip_id,
+            MAX(m.location_name) AS location_name
+          FROM media m
+          JOIN target_media_seed seed
+            ON seed.group_key = ${mediaFeedGroupKeySql}
+          GROUP BY ${mediaFeedGroupKeySql}, m.uploader_id, m.trip_id
+        ) media_group
+        LEFT JOIN profiles p ON p.id = media_group.user_id
+        LEFT JOIN trails t ON t.id = media_group.trip_id
       )
       SELECT *
       FROM target_review

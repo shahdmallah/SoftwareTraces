@@ -32,6 +32,7 @@ const SAFETY_ALERT_RADIUS_METERS = 5000;
 const SAFETY_ALERT_REFRESH_MS = 60000;
 const SAFETY_ALERT_REFRESH_DISTANCE_METERS = 250;
 const OFF_ROUTE_DISTANCE_METERS = 50;
+const MIN_FINISH_MOVEMENT_METERS = 12;
 
 let Mapbox: MapboxModule | null = null;
 let mapboxLoadError: string | null = null;
@@ -87,6 +88,36 @@ function getDistanceMeters(from: [number, number], to: [number, number]) {
     Math.cos(lat1) * Math.cos(lat2) * Math.sin(lngDelta / 2) * Math.sin(lngDelta / 2);
 
   return earthRadius * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function getPathDistanceMeters(path: [number, number][]) {
+  return path.reduce((total, point, index) => {
+    const previous = path[index - 1];
+    return previous ? total + getDistanceMeters(previous, point) : total;
+  }, 0);
+}
+
+function getSosDialogTitle(result: SosCreateResult): string {
+  if (result.notification_status === 'failed') {
+    return 'SOS created';
+  }
+
+  if (result.notification_status === 'partial') {
+    return 'SOS sent';
+  }
+
+  return 'SOS sent';
+}
+
+function getSosDialogMessage(result: SosCreateResult): string {
+  const headline =
+    result.notification_status === 'failed'
+      ? `Emergency contacts reached: ${result.contacts_notified}/${result.emergency_contacts_count}.`
+      : result.notification_status === 'partial'
+        ? `Some emergency contacts were reached: ${result.contacts_notified}/${result.emergency_contacts_count}.`
+        : `Emergency contacts reached: ${result.contacts_notified}/${result.emergency_contacts_count}.`;
+
+  return result.sos_event.status_note ? `${headline}\n\n${result.sos_event.status_note}` : headline;
 }
 
 function getBearingDegrees(from: [number, number], to: [number, number]) {
@@ -175,6 +206,7 @@ export function RecordingScreen() {
   } = useTrailTracking();
   const [isCapturingPhoto, setIsCapturingPhoto] = useState(false);
   const [isSendingSos, setIsSendingSos] = useState(false);
+  const [isFinishing, setIsFinishing] = useState(false);
   const [lastSosResult, setLastSosResult] = useState<SosCreateResult | null>(null);
   const [isPanelExpanded, setIsPanelExpanded] = useState(false);
   const [isPhotosExpanded, setIsPhotosExpanded] = useState(false);
@@ -446,11 +478,43 @@ export function RecordingScreen() {
     ],
   );
 
-  const handleFinish = () => {
-    const completed = finishTrailSession();
-    if (completed?.trailId === trailId) {
-      closingActionRef.current = 'finish';
+  const handleFinish = async () => {
+    if (isFinishing) {
+      return;
     }
+
+    const startingPoint = recordedPath[0] ?? currentLocation;
+    const pathDistanceMeters = getPathDistanceMeters(recordedPath);
+    const directDistanceMeters =
+      startingPoint && currentLocation
+        ? getDistanceMeters(startingPoint, currentLocation)
+        : 0;
+    const hasTrackedMovement =
+      recordedPath.length >= 2 ||
+      pathDistanceMeters >= MIN_FINISH_MOVEMENT_METERS ||
+      directDistanceMeters >= MIN_FINISH_MOVEMENT_METERS;
+
+    if (!hasTrackedMovement) {
+      Alert.alert(
+        'Trail not finished yet',
+        "We haven't detected meaningful movement on this recording yet. Keep tracking until your location changes, then finish the trail.",
+      );
+      return;
+    }
+
+    setIsFinishing(true);
+
+    try {
+      const completed = await finishTrailSession();
+      if (completed?.trailId === trailId) {
+        closingActionRef.current = 'finish';
+        return;
+      }
+    } catch (error) {
+      Alert.alert('Unable to finish hike', error instanceof Error ? error.message : 'Please try again.');
+    }
+
+    setIsFinishing(false);
   };
 
   const handleCancel = () => {
@@ -490,8 +554,8 @@ export function RecordingScreen() {
             });
             setLastSosResult(result);
             Alert.alert(
-              'SOS sent',
-              `Alert ${result.sos_event.id} is ${result.sos_event.status}. ${result.contacts_notified}/${result.emergency_contacts_count} contacts notified (${result.notification_status}).`,
+              getSosDialogTitle(result),
+              getSosDialogMessage(result),
             );
           } catch (error) {
             Alert.alert('Unable to send SOS', error instanceof Error ? error.message : 'Please try again or contact emergency services directly.');
@@ -917,11 +981,16 @@ export function RecordingScreen() {
                         <Text style={styles.sosSummaryTitle}>
                           {lastSosResult.notification_status === 'failed'
                             ? 'SOS created, but no contacts were notified'
-                            : 'SOS sent successfully'}
+                            : lastSosResult.notification_status === 'partial'
+                              ? 'SOS sent, but only some contacts were notified'
+                              : 'SOS sent successfully'}
                         </Text>
                         <Text style={styles.sosSummaryText} numberOfLines={2}>
                           Alert {lastSosResult.sos_event.id.slice(0, 8)} · {lastSosResult.contacts_notified}/
-                          {lastSosResult.emergency_contacts_count} contacts notified · {lastSosResult.sos_event.status}
+                          {lastSosResult.emergency_contacts_count} contacts notified ·
+                          {lastSosResult.sos_event.status === 'notified' && lastSosResult.notification_status === 'partial'
+                            ? ' partial'
+                            : ` ${lastSosResult.sos_event.status}`}
                         </Text>
                       </View>
                     </View>
@@ -994,9 +1063,13 @@ export function RecordingScreen() {
                   ) : null}
 
                   <View style={styles.actionButtonsRow}>
-                    <Pressable style={[styles.actionButton, styles.finishButton]} onPress={handleFinish}>
-                      <Ionicons name="flag-outline" size={16} color="#fff" />
-                      <Text style={styles.finishButtonText}>Finish trail</Text>
+                    <Pressable
+                      style={[styles.actionButton, styles.finishButton, isFinishing && styles.finishButtonDisabled]}
+                      onPress={() => void handleFinish()}
+                      disabled={isFinishing}
+                    >
+                      {isFinishing ? <ActivityIndicator color="#fff" /> : <Ionicons name="flag-outline" size={16} color="#fff" />}
+                      <Text style={styles.finishButtonText}>{isFinishing ? 'Finishing...' : 'Finish trail'}</Text>
                     </Pressable>
 
                     <Pressable style={[styles.actionButton, styles.cancelButton]} onPress={handleCancel}>
@@ -1007,8 +1080,12 @@ export function RecordingScreen() {
                 </>
               ) : (
                 <View style={styles.compactFooterRow}>
-                  <Pressable style={[styles.actionButton, styles.compactFinishButton]} onPress={handleFinish}>
-                    <Ionicons name="flag-outline" size={16} color="#fff" />
+                  <Pressable
+                    style={[styles.actionButton, styles.compactFinishButton, isFinishing && styles.finishButtonDisabled]}
+                    onPress={() => void handleFinish()}
+                    disabled={isFinishing}
+                  >
+                    {isFinishing ? <ActivityIndicator color="#fff" /> : <Ionicons name="flag-outline" size={16} color="#fff" />}
                   </Pressable>
 
                   <Pressable style={[styles.actionButton, styles.compactCancelButton]} onPress={handleCancel}>
@@ -1586,6 +1663,9 @@ const styles = StyleSheet.create({
   finishButton: {
     paddingVertical: 15,
     backgroundColor: '#1E7A46',
+  },
+  finishButtonDisabled: {
+    opacity: 0.7,
   },
   finishButtonText: {
     color: '#FFFFFF',

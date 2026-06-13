@@ -103,7 +103,7 @@ function RecommendationCard({
           ) : null}
         </View>
 
-        <Text style={[styles.reasonText, isArabic ? rtlText : ltrText]} numberOfLines={3}>
+        <Text style={[styles.reasonText, isArabic ? rtlText : ltrText]}>
           {recommendation.reason || 'Recommended for your hiking profile.'}
         </Text>
 

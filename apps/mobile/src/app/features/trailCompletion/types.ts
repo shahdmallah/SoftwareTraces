@@ -29,6 +29,8 @@ export type TrailCompletionDraft = {
     uri: string;
     coordinate: [number, number];
     capturedAt: number;
+    distanceKm?: number;
+    elevationM?: number;
   }>;
   postVisibility?: 'public' | 'friends' | 'private';
   photoUris: string[];
@@ -44,6 +46,8 @@ export type TrailCompletionDraft = {
   elevationProfile?: Array<{
     distanceKm: number;
     elevationM: number;
+    capturedAt?: number;
+    speedKph?: number;
   }>;
   trailDistanceKm?: number;
   trailElevationGainM?: number;

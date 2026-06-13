@@ -87,7 +87,7 @@ type TrailTrackingContextValue = {
   resumeTrailSession: (trailId: string, activityId: string) => Promise<void>;
   pauseOrResumeTracking: () => void;
   addSessionPhoto: (photo: SessionPhoto) => void;
-  finishTrailSession: () => CompletedTrailSession | null;
+  finishTrailSession: () => Promise<CompletedTrailSession | null>;
   cancelTrailSession: () => void;
   clearFinishedSession: () => void;
 };
@@ -1224,7 +1224,7 @@ export function TrailTrackingProvider({ children }: { children: ReactNode }) {
       });
   }, [activeSession?.backendActivityId, activeSession?.sessionPhotos, syncSessionPhoto]);
 
-  const finishTrailSession = useCallback(() => {
+  const finishTrailSession = useCallback(async () => {
     if (!activeSession) {
       return null;
     }
@@ -1251,16 +1251,18 @@ export function TrailTrackingProvider({ children }: { children: ReactNode }) {
       const newSamples = activeSession.recordedSamples.slice(activeSession.syncedPointCount);
 
       if (newSamples.length) {
-        void addActivityPoints(
+        await addActivityPoints(
           backendActivityId,
           samplesToPointPayloads(newSamples),
-        ).catch(() => undefined);
+        ).catch((error) => {
+          console.warn('[TrailTracking] Failed to sync final activity points before completion', error);
+        });
       }
 
       const elevationStats = getElevationStats(activeSession.recordedSamples);
       const speedStats = getSpeedStats(activeSession.recordedSamples, distanceMeters, elapsedMs);
 
-      void completeActivity(backendActivityId, {
+      await completeActivity(backendActivityId, {
         endedAt: new Date(finishedAt).toISOString(),
         distanceMeters,
         elevationGainMeters: elevationStats.gain || activeSession.trail?.elevationGain || 0,
@@ -1269,8 +1271,8 @@ export function TrailTrackingProvider({ children }: { children: ReactNode }) {
         minElevationMeters: elevationStats.min,
         maxSpeedMps: speedStats.max,
         avgSpeedMps: speedStats.average,
-      }).catch(() => undefined);
-      void clearActivityElapsedSnapshot(backendActivityId);
+      });
+      await clearActivityElapsedSnapshot(backendActivityId);
     }
 
     if (navigationSessionId) {

@@ -1,18 +1,17 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import * as ImagePicker from 'expo-image-picker';
+import { ActivityIndicator, Alert, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { Ionicons } from '@expo/vector-icons';
 import { RootStackParamList } from '../navigation/types';
 import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
-import { deleteTrail, getTrailById, updateTrail, uploadTrailPhoto, type Trail } from '../api/trailsApi';
+import { deleteTrail, getTrailById, unpublishTrail, type Trail } from '../api/trailsApi';
 import { getMyCreatedTrails } from '../api/ownedTrailsApi';
 import { getMyTrailDrafts } from '../api/trailDraftsApi';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ltrRow, ltrText, rtlRow, rtlText } from '../utils/direction';
-import { untrackOwnedTrail, useOwnedTrails } from '../state/ownedTrails';
+import { trackOwnedTrail, untrackOwnedTrail, useOwnedTrails } from '../state/ownedTrails';
 
 type MyTrailsNavigationProp = StackNavigationProp<RootStackParamList, 'MyTrails'>;
 
@@ -26,12 +25,9 @@ export function MyTrailsScreen() {
   const [trails, setTrails] = useState<Trail[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [busyTrailId, setBusyTrailId] = useState<string | null>(null);
-  const [editingTrailId, setEditingTrailId] = useState<string | null>(null);
-  const [editName, setEditName] = useState('');
-  const [editDescription, setEditDescription] = useState('');
-  const [editRegion, setEditRegion] = useState('');
-  const [editPhotoUri, setEditPhotoUri] = useState<string | null>(null);
+  const [busyAction, setBusyAction] = useState<'delete' | 'unpublish' | null>(null);
   const [errorMessage, setErrorMessage] = useState('');
+  const [statusMessage, setStatusMessage] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
@@ -40,6 +36,7 @@ export function MyTrailsScreen() {
     const loadTrails = async () => {
       setIsLoading(true);
       setErrorMessage('');
+      setStatusMessage('');
       try {
         const [response, draftResponse] = await Promise.all([
           getMyCreatedTrails({ limit: 100 }).catch(() => ({ items: [] as Trail[] })),
@@ -92,7 +89,9 @@ export function MyTrailsScreen() {
         style: 'destructive',
         onPress: async () => {
           setBusyTrailId(trail.id);
+          setBusyAction('delete');
           setErrorMessage('');
+          setStatusMessage('');
           try {
             await deleteTrail(trail.id);
             untrackOwnedTrail(trail.id);
@@ -101,85 +100,38 @@ export function MyTrailsScreen() {
             setErrorMessage(error instanceof Error ? error.message : 'Unable to delete trail.');
           } finally {
             setBusyTrailId(null);
+            setBusyAction(null);
           }
         },
       },
     ]);
   };
 
-  const beginEdit = (trail: Trail) => {
-    setEditingTrailId(trail.id);
-    setEditName(trail.name);
-    setEditDescription(trail.description);
-    setEditRegion(trail.region);
-    setEditPhotoUri(null);
-    setErrorMessage('');
-  };
-
-  const cancelEdit = () => {
-    setEditingTrailId(null);
-    setEditName('');
-    setEditDescription('');
-    setEditRegion('');
-    setEditPhotoUri(null);
-  };
-
-  const handlePickEditPhoto = async () => {
-    try {
-      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (!permission.granted) {
-        setErrorMessage('Media library access is required to choose a trail photo.');
-        return;
-      }
-
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        quality: 0.8,
-        allowsEditing: true,
-        aspect: [4, 3],
-      });
-
-      if (!result.canceled && result.assets.length) {
-        setEditPhotoUri(result.assets[0].uri);
-        setErrorMessage('');
-      }
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'Unable to choose photo.');
-    }
-  };
-
-  const handleSaveEdit = async (trail: Trail) => {
-    const name = editName.trim();
-    const description = editDescription.trim();
-    const region = editRegion.trim();
-
-    if (!name) {
-      setErrorMessage('Trail name is required.');
-      return;
-    }
-
-    setBusyTrailId(trail.id);
-    setErrorMessage('');
-    try {
-      await updateTrail(trail.id, { name, description, region });
-      let nextImage = trail.image;
-      if (editPhotoUri) {
-        const uploadResponse = await uploadTrailPhoto(trail.id, editPhotoUri);
-        nextImage = uploadResponse.data.url || nextImage;
-      }
-      setTrails((current) =>
-        current.map((item) =>
-          item.id === trail.id
-            ? { ...item, name, description, region, image: nextImage }
-            : item,
-        ),
-      );
-      cancelEdit();
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'Unable to update trail.');
-    } finally {
-      setBusyTrailId(null);
-    }
+  const handleUnpublish = (trail: Trail) => {
+    Alert.alert('Unpublish trail?', `${trail.name} will move back to your drafts.`, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Unpublish',
+        onPress: async () => {
+          setBusyTrailId(trail.id);
+          setBusyAction('unpublish');
+          setErrorMessage('');
+          setStatusMessage('');
+          try {
+            await unpublishTrail(trail.id);
+            untrackOwnedTrail(trail.id);
+            trackOwnedTrail(trail.id, 'draft');
+            setTrails((current) => current.filter((item) => item.id !== trail.id));
+            setStatusMessage(`${trail.name} was moved back to drafts.`);
+          } catch (error) {
+            setErrorMessage(error instanceof Error ? error.message : 'Unable to unpublish trail.');
+          } finally {
+            setBusyTrailId(null);
+            setBusyAction(null);
+          }
+        },
+      },
+    ]);
   };
 
   return (
@@ -211,6 +163,8 @@ export function MyTrailsScreen() {
             <Text style={styles.summaryLabel}>Reviews</Text>
           </View>
         </View>
+
+        {statusMessage ? <Text style={styles.successText}>{statusMessage}</Text> : null}
 
         {isLoading ? (
           <View style={styles.stateWrap}>
@@ -254,59 +208,19 @@ export function MyTrailsScreen() {
                       </Text>
                     </View>
                   </View>
-                  {editingTrailId === trail.id ? (
-                    <View style={styles.editPanel}>
-                      <TextInput value={editName} onChangeText={setEditName} placeholder="Trail name" placeholderTextColor="#A18F7A" style={styles.input} />
-                      <TextInput value={editRegion} onChangeText={setEditRegion} placeholder="Region" placeholderTextColor="#A18F7A" style={styles.input} />
-                      <TextInput
-                        value={editDescription}
-                        onChangeText={setEditDescription}
-                        placeholder="Description"
-                        placeholderTextColor="#A18F7A"
-                        style={[styles.input, styles.textArea]}
-                        multiline
-                      />
-                      <View style={styles.photoEditRow}>
-                        <Image source={{ uri: editPhotoUri ?? trail.image }} style={styles.photoEditPreview} />
-                        <View style={styles.photoEditActions}>
-                          <Pressable style={styles.secondaryButton} onPress={handlePickEditPhoto} disabled={busyTrailId === trail.id}>
-                            <Ionicons name="image-outline" size={15} color="#630E13" />
-                            <Text style={styles.secondaryButtonText}>{editPhotoUri ? 'Change photo' : 'Edit photo'}</Text>
-                          </Pressable>
-                          {editPhotoUri ? (
-                            <Pressable style={styles.secondaryButton} onPress={() => setEditPhotoUri(null)} disabled={busyTrailId === trail.id}>
-                              <Text style={styles.secondaryButtonText}>Remove change</Text>
-                            </Pressable>
-                          ) : null}
-                        </View>
-                      </View>
-                    </View>
-                  ) : null}
                   <View style={[styles.actionRow, isArabic ? rtlRow : ltrRow]}>
-                    {editingTrailId === trail.id ? (
-                      <>
-                        <Pressable style={styles.primaryButtonSmall} onPress={() => handleSaveEdit(trail)} disabled={busyTrailId === trail.id}>
-                          {busyTrailId === trail.id ? <ActivityIndicator color="#fff" /> : <Ionicons name="save-outline" size={15} color="#fff" />}
-                          <Text style={styles.primaryButtonText}>Save</Text>
-                        </Pressable>
-                        <Pressable style={styles.secondaryButton} onPress={cancelEdit} disabled={busyTrailId === trail.id}>
-                          <Text style={styles.secondaryButtonText}>Cancel</Text>
-                        </Pressable>
-                      </>
-                    ) : (
-                      <>
-                        <Pressable style={styles.secondaryButton} onPress={() => navigation.navigate('TrailDetail', { trailId: trail.id })}>
-                          <Ionicons name="eye-outline" size={15} color="#630E13" />
-                          <Text style={styles.secondaryButtonText}>View</Text>
-                        </Pressable>
-                        <Pressable style={styles.secondaryButton} onPress={() => beginEdit(trail)}>
-                          <Ionicons name="pencil-outline" size={15} color="#630E13" />
-                          <Text style={styles.secondaryButtonText}>Edit</Text>
-                        </Pressable>
-                      </>
-                    )}
+                    <Pressable style={styles.secondaryButton} onPress={() => navigation.navigate('TrailDetail', { trailId: trail.id })}>
+                      <Ionicons name="eye-outline" size={15} color="#630E13" />
+                      <Text style={styles.secondaryButtonText}>View</Text>
+                    </Pressable>
+                  </View>
+                  <View style={[styles.actionRow, isArabic ? rtlRow : ltrRow]}>
+                    <Pressable style={styles.secondaryButton} onPress={() => handleUnpublish(trail)} disabled={busyTrailId === trail.id}>
+                      {busyTrailId === trail.id && busyAction === 'unpublish' ? <ActivityIndicator color="#630E13" /> : <Ionicons name="arrow-undo-outline" size={15} color="#630E13" />}
+                      <Text style={styles.secondaryButtonText}>Unpublish</Text>
+                    </Pressable>
                     <Pressable style={styles.dangerButton} onPress={() => handleDelete(trail)} disabled={busyTrailId === trail.id}>
-                      {busyTrailId === trail.id && editingTrailId !== trail.id ? <ActivityIndicator color="#BB2823" /> : <Ionicons name="trash-outline" size={15} color="#BB2823" />}
+                      {busyTrailId === trail.id && busyAction === 'delete' ? <ActivityIndicator color="#BB2823" /> : <Ionicons name="trash-outline" size={15} color="#BB2823" />}
                       <Text style={styles.dangerButtonText}>Delete</Text>
                     </Pressable>
                   </View>
@@ -346,14 +260,7 @@ const styles = StyleSheet.create({
   statusText: { color: '#1E7A46', fontSize: 11, fontWeight: '900' },
   privateStatusPill: { backgroundColor: '#F1E7F3' },
   privateStatusText: { color: '#6F367A' },
-  editPanel: { gap: 10, marginTop: 12 },
-  input: { minHeight: 44, borderRadius: 14, paddingHorizontal: 12, backgroundColor: '#F6F0E0', color: '#2C2418', fontSize: 13, fontWeight: '700' },
-  textArea: { minHeight: 86, paddingTop: 12, textAlignVertical: 'top', fontWeight: '500' },
-  photoEditRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  photoEditPreview: { width: 86, height: 70, borderRadius: 14, backgroundColor: '#D8CCB8' },
-  photoEditActions: { flex: 1, gap: 8 },
   actionRow: { flexDirection: 'row', gap: 10, marginTop: 14 },
-  primaryButtonSmall: { flex: 1, minHeight: 42, borderRadius: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, backgroundColor: '#630E13' },
   secondaryButton: { flex: 1, minHeight: 42, borderRadius: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, backgroundColor: '#F7EBE8' },
   secondaryButtonText: { color: '#630E13', fontSize: 13, fontWeight: '900' },
   dangerButton: { flex: 1, minHeight: 42, borderRadius: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, backgroundColor: '#FFF1F0' },
@@ -363,4 +270,5 @@ const styles = StyleSheet.create({
   stateWrap: { alignItems: 'center', justifyContent: 'center', paddingVertical: 42, gap: 14 },
   stateText: { color: '#6B5D4E', fontSize: 14, textAlign: 'center' },
   errorText: { color: '#8B1E1E', fontSize: 13, fontWeight: '800', textAlign: 'center' },
+  successText: { marginBottom: 12, color: '#1E7A46', fontSize: 13, fontWeight: '800', textAlign: 'center' },
 });

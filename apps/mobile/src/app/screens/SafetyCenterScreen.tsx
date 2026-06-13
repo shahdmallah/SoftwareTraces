@@ -64,11 +64,20 @@ const statusTone: Record<string, { bg: string; fg: string; label: string }> = {
   created: { bg: '#F7E8D0', fg: '#7A4D00', label: 'Created' },
   notifying: { bg: '#F7E8D0', fg: '#7A4D00', label: 'Notifying' },
   notified: { bg: '#E8F2DF', fg: '#2F6B4F', label: 'Notified' },
+  partial: { bg: '#FDF1DD', fg: '#8A5A12', label: 'Partial' },
   acknowledged: { bg: '#E6EEF7', fg: '#315D8C', label: 'Acknowledged' },
   resolved: { bg: '#E8F2DF', fg: '#2F6B4F', label: 'Resolved' },
   cancelled: { bg: '#EFE8DE', fg: '#6B5D4E', label: 'Cancelled' },
   failed: { bg: '#F9E2E1', fg: '#9B1C1C', label: 'Failed' },
 };
+
+function getDisplayedSosState(sos: Pick<SosAlert, 'status' | 'notification_status'>) {
+  if (sos.status === 'notified' && sos.notification_status === 'partial') {
+    return statusTone.partial;
+  }
+
+  return statusTone[sos.status] ?? statusTone.created;
+}
 
 function formatDate(value?: string | null): string {
   if (!value) return '';
@@ -165,8 +174,8 @@ export function SafetyCenterScreen() {
       return;
     }
 
-    if (!compact(draft.phone) && !compact(draft.email) && !draft.notify_by_push) {
-      Alert.alert('Reachable contact needed', 'Add a phone, email, or keep push enabled.');
+    if (!compact(draft.phone) && !compact(draft.email)) {
+      Alert.alert('Reachable contact needed', 'Add a phone number or email. Push only works for linked Traces accounts.');
       return;
     }
 
@@ -359,7 +368,7 @@ export function SafetyCenterScreen() {
               </View>
               <View style={styles.summaryDivider} />
               <View style={styles.summaryItem}>
-                <Text style={styles.summaryValue}>{latestSos ? statusTone[latestSos.status]?.label ?? latestSos.status : 'None'}</Text>
+                <Text style={styles.summaryValue}>{latestSos ? getDisplayedSosState(latestSos).label : 'None'}</Text>
                 <Text style={styles.summaryLabel}>Latest</Text>
               </View>
             </AnimatedBlock>
@@ -368,7 +377,7 @@ export function SafetyCenterScreen() {
               <View style={styles.sectionHeader}>
                 <View>
                   <Text style={styles.sectionTitle}>Emergency contacts</Text>
-                  <Text style={styles.sectionSubtitle}>Active contacts receive in-app SOS messages first.</Text>
+                  <Text style={styles.sectionSubtitle}>Phone numbers are best right now. Push only works for linked Traces accounts.</Text>
                 </View>
                 <Pressable style={styles.textButton} onPress={() => setDraft(emptyContactDraft)}>
                   <Text style={styles.textButtonLabel}>Add</Text>
@@ -442,7 +451,7 @@ export function SafetyCenterScreen() {
                 </View>
               ) : (
                 sosAlerts.map((sos) => {
-                  const tone = statusTone[sos.status] ?? statusTone.created;
+                  const tone = getDisplayedSosState(sos);
                   return (
                     <View key={sos.id} style={styles.sosRow}>
                       <View style={styles.sosTopRow}>

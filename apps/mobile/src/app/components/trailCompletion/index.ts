@@ -1,5 +1,6 @@
 export { CompletionHero } from './CompletionHero';
 export { TrailStatsCard } from './TrailStatsCard';
+export { ElevationPhotoTour } from './ElevationPhotoTour';
 export { JourneyTimeline } from './JourneyTimeline';
 export { ReviewSummary } from './ReviewSummary';
 export { PhotoGalleryStrip } from './PhotoGalleryStrip';

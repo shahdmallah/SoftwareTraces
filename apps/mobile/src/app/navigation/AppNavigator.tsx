@@ -370,6 +370,11 @@ async function openPushNotificationDestination(data: PushNotificationData): Prom
     return;
   }
 
+  if (type === 'emergency_contact_alert') {
+    navigationRef.navigate('SafetyCenter');
+    return;
+  }
+
   if (type === 'danger_alert') {
     if (trailId && (activityId || isNavigationAlert)) {
       navigationRef.navigate('Recording', activityId ? { trailId, activityId } : { trailId });

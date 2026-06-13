@@ -551,20 +551,40 @@ const RecapCard = memo(function RecapCard({
   const [mediaWidth, setMediaWidth] = useState(0);
   const [activeMediaIndex, setActiveMediaIndex] = useState(0);
   const mediaScrollRef = React.useRef<ScrollView | null>(null);
-  const galleryUris = (item.photoUris?.length ? item.photoUris : item.image ? [item.image] : [])
-    .map((uri) => (hasImageUri(uri) ? uri.trim() : ''))
-    .filter(Boolean);
-  const imageUri = galleryUris[0] ?? null;
+  const galleryEntries = (item.photoEntries?.length
+    ? item.photoEntries
+    : (item.photoUris?.length ? item.photoUris : item.image ? [item.image] : []).map((uri, index) => ({
+        id: `${item.id}-${index}`,
+        uri,
+        natureSighting: null,
+      })))
+    .map((entry) => ({
+      ...entry,
+      uri: hasImageUri(entry.uri) ? entry.uri.trim() : '',
+    }))
+    .filter((entry) => Boolean(entry.uri));
+  const galleryUris = galleryEntries.map((entry) => entry.uri);
+  const imageUri = galleryEntries[0]?.uri ?? null;
   const visibleComments = item.previewComments ?? [];
-  const firstNatureSighting = item.natureSightings?.find((sighting) => getNatureSightingName(sighting));
-  const natureLabel = getNatureSightingName(firstNatureSighting);
-  const natureScientificName = getNatureSightingScientificName(firstNatureSighting);
-  const natureConfidence = getNatureSightingConfidenceLabel(firstNatureSighting);
-  const natureExtraCount = Math.max(0, (item.natureSightings?.length ?? 0) - 1);
+  const activeGalleryEntry = galleryEntries[activeMediaIndex] ?? galleryEntries[0];
+  const activeNatureSighting = activeGalleryEntry?.natureSighting ?? null;
+  const fallbackNatureSighting = item.natureSightings?.find((sighting) => getNatureSightingName(sighting));
+  const visibleNatureSighting = item.photoEntries?.length
+    ? (getNatureSightingName(activeNatureSighting) ? activeNatureSighting : null)
+    : (getNatureSightingName(activeNatureSighting) ? activeNatureSighting : fallbackNatureSighting);
+  const natureLabel = getNatureSightingName(visibleNatureSighting);
+  const natureScientificName = getNatureSightingScientificName(visibleNatureSighting);
+  const natureConfidence = getNatureSightingConfidenceLabel(visibleNatureSighting);
   const isMediaPost = item.sourceType === 'media';
   const supportsLikeAction = !isMediaPost || Boolean(item.photoId || item.id);
   const supportsComments = !isMediaPost;
   const canOpenRecap = !isMediaPost;
+
+  useEffect(() => {
+    if (activeMediaIndex >= galleryEntries.length) {
+      setActiveMediaIndex(0);
+    }
+  }, [activeMediaIndex, galleryEntries.length]);
 
   const handleLike = async () => {
     setPendingAction('like');
@@ -720,10 +740,10 @@ const RecapCard = memo(function RecapCard({
                 handleMediaScrollEnd(event.nativeEvent.contentOffset.x);
               }}
             >
-              {galleryUris.map((uri, index) => (
+              {galleryEntries.map((entry, index) => (
                 <Image
-                  key={`${uri}-${index}`}
-                  source={{ uri }}
+                  key={entry.id ?? `${entry.uri}-${index}`}
+                  source={{ uri: entry.uri }}
                   style={[styles.media, mediaWidth ? { width: mediaWidth } : null]}
                   resizeMode="cover"
                 />
@@ -758,9 +778,9 @@ const RecapCard = memo(function RecapCard({
 
             {galleryUris.length > 1 ? (
               <View style={styles.mediaPaginationDots}>
-                {galleryUris.map((uri, index) => (
+                {galleryEntries.map((entry, index) => (
                   <View
-                    key={`${uri}-${index}`}
+                    key={entry.id ?? `${entry.uri}-${index}`}
                     style={[styles.mediaPaginationDot, index === activeMediaIndex && styles.mediaPaginationDotActive]}
                   />
                 ))}
@@ -866,10 +886,10 @@ const RecapCard = memo(function RecapCard({
                 </Text>
               ) : null}
             </View>
-            {natureConfidence || natureExtraCount > 0 ? (
+            {natureConfidence ? (
               <View style={styles.natureSightingPill}>
                 <Text style={styles.natureSightingPillText}>
-                  {natureExtraCount > 0 ? `+${natureExtraCount}` : natureConfidence}
+                  {natureConfidence}
                 </Text>
               </View>
             ) : null}

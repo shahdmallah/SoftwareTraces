@@ -11,6 +11,7 @@ export type NotificationType =
   | 'meetup_join'
   | 'meetup_update'
   | 'sos_alert'
+  | 'emergency_contact_alert'
   | 'danger_alert'
   | 'achievement'
   | 'system';

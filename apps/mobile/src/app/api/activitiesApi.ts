@@ -86,9 +86,11 @@ export type ActivityDetail = {
   trail_id?: string | null;
   user_id: string;
   full_name?: string | null;
+  notes?: string | null;
   distance_meters?: number | null;
   elapsed_time_seconds?: number | null;
   elevation_gain_meters?: number | null;
+  avg_speed_mps?: number | null;
   start_time?: string;
   end_time?: string | null;
   status: string;

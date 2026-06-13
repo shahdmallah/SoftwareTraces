@@ -7,11 +7,12 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { checkAchievements } from '../api/achievementsApi';
-import { shareActivityPost } from '../api/activitiesApi';
+import { getActivityById, getActivityMedia, shareActivityPost, type ActivityDetail, type ActivityMedia } from '../api/activitiesApi';
 import { AnimatedBlock, AnimatedScreen } from '../components/AnimatedUI';
 import {
   CommunitySuggestions,
   CompletionHero,
+  ElevationPhotoTour,
   JourneyTimeline,
   PhotoGalleryStrip,
   ReviewSummary,
@@ -25,7 +26,10 @@ import {
   formatCompletionDuration,
   formatDistanceKm,
   formatElevation,
+  formatPaceMinPerKm,
+  formatSpeedKph,
 } from '../features/trailCompletion/formatters';
+import type { TrailCompletionDraft } from '../features/trailCompletion/types';
 import { useCompletionWeather } from '../features/trailCompletion/useCompletionWeather';
 import { saveJournalEntry } from '../data/localSocial';
 import { RootStackParamList } from '../navigation/types';
@@ -65,6 +69,247 @@ const fallbackShareOptions = [
   },
 ];
 
+type CompletionSample = {
+  coordinate: [number, number];
+  recordedAt: number;
+  distanceKm: number;
+  elevationM?: number;
+  speedKph?: number;
+};
+
+function toNumber(value: unknown): number | undefined {
+  if (value == null || value === '') return undefined;
+  const parsed = typeof value === 'number' ? value : Number.parseFloat(String(value));
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function getDistanceMeters(from: [number, number], to: [number, number]) {
+  const earthRadius = 6371000;
+  const toRadians = (value: number) => (value * Math.PI) / 180;
+  const latDelta = toRadians(to[1] - from[1]);
+  const lngDelta = toRadians(to[0] - from[0]);
+  const lat1 = toRadians(from[1]);
+  const lat2 = toRadians(to[1]);
+  const a =
+    Math.sin(latDelta / 2) * Math.sin(latDelta / 2) +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(lngDelta / 2) * Math.sin(lngDelta / 2);
+
+  return earthRadius * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function buildCompletionSamples(points: ActivityDetail['points']): CompletionSample[] {
+  let cumulativeDistanceMeters = 0;
+
+  return points.reduce<CompletionSample[]>((samples, point) => {
+    const latitude = toNumber(point.latitude);
+    const longitude = toNumber(point.longitude);
+    const recordedAt = new Date(point.recorded_at).getTime();
+
+    if (latitude == null || longitude == null || !Number.isFinite(recordedAt)) {
+      return samples;
+    }
+
+    const coordinate: [number, number] = [longitude, latitude];
+    const previous = samples[samples.length - 1];
+    if (previous) {
+      cumulativeDistanceMeters += getDistanceMeters(previous.coordinate, coordinate);
+    }
+
+    samples.push({
+      coordinate,
+      recordedAt,
+      distanceKm: cumulativeDistanceMeters / 1000,
+      elevationM: toNumber(point.elevation),
+      speedKph: toNumber(point.speed_mps) != null ? Number(toNumber(point.speed_mps)) * 3.6 : undefined,
+    });
+
+    return samples;
+  }, []);
+}
+
+function downsampleProfile<T>(points: T[], maxPoints: number) {
+  if (points.length <= maxPoints) {
+    return points;
+  }
+
+  const lastIndex = points.length - 1;
+  return Array.from({ length: maxPoints }, (_, index) => {
+    if (index === maxPoints - 1) {
+      return points[lastIndex];
+    }
+    const sourceIndex = Math.round((index / (maxPoints - 1)) * lastIndex);
+    return points[sourceIndex];
+  });
+}
+
+function buildElevationProfile(samples: CompletionSample[]) {
+  const points = samples.filter((sample) => sample.elevationM != null);
+
+  return downsampleProfile(
+    points.map((sample) => ({
+      distanceKm: sample.distanceKm,
+      elevationM: sample.elevationM as number,
+      capturedAt: sample.recordedAt,
+      speedKph: sample.speedKph,
+    })),
+    48,
+  );
+}
+
+function findNearestSample(samples: CompletionSample[], capturedAt: number) {
+  if (!samples.length || !Number.isFinite(capturedAt)) {
+    return null;
+  }
+
+  return samples.reduce<CompletionSample | null>((closest, sample) => {
+    if (!closest) return sample;
+    return Math.abs(sample.recordedAt - capturedAt) < Math.abs(closest.recordedAt - capturedAt) ? sample : closest;
+  }, null);
+}
+
+function buildPhotoTags(media: ActivityMedia[], samples: CompletionSample[]) {
+  return media
+    .map((photo) => {
+      const uri = photo.url?.trim();
+      const latitude = toNumber(photo.latitude);
+      const longitude = toNumber(photo.longitude);
+      const capturedAt = photo.captured_at ? new Date(photo.captured_at).getTime() : NaN;
+
+      if (!uri || latitude == null || longitude == null || !Number.isFinite(capturedAt)) {
+        return null;
+      }
+
+      const matchedSample = findNearestSample(samples, capturedAt);
+
+      return {
+        uri,
+        coordinate: [longitude, latitude] as [number, number],
+        capturedAt,
+        distanceKm: matchedSample?.distanceKm,
+        elevationM: matchedSample?.elevationM,
+      };
+    })
+    .filter((photo): photo is NonNullable<typeof photo> => photo != null);
+}
+
+function calculateAvgSpeedKph(distanceMeters: number | null | undefined, elapsedSeconds: number | null | undefined) {
+  if (distanceMeters == null || elapsedSeconds == null || !Number.isFinite(distanceMeters) || !Number.isFinite(elapsedSeconds) || distanceMeters <= 0 || elapsedSeconds <= 0) {
+    return undefined;
+  }
+
+  return (distanceMeters / 1000) / (elapsedSeconds / 3600);
+}
+
+function calculateAvgPaceMinPerKm(distanceMeters: number | null | undefined, elapsedSeconds: number | null | undefined) {
+  if (distanceMeters == null || elapsedSeconds == null || !Number.isFinite(distanceMeters) || !Number.isFinite(elapsedSeconds) || distanceMeters <= 0 || elapsedSeconds <= 0) {
+    return undefined;
+  }
+
+  return (elapsedSeconds / 60) / (distanceMeters / 1000);
+}
+
+function parseStepCountFromNotes(notes: string | null | undefined) {
+  if (!notes) return undefined;
+
+  try {
+    const parsed = JSON.parse(notes) as { stepCount?: unknown };
+    if (typeof parsed.stepCount === 'number' && Number.isFinite(parsed.stepCount) && parsed.stepCount > 0) {
+      return Math.round(parsed.stepCount);
+    }
+  } catch {
+    const match = notes.match(/"stepCount"\s*:\s*(\d+)/i) ?? notes.match(/\bsteps?\D+(\d{2,6})\b/i);
+    if (match) {
+      const value = Number.parseInt(match[1], 10);
+      if (Number.isFinite(value) && value > 0) {
+        return value;
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function estimateStepCount(distanceKm: number | undefined) {
+  if (distanceKm == null || !Number.isFinite(distanceKm) || distanceKm <= 0) {
+    return 0;
+  }
+
+  return Math.max(1, Math.round(distanceKm * 1312));
+}
+
+function mergeUniqueUris(...groups: Array<string[] | undefined>) {
+  return Array.from(
+    new Set(
+      groups
+        .flatMap((group) => group ?? [])
+        .map((uri) => uri?.trim())
+        .filter((uri): uri is string => Boolean(uri)),
+    ),
+  );
+}
+
+function mergeNatureSightings(
+  draft: TrailCompletionDraft,
+  media: ActivityMedia[],
+) {
+  return Array.from(
+    new Map(
+      [...(draft.natureSightings ?? []), ...media.map((item) => item.nature_sighting).filter((item): item is NonNullable<typeof item> => Boolean(item))]
+        .map((item) => [item.id, item]),
+    ).values(),
+  );
+}
+
+async function hydrateActivityDraft(draft: TrailCompletionDraft): Promise<TrailCompletionDraft> {
+  if (!draft.activityId) {
+    return draft;
+  }
+
+  const [activity, media] = await Promise.all([
+    getActivityById(draft.activityId),
+    getActivityMedia(draft.activityId).catch(() => []),
+  ]);
+
+  const distanceMeters = toNumber(activity.distance_meters);
+  const elapsedSeconds = toNumber(activity.elapsed_time_seconds);
+  const avgSpeedFromApi = toNumber(activity.avg_speed_mps) != null ? Number(toNumber(activity.avg_speed_mps)) * 3.6 : undefined;
+  const samples = buildCompletionSamples(activity.points ?? []);
+  const remotePhotoUris = media.map((item) => item.url?.trim()).filter((uri): uri is string => Boolean(uri));
+  const routePointCount = draft.routePointCount > 0 ? draft.routePointCount : activity.points?.length ?? 0;
+  const activityDistanceKm =
+    draft.activityDistanceKm && draft.activityDistanceKm > 0
+      ? draft.activityDistanceKm
+      : distanceMeters != null
+      ? distanceMeters / 1000
+      : samples[samples.length - 1]?.distanceKm;
+
+  return {
+    ...draft,
+    completedAtIso: draft.completedAtIso || activity.end_time || activity.start_time || new Date().toISOString(),
+    durationMs: draft.durationMs > 0 ? draft.durationMs : Math.max(0, (elapsedSeconds ?? 0) * 1000),
+    photoUris: mergeUniqueUris(draft.photoUris, draft.postPhotoUris, remotePhotoUris),
+    postPhotoUris: mergeUniqueUris(draft.postPhotoUris, remotePhotoUris),
+    natureSightings: mergeNatureSightings(draft, media),
+    stepCount:
+      draft.stepCount > 0
+        ? draft.stepCount
+        : parseStepCountFromNotes(activity.notes) ?? estimateStepCount(activityDistanceKm),
+    routePointCount,
+    activityDistanceKm,
+    avgSpeedKph:
+      draft.avgSpeedKph && draft.avgSpeedKph > 0
+        ? draft.avgSpeedKph
+        : avgSpeedFromApi ?? calculateAvgSpeedKph(distanceMeters, elapsedSeconds),
+    avgPaceMinPerKm:
+      draft.avgPaceMinPerKm && draft.avgPaceMinPerKm > 0
+        ? draft.avgPaceMinPerKm
+        : calculateAvgPaceMinPerKm(distanceMeters, elapsedSeconds),
+    elevationProfile: draft.elevationProfile?.length ? draft.elevationProfile : buildElevationProfile(samples),
+    activityPhotoTags: draft.activityPhotoTags?.length ? draft.activityPhotoTags : buildPhotoTags(media, samples),
+    trailElevationGainM: draft.trailElevationGainM ?? toNumber(activity.elevation_gain_meters),
+  };
+}
+
 export function ActivityShareScreen() {
   const navigation = useNavigation<ShareNavigationProp>();
   const route = useRoute<ShareRouteProp>();
@@ -72,11 +317,36 @@ export function ActivityShareScreen() {
   const { language } = useLanguage();
   const { user } = useAuth();
   const isArabic = language === 'ar';
-  const draft = route.params?.draft;
+  const routeDraft = route.params?.draft;
+  const [draft, setDraft] = useState(routeDraft);
   const isOwnDraft = !draft?.publisherId || draft.publisherId === user?.id;
   const publisherName = draft?.publisherName?.trim() || (isOwnDraft ? user?.full_name : '') || 'Trail friend';
   const { weather } = useCompletionWeather(draft, isArabic ? 'ar' : 'en');
   const [achievementHints, setAchievementHints] = useState<string[]>([]);
+
+  useEffect(() => {
+    setDraft(routeDraft);
+  }, [routeDraft]);
+
+  useEffect(() => {
+    if (!routeDraft?.activityId) {
+      return;
+    }
+
+    let cancelled = false;
+
+    hydrateActivityDraft(routeDraft)
+      .then((nextDraft) => {
+        if (!cancelled) {
+          setDraft(nextDraft);
+        }
+      })
+      .catch(() => undefined);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [routeDraft]);
 
   useEffect(() => {
     if (!draft || !isOwnDraft) {
@@ -110,12 +380,16 @@ export function ActivityShareScreen() {
   const stats = useMemo(() => {
     if (!draft) return [];
     const dur = formatCompletionDuration(draft.durationMs, isArabic);
-    const dist = formatDistanceKm(draft.trailDistanceKm, isArabic);
+    const dist = formatDistanceKm(draft.activityDistanceKm ?? draft.trailDistanceKm, isArabic);
     const elev = formatElevation(draft.trailElevationGainM, isArabic);
+    const speed = formatSpeedKph(draft.avgSpeedKph, isArabic);
+    const pace = formatPaceMinPerKm(draft.avgPaceMinPerKm, isArabic);
     return [
       { icon: 'time-outline' as const, label: isArabic ? 'المدة' : 'Duration', value: dur },
-      { icon: 'navigate-outline' as const, label: isArabic ? 'طول المسار' : 'Trail length', value: dist },
+      { icon: 'navigate-outline' as const, label: isArabic ? 'المسافة' : 'Distance', value: dist },
       { icon: 'trending-up-outline' as const, label: isArabic ? 'الصعود' : 'Elevation gain', value: elev },
+      { icon: 'speedometer-outline' as const, label: isArabic ? 'متوسط السرعة' : 'Avg speed', value: speed },
+      { icon: 'walk-outline' as const, label: isArabic ? 'الوتيرة' : 'Pace', value: pace },
       { icon: 'footsteps-outline' as const, label: isArabic ? 'الخطوات' : 'Steps', value: String(draft.stepCount) },
       {
         icon: 'radio-button-on-outline' as const,
@@ -213,6 +487,17 @@ export function ActivityShareScreen() {
               routePointCount={draft.routePointCount}
               durationMs={draft.durationMs}
               isArabic={isArabic}
+            />
+          ) : null}
+
+          {draft.elevationProfile?.length ? (
+            <ElevationPhotoTour
+              profile={draft.elevationProfile}
+              photoTags={draft.activityPhotoTags}
+              photoUris={reviewPhotos.length ? reviewPhotos : postPhotos}
+              isArabic={isArabic}
+              isOwner={isOwnDraft}
+              ownerName={publisherName}
             />
           ) : null}
 

@@ -1,4 +1,5 @@
 import type { SocialFeedComment, SocialFeedItem } from '../api/socialApi';
+import type { PhotoType } from '../api/mediaApi';
 import type { FeedCommentPreview, FeedItem } from '../data/activitySocial';
 
 export function formatFeedRelativeTime(value: string) {
@@ -33,6 +34,22 @@ function formatDistanceKmFromMeters(meters: number | null | undefined): string {
   return `${(Number(meters) / 1000).toFixed(1)} km`;
 }
 
+function calculateAvgSpeedKph(distanceMeters: number | null | undefined, elapsedSeconds: number | null | undefined) {
+  if (distanceMeters == null || elapsedSeconds == null || !Number.isFinite(distanceMeters) || !Number.isFinite(elapsedSeconds) || distanceMeters <= 0 || elapsedSeconds <= 0) {
+    return undefined;
+  }
+
+  return (distanceMeters / 1000) / (elapsedSeconds / 3600);
+}
+
+function calculateAvgPaceMinPerKm(distanceMeters: number | null | undefined, elapsedSeconds: number | null | undefined) {
+  if (distanceMeters == null || elapsedSeconds == null || !Number.isFinite(distanceMeters) || !Number.isFinite(elapsedSeconds) || distanceMeters <= 0 || elapsedSeconds <= 0) {
+    return undefined;
+  }
+
+  return (elapsedSeconds / 60) / (distanceMeters / 1000);
+}
+
 function mapRecentComments(comments: SocialFeedComment[] | undefined): FeedCommentPreview[] {
   return (comments ?? []).map((comment) => ({
     id: comment.id,
@@ -44,17 +61,60 @@ function mapRecentComments(comments: SocialFeedComment[] | undefined): FeedComme
   }));
 }
 
+function getFeedPhotoType(item: SocialFeedItem): PhotoType {
+  if (item.type === 'review') {
+    return 'review_photo';
+  }
+
+  if (item.type === 'activity') {
+    return 'activity_media';
+  }
+
+  return 'media';
+}
+
+function mapFeedPhotoEntries(item: SocialFeedItem) {
+  const photoType = getFeedPhotoType(item);
+  const entries = item.photos
+    .map((photo) => ({
+      id: photo.id,
+      uri: photo.url,
+      photoType,
+      natureSighting: photo.nature_sighting ?? null,
+    }))
+    .filter((entry) => Boolean(entry.uri));
+
+  if (entries.length) {
+    return entries;
+  }
+
+  if (item.photo_url) {
+    return [
+      {
+        id: item.id,
+        uri: item.photo_url,
+        photoType,
+        natureSighting: null,
+      },
+    ];
+  }
+
+  return [];
+}
+
 export function mapSocialFeedItemToFeedItem(item: SocialFeedItem): FeedItem {
   const userName = item.user.full_name || 'Trail friend';
   const handle = handleFromName(userName);
   const relEn = formatFeedRelativeTime(item.created_at);
   const relAr = relEn;
+  const photoEntries = mapFeedPhotoEntries(item);
+  const photoUris = photoEntries.map((entry) => entry.uri).filter(Boolean);
   const natureSightings = item.photos
     .map((photo) => photo.nature_sighting)
     .filter((sighting): sighting is NonNullable<typeof sighting> => Boolean(sighting));
 
   if (item.type === 'review') {
-    const photo = item.photo_url || item.photos[0]?.url || item.trail.image || '';
+    const photo = item.photo_url || photoUris[0] || item.trail.image || '';
     const trailId = item.trail.id ?? '';
     const ratingLabel = item.rating != null ? `${item.rating}/5` : '—';
     return {
@@ -75,19 +135,23 @@ export function mapSocialFeedItemToFeedItem(item: SocialFeedItem): FeedItem {
             trailImage: photo || item.trail.image || undefined,
             rating: item.rating ?? 0,
             review: item.content ?? '',
-            photoUris: item.photos.map((photoItem) => photoItem.url).filter(Boolean),
+            photoUris,
             natureSightings,
             completedAtIso: item.created_at,
             durationMs: item.activity?.elapsed_time_seconds ? item.activity.elapsed_time_seconds * 1000 : 0,
             stepCount: 0,
             routePointCount: 0,
+            activityDistanceKm: item.activity?.distance_meters != null ? Number(item.activity.distance_meters) / 1000 : undefined,
+            avgSpeedKph: calculateAvgSpeedKph(item.activity?.distance_meters, item.activity?.elapsed_time_seconds),
+            avgPaceMinPerKm: calculateAvgPaceMinPerKm(item.activity?.distance_meters, item.activity?.elapsed_time_seconds),
           }
         : undefined,
       user: userName,
       handle,
       avatar: item.user.avatar_url || '',
       image: photo,
-      photoUris: item.photos.map((photoItem) => photoItem.url).filter(Boolean),
+      photoEntries,
+      photoUris,
       trailNameEn: item.trail.name ?? '',
       trailNameAr: item.trail.name ?? '',
       regionEn: 'Trail review',
@@ -105,11 +169,10 @@ export function mapSocialFeedItemToFeedItem(item: SocialFeedItem): FeedItem {
   }
 
   if (item.type === 'media') {
-    const photo = item.photo_url || item.photos[0]?.url || item.trail.image || '';
+    const photo = item.photo_url || photoUris[0] || item.trail.image || '';
     const trailId = item.trail.id ?? '';
     const caption = item.caption?.trim() || item.content?.trim() || '';
     const label = item.trail.name ?? (trailId ? 'Trail media' : 'Location media');
-    const photoUris = item.photos.map((photoItem) => photoItem.url).filter(Boolean);
 
     return {
       id: item.id,
@@ -125,6 +188,7 @@ export function mapSocialFeedItemToFeedItem(item: SocialFeedItem): FeedItem {
       handle,
       avatar: item.user.avatar_url || '',
       image: photo,
+      photoEntries,
       photoUris,
       trailNameEn: label,
       trailNameAr: label,
@@ -144,7 +208,7 @@ export function mapSocialFeedItemToFeedItem(item: SocialFeedItem): FeedItem {
 
   const caption = item.caption?.trim() || '';
   const trailImage = item.trail.image || '';
-  const activityPhotoUris = item.photos.map((photoItem) => photoItem.url).filter(Boolean);
+  const activityPhotoUris = photoUris;
   const activityCover = item.photo_url || activityPhotoUris[0] || trailImage;
   const distanceLabel = formatDistanceKmFromMeters(item.activity?.distance_meters ?? null);
   const trailId = item.trail.id ?? '';
@@ -158,7 +222,7 @@ export function mapSocialFeedItemToFeedItem(item: SocialFeedItem): FeedItem {
     activityId: item.activity.id ?? undefined,
     trailId,
     completionDraft: trailId
-      ? {
+        ? {
           activityId: item.activity.id ?? undefined,
           trailId,
           publisherId: item.user.id,
@@ -175,6 +239,9 @@ export function mapSocialFeedItemToFeedItem(item: SocialFeedItem): FeedItem {
           durationMs: item.activity.elapsed_time_seconds ? item.activity.elapsed_time_seconds * 1000 : 0,
           stepCount: 0,
           routePointCount: 0,
+          activityDistanceKm: item.activity.distance_meters != null ? Number(item.activity.distance_meters) / 1000 : undefined,
+          avgSpeedKph: calculateAvgSpeedKph(item.activity.distance_meters, item.activity.elapsed_time_seconds),
+          avgPaceMinPerKm: calculateAvgPaceMinPerKm(item.activity.distance_meters, item.activity.elapsed_time_seconds),
           trailDistanceKm: item.activity.distance_meters != null ? Number(item.activity.distance_meters) / 1000 : undefined,
           trailElevationGainM: item.activity.elevation_gain_meters != null ? Number(item.activity.elevation_gain_meters) : undefined,
         }
@@ -183,6 +250,7 @@ export function mapSocialFeedItemToFeedItem(item: SocialFeedItem): FeedItem {
     handle,
     avatar: item.user.avatar_url || '',
     image: activityCover,
+    photoEntries,
     photoUris: activityPhotoUris,
     trailNameEn: item.trail.name ?? '',
     trailNameAr: item.trail.name ?? '',
