@@ -102,6 +102,10 @@ function maskPhoneNumber(phone: string): string {
   return `${phone.slice(0, Math.min(6, phone.length))}XXXX`;
 }
 
+function formatSosLocation(latitude: number, longitude: number): string {
+  return `${latitude.toFixed(4)}, ${longitude.toFixed(4)}`;
+}
+
 function pushDeliveryIssue(issues: string[], issue: string): void {
   const trimmed = issue.trim();
   if (trimmed) {
@@ -678,6 +682,8 @@ async function getSosUserDisplayName(userId: string): Promise<string> {
 
 async function notifyAdminsBestEffort(sosId: string, input: CreateSosInput): Promise<void> {
   try {
+    const userName = await getSosUserDisplayName(input.userId);
+    const locationLabel = formatSosLocation(input.latitude, input.longitude);
     const profileColumns = await getTableColumns("profiles");
     if (!profileColumns.has("role")) {
       return;
@@ -697,11 +703,13 @@ async function notifyAdminsBestEffort(sosId: string, input: CreateSosInput): Pro
         actor_id: input.userId,
         type: "sos_alert",
         title: "Emergency SOS triggered",
-        body: "A Traces user triggered an SOS alert.",
+        body: `${userName} triggered SOS near ${locationLabel}.`,
         entity_type: "sos",
         entity_id: sosId,
         data: {
           sos_event_id: sosId,
+          sender_name: userName,
+          location_label: locationLabel,
           latitude: input.latitude,
           longitude: input.longitude,
           occurred_at: input.occurredAt,
@@ -715,9 +723,12 @@ async function notifyAdminsBestEffort(sosId: string, input: CreateSosInput): Pro
 
 async function notifyEmergencyContactBestEffort(sosId: string, contact: EmergencyContact, input: CreateSosInput): Promise<ContactDeliveryAttempt> {
   const userName = await getSosUserDisplayName(input.userId);
+  const locationLabel = formatSosLocation(input.latitude, input.longitude);
   const metadata = {
     sos_event_id: sosId,
     contact_id: contact.id,
+    sender_name: userName,
+    location_label: locationLabel,
     latitude: input.latitude,
     longitude: input.longitude,
     occurred_at: input.occurredAt,
@@ -798,7 +809,7 @@ async function notifyEmergencyContactBestEffort(sosId: string, contact: Emergenc
         actor_id: input.userId,
         type: "emergency_contact_alert",
         title: "Emergency SOS",
-        body: `${contact.full_name}, an emergency contact triggered SOS and may need help.`,
+        body: `${userName} triggered SOS near ${locationLabel}.`,
         entity_type: "sos",
         entity_id: sosId,
         data: metadata,

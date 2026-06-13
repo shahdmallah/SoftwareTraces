@@ -18,6 +18,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { getMyFriends, type SocialProfile } from '../api/socialApi';
 
 import {
   createEmergencyContact,
@@ -41,6 +42,7 @@ type ContactDraft = {
   phone: string;
   email: string;
   relationship: string;
+  linkedFriendId: string | null;
   notify_by_push: boolean;
   notify_by_sms: boolean;
   notify_by_email: boolean;
@@ -53,6 +55,7 @@ const emptyContactDraft: ContactDraft = {
   phone: '',
   email: '',
   relationship: '',
+  linkedFriendId: null,
   notify_by_push: true,
   notify_by_sms: true,
   notify_by_email: true,
@@ -92,6 +95,15 @@ function formatDate(value?: string | null): string {
   });
 }
 
+function getInitials(name: string): string {
+  return name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? '')
+    .join('') || 'TR';
+}
+
 function contactToDraft(contact: EmergencyContact): ContactDraft {
   return {
     id: contact.id,
@@ -99,6 +111,7 @@ function contactToDraft(contact: EmergencyContact): ContactDraft {
     phone: contact.phone ?? '',
     email: contact.email ?? '',
     relationship: contact.relationship ?? '',
+    linkedFriendId: contact.contact_user_id,
     notify_by_push: contact.notify_by_push,
     notify_by_sms: contact.notify_by_sms,
     notify_by_email: contact.notify_by_email,
@@ -119,18 +132,33 @@ export function SafetyCenterScreen() {
   const isOnboarding = route.params?.onboarding === true;
   const [contacts, setContacts] = useState<EmergencyContact[]>([]);
   const [sosAlerts, setSosAlerts] = useState<SosAlert[]>([]);
+  const [friends, setFriends] = useState<SocialProfile[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [draft, setDraft] = useState<ContactDraft | null>(null);
   const [isSavingContact, setIsSavingContact] = useState(false);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
+  const [isFriendPickerVisible, setIsFriendPickerVisible] = useState(false);
+  const [friendSearch, setFriendSearch] = useState('');
 
   const activeContactCount = useMemo(
     () => contacts.filter((contact) => contact.is_active && contact.notify_on_sos).length,
     [contacts],
   );
   const latestSos = sosAlerts[0] ?? null;
+  const selectedFriend = useMemo(
+    () => (draft?.linkedFriendId ? friends.find((friend) => friend.id === draft.linkedFriendId) ?? null : null),
+    [draft?.linkedFriendId, friends],
+  );
+  const filteredFriends = useMemo(() => {
+    const normalizedQuery = friendSearch.trim().toLowerCase();
+    if (!normalizedQuery) {
+      return friends;
+    }
+
+    return friends.filter((friend) => friend.full_name.toLowerCase().includes(normalizedQuery));
+  }, [friendSearch, friends]);
 
   const goToRecommendationSetup = useCallback((notice?: string) => {
     navigation.replace('RecommendationPreferences', {
@@ -148,12 +176,14 @@ export function SafetyCenterScreen() {
     setErrorMessage('');
 
     try {
-      const [nextContacts, nextSosAlerts] = await Promise.all([
+      const [nextContacts, nextSosAlerts, friendsResponse] = await Promise.all([
         getEmergencyContacts(),
         getMySosAlerts(),
+        getMyFriends({ page: 1, limit: 100 }).catch(() => ({ data: [] as SocialProfile[] })),
       ]);
       setContacts(nextContacts);
       setSosAlerts(nextSosAlerts);
+      setFriends(friendsResponse.data);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Unable to load safety settings.');
     } finally {
@@ -169,13 +199,19 @@ export function SafetyCenterScreen() {
   const handleSaveContact = useCallback(async () => {
     if (!draft) return;
     const name = draft.name.trim();
+    const phone = compact(draft.phone);
+    const email = compact(draft.email);
     if (!name) {
       Alert.alert('Name required', 'Add a contact name before saving.');
       return;
     }
 
-    if (!compact(draft.phone) && !compact(draft.email)) {
-      Alert.alert('Reachable contact needed', 'Add a phone number or email. Push only works for linked Traces accounts.');
+    const hasSmsChannel = draft.notify_by_sms && Boolean(phone);
+    const hasEmailChannel = draft.notify_by_email && Boolean(email);
+    const hasPushChannel = draft.notify_by_push && Boolean(draft.linkedFriendId);
+
+    if (draft.notify_on_sos && !hasSmsChannel && !hasEmailChannel && !hasPushChannel) {
+      Alert.alert('Reachable contact needed', 'Add a phone number, an email, or link one of your Traces friends for push alerts.');
       return;
     }
 
@@ -184,8 +220,9 @@ export function SafetyCenterScreen() {
       if (draft.id) {
         const updated = await updateEmergencyContact(draft.id, {
           name,
-          phone: compact(draft.phone),
-          email: compact(draft.email),
+          contact_user_id: draft.linkedFriendId,
+          phone,
+          email,
           relationship: compact(draft.relationship),
           notify_by_push: draft.notify_by_push,
           notify_by_sms: draft.notify_by_sms,
@@ -197,8 +234,9 @@ export function SafetyCenterScreen() {
       } else {
         const created = await createEmergencyContact({
           name,
-          phone: compact(draft.phone),
-          email: compact(draft.email),
+          contact_user_id: draft.linkedFriendId,
+          phone,
+          email,
           relationship: compact(draft.relationship),
           notify_by_push: draft.notify_by_push,
           notify_by_sms: draft.notify_by_sms,
@@ -393,6 +431,12 @@ export function SafetyCenterScreen() {
               ) : (
                 contacts.map((contact) => {
                   const isPending = pendingAction === `toggle-${contact.id}` || pendingAction === `delete-${contact.id}`;
+                  const metaParts = [
+                    contact.relationship,
+                    contact.phone,
+                    contact.email,
+                    contact.contact_user_id ? 'Linked Traces account' : null,
+                  ].filter(Boolean);
                   return (
                     <View key={contact.id} style={styles.contactRow}>
                       <View style={styles.contactAvatar}>
@@ -401,7 +445,7 @@ export function SafetyCenterScreen() {
                       <View style={styles.contactBody}>
                         <Text style={styles.contactName}>{contact.name}</Text>
                         <Text style={styles.contactMeta} numberOfLines={1}>
-                          {[contact.relationship, contact.phone, contact.email].filter(Boolean).join(' | ') || 'Push contact'}
+                          {metaParts.join(' | ') || 'Push contact'}
                         </Text>
                         <View style={styles.contactFlags}>
                           {contact.notify_by_push ? <Text style={styles.flag}>Push</Text> : null}
@@ -538,6 +582,36 @@ export function SafetyCenterScreen() {
                   placeholderTextColor="#A18F7A"
                   style={styles.input}
                 />
+                <View style={styles.linkSection}>
+                  <Text style={styles.linkSectionLabel}>Linked Traces account</Text>
+                  <Pressable
+                    style={styles.linkCard}
+                    onPress={() => {
+                      setFriendSearch('');
+                      setIsFriendPickerVisible(true);
+                    }}
+                  >
+                    <View style={styles.linkCardCopy}>
+                      <Text style={styles.linkCardTitle}>
+                        {selectedFriend?.full_name ?? (draft.linkedFriendId ? 'Linked friend selected' : 'Choose from your friends')}
+                      </Text>
+                      <Text style={styles.linkCardSubtitle}>
+                        {selectedFriend
+                          ? 'Push alerts can reach this Traces friend directly.'
+                          : 'Optional, but best for push SOS delivery.'}
+                      </Text>
+                    </View>
+                    <Ionicons name="people-outline" size={18} color="#630E13" />
+                  </Pressable>
+                  {draft.linkedFriendId ? (
+                    <Pressable
+                      style={styles.unlinkButton}
+                      onPress={() => setDraft((current) => current ? { ...current, linkedFriendId: null } : current)}
+                    >
+                      <Text style={styles.unlinkButtonText}>Remove linked account</Text>
+                    </Pressable>
+                  ) : null}
+                </View>
 
                 {[
                   ['notify_on_sos', 'Notify during SOS'],
@@ -562,6 +636,76 @@ export function SafetyCenterScreen() {
                 </Pressable>
               </ScrollView>
             ) : null}
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      <Modal visible={isFriendPickerVisible} transparent animationType="slide" onRequestClose={() => setIsFriendPickerVisible(false)}>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalOverlay}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setIsFriendPickerVisible(false)} />
+          <View style={[styles.sheet, styles.friendPickerSheet, { paddingBottom: Math.max(18, insets.bottom + 12) }]}>
+            <View style={styles.sheetHeader}>
+              <View>
+                <Text style={styles.sheetTitle}>Link a Traces friend</Text>
+                <Text style={styles.sheetSubtitle}>Choose a friend for direct push SOS alerts.</Text>
+              </View>
+              <Pressable style={styles.iconButton} onPress={() => setIsFriendPickerVisible(false)}>
+                <Ionicons name="close" size={18} color="#2C2418" />
+              </Pressable>
+            </View>
+
+            <TextInput
+              value={friendSearch}
+              onChangeText={setFriendSearch}
+              placeholder="Search friends"
+              placeholderTextColor="#A18F7A"
+              style={styles.input}
+            />
+
+            {isLoading ? (
+              <View style={styles.friendState}>
+                <ActivityIndicator color="#630E13" />
+              </View>
+            ) : filteredFriends.length === 0 ? (
+              <View style={styles.friendState}>
+                <Text style={styles.friendStateText}>
+                  {friends.length === 0
+                    ? 'No friends available yet. Add phone or email for now, or connect with friends first.'
+                    : 'No friends match that search.'}
+                </Text>
+              </View>
+            ) : (
+              <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+                {filteredFriends.map((friend, index) => (
+                  <Pressable
+                    key={friend.id}
+                    style={[
+                      styles.friendRow,
+                      index < filteredFriends.length - 1 && styles.friendRowDivider,
+                    ]}
+                    onPress={() => {
+                      setDraft((current) => current
+                        ? {
+                            ...current,
+                            linkedFriendId: friend.id,
+                            name: current.name.trim() ? current.name : friend.full_name,
+                          }
+                        : current);
+                      setIsFriendPickerVisible(false);
+                    }}
+                  >
+                    <View style={styles.friendAvatarFallback}>
+                      <Text style={styles.friendAvatarText}>{getInitials(friend.full_name)}</Text>
+                    </View>
+                    <View style={styles.friendRowBody}>
+                      <Text style={styles.friendName} numberOfLines={1}>{friend.full_name}</Text>
+                      <Text style={styles.friendHint}>Link for push alerts</Text>
+                    </View>
+                    {draft?.linkedFriendId === friend.id ? <Ionicons name="checkmark-circle" size={20} color="#2F6B4F" /> : null}
+                  </Pressable>
+                ))}
+              </ScrollView>
+            )}
           </View>
         </KeyboardAvoidingView>
       </Modal>
@@ -651,11 +795,53 @@ const styles = StyleSheet.create({
   sheetTitle: { color: '#2C2418', fontSize: 20, lineHeight: 24, fontWeight: '900' },
   sheetSubtitle: { marginTop: 2, color: '#7B6D5A', fontSize: 11, lineHeight: 16, fontWeight: '700' },
   input: { minHeight: 46, borderRadius: 14, backgroundColor: '#F3F1ED', paddingHorizontal: 14, color: '#2C2418', fontSize: 14, fontWeight: '700', marginBottom: 10 },
+  linkSection: { marginBottom: 8 },
+  linkSectionLabel: { marginBottom: 8, color: '#2C2418', fontSize: 13, lineHeight: 17, fontWeight: '800' },
+  linkCard: {
+    minHeight: 62,
+    borderRadius: 16,
+    backgroundColor: '#F7EBE8',
+    borderWidth: 1,
+    borderColor: '#E9D6D2',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  linkCardCopy: { flex: 1 },
+  linkCardTitle: { color: '#2C2418', fontSize: 13, lineHeight: 17, fontWeight: '900' },
+  linkCardSubtitle: { marginTop: 3, color: '#7B6D5A', fontSize: 11, lineHeight: 15, fontWeight: '700' },
+  unlinkButton: { alignSelf: 'flex-start', marginTop: 8, paddingHorizontal: 2, paddingVertical: 4 },
+  unlinkButtonText: { color: '#9B1C1C', fontSize: 12, fontWeight: '800' },
   toggleRow: { minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#EDE5D6' },
   toggleLabel: { flex: 1, color: '#2C2418', fontSize: 13, lineHeight: 17, fontWeight: '800' },
   saveButton: { minHeight: 48, borderRadius: 16, backgroundColor: '#630E13', alignItems: 'center', justifyContent: 'center', marginTop: 16 },
   disabledButton: { opacity: 0.7 },
   saveButtonText: { color: '#FFFFFF', fontSize: 14, fontWeight: '900' },
+  friendPickerSheet: { maxHeight: '72%' },
+  friendState: { minHeight: 180, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12 },
+  friendStateText: { color: '#7B6D5A', fontSize: 12, lineHeight: 18, fontWeight: '700', textAlign: 'center' },
+  friendRow: {
+    minHeight: 64,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 10,
+  },
+  friendRowDivider: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#EDE5D6' },
+  friendAvatarFallback: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    backgroundColor: '#E7D8C3',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  friendAvatarText: { color: '#6B4C20', fontSize: 14, fontWeight: '900' },
+  friendRowBody: { flex: 1, minWidth: 0 },
+  friendName: { color: '#2C2418', fontSize: 14, lineHeight: 18, fontWeight: '900' },
+  friendHint: { marginTop: 2, color: '#7B6D5A', fontSize: 11, lineHeight: 15, fontWeight: '700' },
   onboardingActions: { gap: 10, marginBottom: 8 },
   onboardingSecondaryButton: {
     minHeight: 48,

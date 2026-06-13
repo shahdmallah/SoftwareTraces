@@ -169,16 +169,44 @@ export async function updateEmergencyContact(id: string, payload: Partial<{
   notify_on_sos: boolean;
   is_active: boolean;
 }>) {
-  const body =
-    payload.full_name != null || payload.name != null
-      ? normalizeEmergencyContactPayload(payload)
-      : {
-          ...payload,
-          contact_user_id: payload.contact_user_id ?? null,
-          phone: payload.phone ?? null,
-          email: payload.email ?? null,
-          relationship: payload.relationship ?? null,
-        };
+  const body: Record<string, unknown> = {};
+
+  if (payload.full_name != null || payload.name != null) {
+    const fullName = (payload.full_name ?? payload.name ?? '').trim();
+    body.full_name = fullName;
+    body.name = fullName;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(payload, 'contact_user_id')) {
+    body.contact_user_id = payload.contact_user_id ?? null;
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'phone')) {
+    body.phone = payload.phone ?? null;
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'email')) {
+    body.email = payload.email ?? null;
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'relationship')) {
+    body.relationship = payload.relationship ?? null;
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'priority')) {
+    body.priority = payload.priority;
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'notify_by_sms')) {
+    body.notify_by_sms = payload.notify_by_sms;
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'notify_by_email')) {
+    body.notify_by_email = payload.notify_by_email;
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'notify_by_push')) {
+    body.notify_by_push = payload.notify_by_push;
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'notify_on_sos')) {
+    body.notify_on_sos = payload.notify_on_sos;
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'is_active')) {
+    body.is_active = payload.is_active;
+  }
 
   const response = await apiRequest<Envelope<EmergencyContact>>(`/api/sos/contacts/${id}`, {
     method: 'PATCH',

@@ -3,6 +3,7 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 ALTER TABLE public.achievements ADD COLUMN IF NOT EXISTS name_ar text;
 ALTER TABLE public.achievements ADD COLUMN IF NOT EXISTS description_ar text;
 ALTER TABLE public.achievements ADD COLUMN IF NOT EXISTS category text NOT NULL DEFAULT 'general';
+ALTER TABLE public.achievements ADD COLUMN IF NOT EXISTS icon text;
 ALTER TABLE public.achievements ADD COLUMN IF NOT EXISTS badge_icon_url text;
 ALTER TABLE public.achievements ADD COLUMN IF NOT EXISTS criteria_type text NOT NULL DEFAULT 'manual';
 ALTER TABLE public.achievements ADD COLUMN IF NOT EXISTS criteria_value jsonb NOT NULL DEFAULT '{}'::jsonb;
@@ -15,6 +16,7 @@ SET badge_icon_url = COALESCE(badge_icon_url, icon)
 WHERE badge_icon_url IS NULL;
 
 ALTER TABLE public.user_achievements ADD COLUMN IF NOT EXISTS id uuid DEFAULT gen_random_uuid();
+ALTER TABLE public.user_achievements ADD COLUMN IF NOT EXISTS unlocked_at timestamptz;
 ALTER TABLE public.user_achievements ADD COLUMN IF NOT EXISTS progress_current numeric NOT NULL DEFAULT 0;
 ALTER TABLE public.user_achievements ADD COLUMN IF NOT EXISTS progress_target numeric NOT NULL DEFAULT 0;
 ALTER TABLE public.user_achievements ADD COLUMN IF NOT EXISTS earned_at timestamptz;

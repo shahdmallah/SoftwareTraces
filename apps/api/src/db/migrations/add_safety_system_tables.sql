@@ -57,6 +57,15 @@ CREATE TABLE IF NOT EXISTS public.emergency_contacts (
   CHECK (phone IS NOT NULL OR email IS NOT NULL OR contact_user_id IS NOT NULL OR notify_by_push = true)
 );
 
+ALTER TABLE public.emergency_contacts ADD COLUMN IF NOT EXISTS name text;
+ALTER TABLE public.emergency_contacts ADD COLUMN IF NOT EXISTS phone text;
+ALTER TABLE public.emergency_contacts ADD COLUMN IF NOT EXISTS email text;
+ALTER TABLE public.emergency_contacts ADD COLUMN IF NOT EXISTS relationship text;
+ALTER TABLE public.emergency_contacts ADD COLUMN IF NOT EXISTS priority integer NOT NULL DEFAULT 1;
+ALTER TABLE public.emergency_contacts ADD COLUMN IF NOT EXISTS notify_by_sms boolean NOT NULL DEFAULT true;
+ALTER TABLE public.emergency_contacts ADD COLUMN IF NOT EXISTS notify_by_email boolean NOT NULL DEFAULT true;
+ALTER TABLE public.emergency_contacts ADD COLUMN IF NOT EXISTS notify_by_push boolean NOT NULL DEFAULT true;
+ALTER TABLE public.emergency_contacts ADD COLUMN IF NOT EXISTS is_active boolean NOT NULL DEFAULT true;
 CREATE INDEX IF NOT EXISTS emergency_contacts_user_priority_idx ON public.emergency_contacts(user_id, is_active, priority);
 CREATE INDEX IF NOT EXISTS emergency_contacts_contact_user_idx ON public.emergency_contacts(contact_user_id) WHERE contact_user_id IS NOT NULL;
 
@@ -120,6 +129,11 @@ CREATE TABLE IF NOT EXISTS public.dangerous_locations (
   ) STORED
 );
 
+ALTER TABLE public.dangerous_locations
+  ADD COLUMN IF NOT EXISTS geom geography(point, 4326)
+  GENERATED ALWAYS AS (
+    ST_SetSRID(ST_MakePoint(longitude::double precision, latitude::double precision), 4326)::geography
+  ) STORED;
 CREATE INDEX IF NOT EXISTS dangerous_locations_geom_idx ON public.dangerous_locations USING gist(geom);
 CREATE INDEX IF NOT EXISTS dangerous_locations_active_type_idx ON public.dangerous_locations(is_active, location_type);
 
@@ -151,6 +165,11 @@ CREATE TABLE IF NOT EXISTS public.safety_incidents (
   ) STORED
 );
 
+ALTER TABLE public.safety_incidents
+  ADD COLUMN IF NOT EXISTS geom geography(point, 4326)
+  GENERATED ALWAYS AS (
+    ST_SetSRID(ST_MakePoint(longitude::double precision, latitude::double precision), 4326)::geography
+  ) STORED;
 CREATE UNIQUE INDEX IF NOT EXISTS safety_incidents_source_dedupe_idx
   ON public.safety_incidents(source, source_url, headline, reported_at)
   WHERE source_url IS NOT NULL;

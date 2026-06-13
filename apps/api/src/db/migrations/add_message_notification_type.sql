@@ -22,6 +22,7 @@ BEGIN
         'meetup_update',
         'sos_alert',
         'danger_alert',
+        'emergency_contact_alert',
         'achievement',
         'challenge_created',
         'challenge_invite',

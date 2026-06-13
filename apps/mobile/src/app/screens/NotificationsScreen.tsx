@@ -206,6 +206,30 @@ function getDangerMeta(notification: AppNotification) {
   };
 }
 
+function getSosMeta(notification: AppNotification) {
+  if (notification.type !== 'sos_alert' && notification.type !== 'emergency_contact_alert') {
+    return null;
+  }
+
+  const senderName =
+    asString(notification.data.sender_name) ||
+    asString(notification.actor?.full_name) ||
+    'A Traces user';
+  const latitude = asNumber(notification.data.latitude);
+  const longitude = asNumber(notification.data.longitude);
+  const locationLabel =
+    asString(notification.data.location_label) ||
+    (latitude != null && longitude != null ? `${latitude.toFixed(4)}, ${longitude.toFixed(4)}` : null);
+
+  return {
+    summary:
+      notification.type === 'emergency_contact_alert'
+        ? `${senderName} triggered SOS and may need help.`
+        : `${senderName} triggered SOS.`,
+    locationLabel,
+  };
+}
+
 export function NotificationsScreen() {
   const navigation = useNavigation<NotificationsNavigationProp>();
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
@@ -488,6 +512,7 @@ export function NotificationsScreen() {
   const renderNotification = ({ item }: { item: AppNotification }) => {
     const tone = typeTone[item.type] ?? '#5E646D';
     const dangerMeta = getDangerMeta(item);
+    const sosMeta = getSosMeta(item);
     const isUnread = !item.read_at;
 
     return (
@@ -505,7 +530,14 @@ export function NotificationsScreen() {
             <Text style={styles.cardTitle} numberOfLines={2}>{item.title}</Text>
             <Text style={styles.cardTime}>{formatNotificationDate(item.created_at)}</Text>
           </View>
-          <Text style={styles.cardText} numberOfLines={3}>{item.body}</Text>
+          <Text style={styles.cardText} numberOfLines={3}>{sosMeta?.summary ?? item.body}</Text>
+
+          {sosMeta?.locationLabel ? (
+            <View style={styles.sosMetaRow}>
+              <Ionicons name="location-outline" size={13} color="#8B1E1E" />
+              <Text style={styles.sosMetaText} numberOfLines={1}>{sosMeta.locationLabel}</Text>
+            </View>
+          ) : null}
 
           {dangerMeta ? (
             <View style={styles.dangerMetaRow}>
@@ -741,6 +773,19 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 18,
     fontWeight: '600',
+  },
+  sosMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 6,
+  },
+  sosMetaText: {
+    flex: 1,
+    color: '#8B1E1E',
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: '800',
   },
   cardActions: {
     width: 32,
