@@ -7,6 +7,8 @@ import { HttpError } from "../../lib/httpError";
 import { requireAuth } from "../../middleware/auth";
 import { verifyPhoto } from "../../services/photoVerificationService";
 import { updateUserStats } from "../achievements/achievements.service";
+import { trackUserActivity } from "../analytics/analytics.service";
+import { createSosEvent } from "../sos/sos.service";
 
 interface StartActivityBody {
   trail_id?: string;
@@ -550,6 +552,11 @@ export async function startActivity(req: Request, res: Response): Promise<void> 
     );
 
     console.log("[activities.startActivity] returning created activity", { activity_id: activity.id });
+    await trackUserActivity({
+      userId: auth.sub,
+      eventType: "activity_created",
+      metadata: { activity_id: activity.id, trail_id: activity.trail_id },
+    });
     res.status(201).json(activity);
   } catch (error) {
     handleActivityError("startActivity", error);
@@ -1080,18 +1087,23 @@ export async function sosAlert(req: Request, res: Response): Promise<void> {
       }
     }
 
-    console.log("[activities.sosAlert] inserting SOS event");
-    const result = await pool.query(
-      `
-      INSERT INTO sos_events (user_id, activity_id, latitude, longitude, message, occurred_at, status, created_at)
-      VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6::timestamptz, 'created', NOW())
-      RETURNING id, status, occurred_at
-      `,
-      [auth.sub, activity_id ?? null, latitude, longitude, typeof message === "string" ? message : null, occurred_at]
-    );
+    console.log("[activities.sosAlert] creating SOS lifecycle event");
+    const result = await createSosEvent({
+      userId: auth.sub,
+      activityId: activity_id ?? null,
+      latitude,
+      longitude,
+      message: typeof message === "string" ? message : null,
+      occurredAt: occurred_at,
+    });
 
-    console.log("[activities.sosAlert] returning created SOS event", { sos_id: result.rows[0]?.id });
-    res.status(201).json({ data: result.rows[0] });
+    console.log("[activities.sosAlert] returning SOS event", { sos_id: result.id });
+    await trackUserActivity({
+      userId: auth.sub,
+      eventType: "sos_triggered",
+      metadata: { sos_id: result.id, activity_id: activity_id ?? null },
+    });
+    res.status(201).json({ data: result });
   } catch (error) {
     handleActivityError("sosAlert", error);
   }

@@ -7,6 +7,7 @@ import type {
   NotificationType,
   PushToken,
 } from "./notifications.types";
+import { sendFcmPushNotification } from "./fcmProvider";
 
 interface NotificationRow {
   id: string;
@@ -22,6 +23,15 @@ interface NotificationRow {
   data: Record<string, unknown> | null;
   read_at: string | Date | null;
   created_at: string | Date;
+}
+
+type PushProvider = "expo" | "fcm" | "apns" | "webpush";
+
+interface PushDeliveryResult {
+  token_id: string;
+  provider: PushProvider;
+  status: "sent" | "skipped" | "failed";
+  reason?: string;
 }
 
 function toIsoString(value: string | Date | null): string | null {
@@ -250,20 +260,27 @@ export async function registerPushToken(
   userId: string,
   token: string,
   platform: string,
-  deviceId?: string
+  deviceId?: string,
+  provider?: PushProvider,
+  appVersion?: string
 ): Promise<PushToken> {
   console.log("[notifications.service.registerPushToken] ========== START ==========");
-  console.log("[notifications.service.registerPushToken] Params:", { userId, platform, deviceId, tokenLength: token.length });
+  console.log("[notifications.service.registerPushToken] Params:", { userId, platform, provider, deviceId, appVersion, tokenLength: token.length });
+  const resolvedProvider = provider ?? inferProvider(platform, token);
 
   const updateResult = await pool.query<PushToken>(
     `UPDATE push_tokens
      SET platform = $3,
          device_id = $4,
+         provider = $5,
+         app_version = $6,
+         last_seen_at = NOW(),
+         is_active = true,
          updated_at = NOW()
      WHERE user_id = $1::uuid
        AND token = $2
-     RETURNING id, user_id, token, platform, device_id, created_at, updated_at`,
-    [userId, token, platform, deviceId ?? null]
+     RETURNING id, user_id, token, platform, provider, device_id, app_version, last_seen_at, is_active, created_at, updated_at`,
+    [userId, token, platform, deviceId ?? null, resolvedProvider, appVersion ?? null]
   );
 
   if (updateResult.rows[0]) {
@@ -272,10 +289,10 @@ export async function registerPushToken(
   }
 
   const insertResult = await pool.query<PushToken>(
-    `INSERT INTO push_tokens (user_id, token, platform, device_id)
-     VALUES ($1::uuid, $2, $3, $4)
-     RETURNING id, user_id, token, platform, device_id, created_at, updated_at`,
-    [userId, token, platform, deviceId ?? null]
+    `INSERT INTO push_tokens (user_id, token, platform, provider, device_id, app_version, last_seen_at, is_active)
+     VALUES ($1::uuid, $2, $3, $4, $5, $6, NOW(), true)
+     RETURNING id, user_id, token, platform, provider, device_id, app_version, last_seen_at, is_active, created_at, updated_at`,
+    [userId, token, platform, resolvedProvider, deviceId ?? null, appVersion ?? null]
   );
 
   console.log("[notifications.service.registerPushToken] Inserted token:", insertResult.rows[0].id);
@@ -287,7 +304,9 @@ export async function removePushToken(userId: string, token: string): Promise<bo
   console.log("[notifications.service.removePushToken] Params:", { userId, tokenLength: token.length });
 
   const result = await pool.query(
-    `DELETE FROM push_tokens
+    `UPDATE push_tokens
+     SET is_active = false,
+         updated_at = NOW()
      WHERE user_id = $1::uuid
        AND token = $2`,
     [userId, token]
@@ -297,64 +316,105 @@ export async function removePushToken(userId: string, token: string): Promise<bo
   return (result.rowCount ?? 0) > 0;
 }
 
-async function sendFcmPush(token: PushToken, title: string, body: string, data?: object): Promise<void> {
-  console.log("[notifications.service.sendFcmPush] FCM push requested:", {
-    token_id: token.id,
-    title,
-    body,
-    hasData: Boolean(data),
-  });
+function inferProvider(platform: string, token: string): PushProvider {
+  if (token.startsWith("ExponentPushToken[")) {
+    return "expo";
+  }
+
+  if (platform === "ios") {
+    return "apns";
+  }
+
+  if (platform === "android") {
+    return "fcm";
+  }
+
+  return "webpush";
 }
 
-async function sendApnsPush(token: PushToken, title: string, body: string, data?: object): Promise<void> {
-  console.log("[notifications.service.sendApnsPush] APNS push requested:", {
-    token_id: token.id,
-    title,
-    body,
-    hasData: Boolean(data),
-  });
+async function sendExpoPush(token: PushToken, title: string, body: string, data?: object): Promise<PushDeliveryResult> {
+  try {
+    const response = await fetch("https://exp.host/--/api/v2/push/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        to: token.token,
+        title,
+        body,
+        data: data ?? {},
+      }),
+    });
+
+    if (!response.ok) {
+      return { token_id: token.id, provider: "expo", status: "failed", reason: `Expo responded ${response.status}` };
+    }
+
+    return { token_id: token.id, provider: "expo", status: "sent" };
+  } catch (error) {
+    return { token_id: token.id, provider: "expo", status: "failed", reason: error instanceof Error ? error.message : String(error) };
+  }
 }
 
-async function sendWebPush(token: PushToken, title: string, body: string, data?: object): Promise<void> {
-  console.log("[notifications.service.sendWebPush] Web push requested:", {
-    token_id: token.id,
-    title,
-    body,
-    hasData: Boolean(data),
-  });
+async function sendApnsPush(token: PushToken, _title: string, _body: string, _data?: object): Promise<PushDeliveryResult> {
+  if (!process.env.APNS_KEY_ID || !process.env.APNS_TEAM_ID || !process.env.APNS_PRIVATE_KEY) {
+    return { token_id: token.id, provider: "apns", status: "skipped", reason: "APNS credentials are not configured" };
+  }
+
+  return { token_id: token.id, provider: "apns", status: "skipped", reason: "APNS provider adapter is configured for future credential integration" };
 }
 
-export async function sendPushNotification(userId: string, title: string, body: string, data?: object): Promise<void> {
+async function sendWebPush(token: PushToken, _title: string, _body: string, _data?: object): Promise<PushDeliveryResult> {
+  if (!process.env.WEB_PUSH_VAPID_PUBLIC_KEY || !process.env.WEB_PUSH_VAPID_PRIVATE_KEY) {
+    return { token_id: token.id, provider: "webpush", status: "skipped", reason: "WebPush VAPID credentials are not configured" };
+  }
+
+  return { token_id: token.id, provider: "webpush", status: "skipped", reason: "WebPush provider adapter is configured for future credential integration" };
+}
+
+async function deliverPush(token: PushToken, title: string, body: string, data?: object): Promise<PushDeliveryResult> {
+  const provider = (token.provider ?? inferProvider(token.platform, token.token)) as PushProvider;
+  if (provider === "expo") {
+    return sendExpoPush(token, title, body, data);
+  }
+
+  if (provider === "apns") {
+    return sendApnsPush(token, title, body, data);
+  }
+
+  return sendWebPush(token, title, body, data);
+}
+
+export async function sendPushNotification(userId: string, title: string, body: string, data?: object): Promise<PushDeliveryResult[]> {
   console.log("[notifications.service.sendPushNotification] ========== START ==========");
   console.log("[notifications.service.sendPushNotification] Params:", { userId, title, hasData: Boolean(data) });
 
   try {
     const result = await pool.query<PushToken>(
-      `SELECT id, user_id, token, platform, device_id, created_at, updated_at
+      `SELECT id, user_id, token, platform, provider, device_id, app_version, last_seen_at, is_active, created_at, updated_at
        FROM push_tokens
-       WHERE user_id = $1::uuid`,
+       WHERE user_id = $1::uuid
+         AND COALESCE(is_active, true) = true
+         AND COALESCE(provider, '') <> 'fcm'`,
       [userId]
     );
     console.log("[notifications.service.sendPushNotification] Tokens found:", result.rows.length);
+    const deliveries: PushDeliveryResult[] = [];
 
     for (const token of result.rows) {
-      try {
-        if (token.platform === "android") {
-          await sendFcmPush(token, title, body, data);
-        } else if (token.platform === "ios") {
-          await sendApnsPush(token, title, body, data);
-        } else {
-          await sendWebPush(token, title, body, data);
-        }
-      } catch (pushError) {
-        console.error("[notifications.service.sendPushNotification] Push send failed:", {
-          token_id: token.id,
-          platform: token.platform,
-          error: pushError instanceof Error ? pushError.message : String(pushError),
-        });
-      }
+      const delivery = await deliverPush(token, title, body, data);
+      deliveries.push(delivery);
+      console.log("[notifications.service.sendPushNotification] Delivery result:", delivery);
     }
+
+    const fcmDeliveries = await sendFcmPushNotification(userId, title, body, data);
+    for (const delivery of fcmDeliveries) {
+      deliveries.push(delivery);
+      console.log("[notifications.service.sendPushNotification] FCM delivery result:", delivery);
+    }
+
+    return deliveries;
   } catch (error) {
     console.error("[notifications.service.sendPushNotification] Failed to load push tokens:", error);
+    return [];
   }
 }

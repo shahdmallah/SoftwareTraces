@@ -29,6 +29,14 @@ export interface DuplicateTrailWarning {
   matches: DuplicateTrailMatch[];
 }
 
+export interface PushTokenRegistration {
+  token: string;
+  provider: "fcm";
+  platform: "ios" | "android";
+  device_id: string;
+  app_version?: string;
+}
+
 const api = axios.create({
   baseURL: process.env.EXPO_PUBLIC_API_URL ?? "http://localhost:3000/api",
   timeout: 15000
@@ -76,6 +84,10 @@ export async function getTrailOfflineBundle(trailId: string): Promise<OfflineMap
 export async function checkDuplicateTrail(payload: DuplicateTrailCheckRequest): Promise<DuplicateTrailWarning> {
   const response = await api.post<DuplicateTrailWarning>("/trails/check-duplicate", payload);
   return response.data;
+}
+
+export async function registerPushToken(payload: PushTokenRegistration): Promise<void> {
+  await api.post("/notifications/push-token", payload);
 }
 
 export default api;

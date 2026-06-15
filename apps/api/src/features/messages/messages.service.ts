@@ -39,6 +39,7 @@ export interface Message {
     avatar_url: string | null;
   };
   content: string;
+  metadata: Record<string, unknown> | null;
   created_at: string;
   edited_at: string | null;
   deleted_at: string | null;
@@ -70,6 +71,7 @@ interface MessageRow {
   sender_full_name: string | null;
   sender_avatar_url: string | null;
   content: string;
+  metadata: Record<string, unknown> | null;
   created_at: string | Date;
   edited_at: string | Date | null;
   deleted_at: string | Date | null;
@@ -108,6 +110,7 @@ function formatMessage(row: MessageRow): Message {
       avatar_url: row.sender_avatar_url,
     },
     content: row.content,
+    metadata: row.metadata ?? null,
     created_at: toIsoString(row.created_at) ?? new Date().toISOString(),
     edited_at: toIsoString(row.edited_at),
     deleted_at: toIsoString(row.deleted_at),
@@ -254,7 +257,7 @@ async function getConversationById(conversationId: string, profileId: string): P
      ) participants ON TRUE
      LEFT JOIN LATERAL (
        SELECT m.id, m.conversation_id, m.sender_id, sp.full_name AS sender_full_name,
-              sp.avatar_url AS sender_avatar_url, m.content, m.created_at, m.edited_at, m.deleted_at
+              sp.avatar_url AS sender_avatar_url, m.content, COALESCE(m.metadata, '{}'::jsonb) AS metadata, m.created_at, m.edited_at, m.deleted_at
        FROM messages m
        LEFT JOIN profiles sp ON sp.id = m.sender_id
        WHERE m.conversation_id = c.id
@@ -410,7 +413,7 @@ export async function listConversations(userId: string): Promise<Conversation[]>
      ) participants ON TRUE
      LEFT JOIN LATERAL (
        SELECT m.id, m.conversation_id, m.sender_id, sp.full_name AS sender_full_name,
-              sp.avatar_url AS sender_avatar_url, m.content, m.created_at, m.edited_at, m.deleted_at
+              sp.avatar_url AS sender_avatar_url, m.content, COALESCE(m.metadata, '{}'::jsonb) AS metadata, m.created_at, m.edited_at, m.deleted_at
        FROM messages m
        LEFT JOIN profiles sp ON sp.id = m.sender_id
        WHERE m.conversation_id = c.id
@@ -448,7 +451,7 @@ export async function getConversationMessages(
 
   const result = await pool.query<MessageRow>(
     `SELECT m.id, m.conversation_id, m.sender_id, p.full_name AS sender_full_name,
-            p.avatar_url AS sender_avatar_url, m.content, m.created_at, m.edited_at, m.deleted_at
+            p.avatar_url AS sender_avatar_url, m.content, COALESCE(m.metadata, '{}'::jsonb) AS metadata, m.created_at, m.edited_at, m.deleted_at
      FROM messages m
      LEFT JOIN profiles p ON p.id = m.sender_id
      WHERE m.conversation_id = $1::uuid
@@ -466,6 +469,15 @@ export async function sendConversationMessage(
   conversationId: string,
   content: string
 ): Promise<Message> {
+  return sendConversationMessageWithMetadata(userId, conversationId, content, null);
+}
+
+export async function sendConversationMessageWithMetadata(
+  userId: string,
+  conversationId: string,
+  content: string,
+  metadata: Record<string, unknown> | null
+): Promise<Message> {
   const profileId = await getProfileIdForAuthUser(userId);
   if (!(await isConversationParticipant(conversationId, profileId))) {
     throw new Error("Conversation not found");
@@ -475,11 +487,11 @@ export async function sendConversationMessage(
   try {
     await client.query("BEGIN");
     const result = await client.query<MessageRow>(
-      `INSERT INTO messages (conversation_id, sender_id, content)
-       VALUES ($1::uuid, $2::uuid, $3)
+      `INSERT INTO messages (conversation_id, sender_id, content, metadata)
+       VALUES ($1::uuid, $2::uuid, $3, $4::jsonb)
        RETURNING id, conversation_id, sender_id, NULL::text AS sender_full_name,
-                 NULL::text AS sender_avatar_url, content, created_at, edited_at, deleted_at`,
-      [conversationId, profileId, content]
+                 NULL::text AS sender_avatar_url, content, metadata, created_at, edited_at, deleted_at`,
+      [conversationId, profileId, content, JSON.stringify(metadata ?? {})]
     );
     await client.query("UPDATE conversations SET updated_at = NOW() WHERE id = $1::uuid", [conversationId]);
     await client.query(
@@ -493,7 +505,7 @@ export async function sendConversationMessage(
 
     const messageResult = await pool.query<MessageRow>(
       `SELECT m.id, m.conversation_id, m.sender_id, p.full_name AS sender_full_name,
-              p.avatar_url AS sender_avatar_url, m.content, m.created_at, m.edited_at, m.deleted_at
+              p.avatar_url AS sender_avatar_url, m.content, COALESCE(m.metadata, '{}'::jsonb) AS metadata, m.created_at, m.edited_at, m.deleted_at
        FROM messages m
        LEFT JOIN profiles p ON p.id = m.sender_id
        WHERE m.id = $1::uuid`,
@@ -507,6 +519,13 @@ export async function sendConversationMessage(
   } finally {
     client.release();
   }
+}
+
+export async function getOrCreateDirectConversation(userId: string, contactUserId: string): Promise<Conversation> {
+  return createConversation(userId, {
+    type: "direct",
+    participant_ids: [contactUserId],
+  });
 }
 
 export async function markConversationRead(userId: string, conversationId: string): Promise<{ conversation_id: string; last_read_at: string; unread_count: number }> {

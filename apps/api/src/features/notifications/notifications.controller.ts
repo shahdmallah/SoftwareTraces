@@ -13,7 +13,9 @@ import {
 const pushTokenSchema = z.object({
   token: z.string().min(1),
   platform: z.enum(["ios", "android", "web"]),
+  provider: z.enum(["expo", "fcm", "apns", "webpush"]).optional(),
   device_id: z.string().optional(),
+  app_version: z.string().optional(),
 });
 
 const removePushTokenSchema = z.object({
@@ -141,7 +143,7 @@ export async function registerPushToken(req: Request, res: Response): Promise<vo
   try {
     const auth = requireAuth(req);
     const body = pushTokenSchema.parse(req.body);
-    const pushToken = await registerPushTokenService(auth.sub, body.token, body.platform, body.device_id);
+    const pushToken = await registerPushTokenService(auth.sub, body.token, body.platform, body.device_id, body.provider, body.app_version);
 
     res.status(201).json({ data: pushToken });
   } catch (error) {

@@ -8,6 +8,7 @@ interface ProfileRow {
   id: string;
   user_id: string;
   full_name: string;
+  role: string;
   avatar_url: string | null;
   bio: string | null;
   location: string | null;
@@ -104,6 +105,7 @@ async function getProfileByUserId(userId: string): Promise<ProfileRow> {
        id,
        user_id,
        full_name,
+       role,
        avatar_url,
        bio,
        location
@@ -263,6 +265,7 @@ export async function getProfile(req: Request, res: Response): Promise<void> {
         id: profile.id,
         user_id: profile.user_id,
         full_name: profile.full_name,
+        role: profile.role,
         avatar_url: profile.avatar_url,
         bio: profile.bio,
         location: profile.location,

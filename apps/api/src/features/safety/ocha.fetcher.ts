@@ -50,6 +50,10 @@ interface MappedIncident {
 const HDX_SEARCH_URL =
   "https://data.humdata.org/api/3/action/package_search?q=west+bank+incidents+protection&fq=organization:ocha-opt&rows=10";
 
+type OchaFetchResult = { processed: number; inserted: number };
+
+let activeOchaImport: Promise<OchaFetchResult> | null = null;
+
 function getText(row: Record<string, unknown>, fieldNames: string[]): string {
   for (const fieldName of fieldNames) {
     const value = row[fieldName] ?? row[fieldName.toUpperCase()] ?? row[fieldName.toLowerCase()];
@@ -216,9 +220,9 @@ async function insertIncident(incident: MappedIncident): Promise<boolean> {
     `INSERT INTO safety_incidents (
        incident_type, severity, latitude, longitude,
        description, headline, reported_at, expires_at,
-       source, source_name, source_url, confirmed_count
+       source, source_name, source_url, confirmed_count, moderation_status
      )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'ocha', 'OCHA oPt', $9, 1)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'ocha', 'OCHA oPt', $9, 1, 'approved')
      ON CONFLICT DO NOTHING`,
     [
       incident.incident_type,
@@ -236,7 +240,7 @@ async function insertIncident(incident: MappedIncident): Promise<boolean> {
   return (result.rowCount ?? 0) > 0;
 }
 
-export async function fetchOchaIncidents(): Promise<{ processed: number; inserted: number }> {
+async function runOchaImport(): Promise<OchaFetchResult> {
   console.log("[fetchOchaIncidents] Starting OCHA HDX fetch");
   let processed = 0;
   let inserted = 0;
@@ -308,5 +312,20 @@ export async function fetchOchaIncidents(): Promise<{ processed: number; inserte
       [processed, inserted, error instanceof Error ? error.message : String(error)]
     );
     throw error;
+  }
+}
+
+export async function fetchOchaIncidents(): Promise<OchaFetchResult> {
+  if (activeOchaImport) {
+    console.log("[fetchOchaIncidents] OCHA import already running; waiting for current import");
+    return activeOchaImport;
+  }
+
+  activeOchaImport = runOchaImport();
+
+  try {
+    return await activeOchaImport;
+  } finally {
+    activeOchaImport = null;
   }
 }
