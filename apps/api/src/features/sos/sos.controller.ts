@@ -43,6 +43,9 @@ const contactSchema = z.object({
   email: z.string().trim().email().nullable().optional(),
   relationship: z.string().trim().max(100).nullable().optional(),
   is_primary: z.boolean().optional(),
+  notify_by_sms: z.boolean().optional(),
+  notify_by_email: z.boolean().optional(),
+  notify_by_push: z.boolean().optional(),
   notify_on_sos: z.boolean().optional(),
 });
 
@@ -173,7 +176,22 @@ export async function postContact(req: Request, res: Response): Promise<void> {
   try {
     const auth = requireAuth(req);
     const body = contactSchema.parse(req.body);
-    res.status(201).json({ data: await createEmergencyContact(auth.sub, body) });
+    const fullName = body.full_name ?? body.name ?? "";
+    res.status(201).json({
+      data: await createEmergencyContact(auth.sub, {
+        full_name: fullName,
+        name: body.name ?? fullName,
+        contact_user_id: body.contact_user_id ?? null,
+        phone: body.phone ?? null,
+        email: body.email ?? null,
+        relationship: body.relationship ?? null,
+        is_primary: body.is_primary,
+        notify_by_sms: body.notify_by_sms,
+        notify_by_email: body.notify_by_email,
+        notify_by_push: body.notify_by_push,
+        notify_on_sos: body.notify_on_sos,
+      }),
+    });
   } catch (error) {
     sendSosError("postContact", res, error);
   }

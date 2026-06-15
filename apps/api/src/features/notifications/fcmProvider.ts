@@ -57,6 +57,10 @@ async function sendFcmToken(token: PushToken, title: string, body: string, data?
       data: stringifyData(data),
       android: {
         priority: "high",
+        notification: {
+          channelId: "default",
+          sound: "default",
+        },
       },
       apns: {
         payload: {

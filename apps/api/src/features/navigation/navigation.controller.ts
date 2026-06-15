@@ -2,6 +2,9 @@ import type { Request, Response } from "express";
 import { pool } from "../../db/pool";
 import { HttpError } from "../../lib/httpError";
 import { requireAuth } from "../../middleware/auth";
+import { createNotification } from "../notifications/notifications.service";
+
+const NAVIGATION_ALERT_COOLDOWN_MS = 5 * 60 * 1000;
 
 function isUuid(value: unknown): value is string {
   return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
@@ -54,6 +57,51 @@ function sendNavigationError(action: string, res: Response, error: unknown): voi
     return;
   }
   res.status(500).json({ error: "Internal server error", details: error instanceof Error ? error.message : String(error) });
+}
+
+function shouldSendNavigationAlert(lastOffTrailEventAt: string | Date | null): boolean {
+  if (!lastOffTrailEventAt) {
+    return true;
+  }
+
+  const lastEventMs = lastOffTrailEventAt instanceof Date ? lastOffTrailEventAt.getTime() : new Date(lastOffTrailEventAt).getTime();
+  return !Number.isFinite(lastEventMs) || Date.now() - lastEventMs >= NAVIGATION_ALERT_COOLDOWN_MS;
+}
+
+async function createNavigationAlertBestEffort(input: {
+  userId: string;
+  trailId: string;
+  trailName: string | null;
+  sessionId: string;
+  latitude: number;
+  longitude: number;
+  deviationMeters: number;
+  progressPercent: number;
+  instruction: string;
+}): Promise<void> {
+  try {
+    await createNotification({
+      user_id: input.userId,
+      type: "danger_alert",
+      title: "Navigation alert",
+      body: input.instruction || `You are ${input.deviationMeters} meters off trail.`,
+      entity_type: "trail",
+      entity_id: input.trailId,
+      data: {
+        notification_kind: "navigation_off_track",
+        navigation_session_id: input.sessionId,
+        trail_id: input.trailId,
+        trail_name: input.trailName,
+        latitude: input.latitude,
+        longitude: input.longitude,
+        deviation_meters: input.deviationMeters,
+        progress_percent: input.progressPercent,
+        instruction: input.instruction,
+      },
+    });
+  } catch (error) {
+    console.error("[navigation.createNavigationAlertBestEffort] Failed to create notification:", error);
+  }
 }
 
 export async function startNavigation(req: Request, res: Response): Promise<void> {
@@ -117,7 +165,7 @@ export async function checkPosition(req: Request, res: Response): Promise<void> 
     const result = await pool.query(
       `
       WITH session_trail AS (
-        SELECT ns.id, ns.user_id, ns.trail_id, ns.status, ns.off_trail_count, t.geometry
+        SELECT ns.id, ns.user_id, ns.trail_id, ns.status, ns.off_trail_count, t.name AS trail_name, t.geometry
         FROM navigation_sessions ns
         JOIN trails t ON t.id = ns.trail_id
         WHERE ns.id = $1::uuid
@@ -139,10 +187,16 @@ export async function checkPosition(req: Request, res: Response): Promise<void> 
         user_id,
         trail_id,
         status,
+        trail_name,
         off_trail_count,
         deviation_meters,
         progress,
         trail_length_meters,
+        (
+          SELECT MAX(ote.created_at)
+          FROM off_trail_events ote
+          WHERE ote.navigation_session_id = projected.id
+        ) AS last_off_trail_event_at,
         ST_Y(ST_LineInterpolatePoint(geometry::geometry, LEAST(progress + 0.02, 1))) AS ahead_latitude,
         ST_X(ST_LineInterpolatePoint(geometry::geometry, LEAST(progress + 0.02, 1))) AS ahead_longitude,
         ST_Y(ST_LineInterpolatePoint(geometry::geometry, progress)) AS trail_latitude,
@@ -182,6 +236,7 @@ export async function checkPosition(req: Request, res: Response): Promise<void> 
 
     if (offTrack) {
       console.log("[navigation.checkPosition] recording off-trail event", { deviationMeters });
+      const shouldNotify = shouldSendNavigationAlert(nav.last_off_trail_event_at ?? null);
       await pool.query(
         `
         INSERT INTO off_trail_events (navigation_session_id, latitude, longitude, deviation_meters, created_at)
@@ -190,6 +245,20 @@ export async function checkPosition(req: Request, res: Response): Promise<void> 
         [req.params.id, latitude, longitude, deviationMeters, timestamp]
       );
       await pool.query("UPDATE navigation_sessions SET off_trail_count = off_trail_count + 1 WHERE id = $1::uuid", [req.params.id]);
+
+      if (shouldNotify) {
+        await createNavigationAlertBestEffort({
+          userId: auth.sub,
+          trailId: nav.trail_id,
+          trailName: nav.trail_name ?? null,
+          sessionId: req.params.id,
+          latitude,
+          longitude,
+          deviationMeters,
+          progressPercent: Math.round(progress * 100),
+          instruction,
+        });
+      }
     }
 
     res.json({

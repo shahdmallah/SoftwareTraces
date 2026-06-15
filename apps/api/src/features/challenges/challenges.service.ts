@@ -14,7 +14,7 @@ export interface ChallengeInput {
   description: string;
   goal_type: ChallengeGoalType;
   goal_value: number;
-  goal_metadata?: Record<string, unknown>;
+  goal_metadata?: Record<string, unknown> | null;
   start_at: string;
   end_at: string;
   reward_badge_id?: string | null;
@@ -111,16 +111,40 @@ export async function getChallenge(challengeId: string, userId?: string | null, 
   return result.rows[0] ? formatChallenge(result.rows[0]) : null;
 }
 
-async function assertRewardBadgeExists(rewardBadgeId?: string | null): Promise<void> {
-  if (!rewardBadgeId) return;
-  const result = await pool.query("SELECT id FROM achievements WHERE id = $1::uuid LIMIT 1", [rewardBadgeId]);
-  if (!result.rows[0]) {
-    throw new Error("REWARD_BADGE_NOT_FOUND");
+function isRewardBadgeForeignKeyError(error: unknown): error is { code?: string; constraint?: string } {
+  if (!error || typeof error !== "object") return false;
+  const record = error as { code?: string; constraint?: string };
+  return record.code === "23503" && record.constraint === "challenges_reward_badge_id_fkey";
+}
+
+function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+async function resolveRewardBadgeId(rewardBadgeId?: string | null, strict = false): Promise<string | null> {
+  const rewardBadgeKey = rewardBadgeId?.trim();
+  if (!rewardBadgeKey) return null;
+  if (isUuid(rewardBadgeKey)) {
+    return rewardBadgeKey;
   }
+  const result = await pool.query<{ id: string }>(
+    `SELECT id::text AS id
+     FROM public.achievements
+     WHERE lower(code) = lower($1)
+     LIMIT 1`,
+    [rewardBadgeKey]
+  );
+  if (!result.rows[0]) {
+    if (strict) {
+      throw new Error("REWARD_BADGE_NOT_FOUND");
+    }
+    return null;
+  }
+  return result.rows[0].id;
 }
 
 export async function createChallenge(adminUserId: string, input: ChallengeInput) {
-  await assertRewardBadgeExists(input.reward_badge_id);
+  const rewardBadgeId = await resolveRewardBadgeId(input.reward_badge_id, Boolean(input.reward_badge_id));
   const columns = await getChallengeColumns();
   const insertColumns = [
     "title",
@@ -142,7 +166,7 @@ export async function createChallenge(adminUserId: string, input: ChallengeInput
     input.goal_value,
     input.start_at,
     input.end_at,
-    input.reward_badge_id ?? null,
+    rewardBadgeId,
     input.reward_points ?? 0,
     input.visibility ?? "public",
     input.status ?? "draft",
@@ -180,12 +204,20 @@ export async function createChallenge(adminUserId: string, input: ChallengeInput
     placeholders.push("NOW()");
   }
 
-  const result = await pool.query(
-    `INSERT INTO challenges (${insertColumns.join(", ")})
-     VALUES (${placeholders.join(", ")})
-     RETURNING *`,
-    values
-  );
+  let result;
+  try {
+    result = await pool.query(
+      `INSERT INTO challenges (${insertColumns.join(", ")})
+       VALUES (${placeholders.join(", ")})
+       RETURNING *`,
+      values
+    );
+  } catch (error) {
+    if (isRewardBadgeForeignKeyError(error)) {
+      throw new Error("REWARD_BADGE_NOT_FOUND");
+    }
+    throw error;
+  }
   const challenge = result.rows[0];
   if (challenge.status === "published" && challenge.visibility === "public") {
     await notifyUsersAboutPublishedChallenge(challenge);
@@ -197,7 +229,10 @@ export async function updateChallenge(challengeId: string, input: Partial<Challe
   const current = await getChallenge(challengeId, null, true);
   if (!current) return null;
   const next = { ...current, ...input };
-  await assertRewardBadgeExists(next.reward_badge_id);
+  const rewardBadgeWasProvided = Object.prototype.hasOwnProperty.call(input, "reward_badge_id");
+  const rewardBadgeId = rewardBadgeWasProvided
+    ? await resolveRewardBadgeId(input.reward_badge_id ?? null, Boolean(input.reward_badge_id))
+    : undefined;
   const columns = await getChallengeColumns();
   const values: unknown[] = [challengeId];
   const setParts: string[] = [];
@@ -216,7 +251,9 @@ export async function updateChallenge(challengeId: string, input: Partial<Challe
   }
   addSet("start_at", next.start_at, "::timestamptz");
   addSet("end_at", next.end_at, "::timestamptz");
-  addSet("reward_badge_id", next.reward_badge_id ?? null, "::uuid");
+  if (rewardBadgeWasProvided) {
+    addSet("reward_badge_id", rewardBadgeId ?? null, "::uuid");
+  }
   addSet("reward_points", next.reward_points ?? 0);
   addSet("visibility", next.visibility ?? "public");
   addSet("status", next.status ?? "draft");
@@ -230,13 +267,21 @@ export async function updateChallenge(challengeId: string, input: Partial<Challe
     setParts.push("updated_at = NOW()");
   }
 
-  const result = await pool.query(
-    `UPDATE challenges
-     SET ${setParts.join(",\n         ")}
-     WHERE id = $1::uuid
-     RETURNING *`,
-    values
-  );
+  let result;
+  try {
+    result = await pool.query(
+      `UPDATE challenges
+       SET ${setParts.join(",\n         ")}
+       WHERE id = $1::uuid
+       RETURNING *`,
+      values
+    );
+  } catch (error) {
+    if (isRewardBadgeForeignKeyError(error)) {
+      throw new Error("REWARD_BADGE_NOT_FOUND");
+    }
+    throw error;
+  }
   return formatChallenge(result.rows[0]);
 }
 

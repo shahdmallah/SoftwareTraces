@@ -34,6 +34,16 @@ interface PushDeliveryResult {
   reason?: string;
 }
 
+interface ExpoPushTicket {
+  status?: "ok" | "error";
+  id?: string;
+  message?: string;
+  details?: {
+    error?: string;
+    [key: string]: unknown;
+  };
+}
+
 function toIsoString(value: string | Date | null): string | null {
   if (value === null) {
     return null;
@@ -86,6 +96,18 @@ function notificationSelectSql(): string {
     n.read_at,
     n.created_at
   `;
+}
+
+async function deactivatePushToken(tokenId: string, reason: string): Promise<void> {
+  await pool.query(
+    `UPDATE push_tokens
+     SET is_active = false,
+         updated_at = NOW()
+     WHERE id = $1::uuid`,
+    [tokenId]
+  );
+
+  console.warn("[notifications.service] Deactivated invalid push token:", { tokenId, reason });
 }
 
 async function fetchNotificationById(notificationId: string, userId: string): Promise<Notification | null> {
@@ -341,12 +363,39 @@ async function sendExpoPush(token: PushToken, title: string, body: string, data?
         to: token.token,
         title,
         body,
+        sound: "default",
+        channelId: "default",
+        priority: "high",
         data: data ?? {},
       }),
     });
 
     if (!response.ok) {
       return { token_id: token.id, provider: "expo", status: "failed", reason: `Expo responded ${response.status}` };
+    }
+
+    const payload = await response.json().catch(() => null) as
+      | { data?: ExpoPushTicket | ExpoPushTicket[]; errors?: Array<{ message?: string }> }
+      | null;
+    const tickets = Array.isArray(payload?.data)
+      ? payload.data
+      : payload?.data
+      ? [payload.data]
+      : [];
+    const failedTicket = tickets.find((ticket) => ticket?.status === "error");
+
+    if (failedTicket) {
+      const reason =
+        failedTicket.details?.error ??
+        failedTicket.message ??
+        payload?.errors?.[0]?.message ??
+        "Expo push ticket error";
+
+      if (reason === "DeviceNotRegistered") {
+        await deactivatePushToken(token.id, reason);
+      }
+
+      return { token_id: token.id, provider: "expo", status: "failed", reason };
     }
 
     return { token_id: token.id, provider: "expo", status: "sent" };

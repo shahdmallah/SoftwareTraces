@@ -1,5 +1,6 @@
 export type NotificationType =
   | "follow"
+  | "message"
   | "review_like"
   | "review_comment"
   | "activity_like"
@@ -10,6 +11,7 @@ export type NotificationType =
   | "danger_alert"
   | "sos_alert"
   | "emergency_contact_alert"
+  | "achievement"
   | "challenge_created"
   | "challenge_invite"
   | "challenge_completed"

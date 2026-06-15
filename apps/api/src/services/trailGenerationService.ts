@@ -1,16 +1,16 @@
 import mbxGeocoding from "@mapbox/mapbox-sdk/services/geocoding";
+import type { Difficulty } from "@traces/shared-types";
 import { env } from "../config/env";
+import { classifyDifficulty } from "../utils/trailDifficulty";
 import { totalDistance } from "../utils/distance";
 import type { ParsedTrailDescription } from "./aiService";
-
-type TrailDifficulty = "easy" | "moderate" | "hard" | "expert";
 
 export interface GeneratedTrail {
   coordinates: [number, number][];
   length_meters: number;
   elevation_gain_meters: number;
   estimated_duration_minutes: number;
-  difficulty: TrailDifficulty;
+  difficulty: Difficulty;
   name_suggestion: string | null;
   description_suggestion: string | null;
   labels: string[];
@@ -43,8 +43,8 @@ function getRequestedLengthKm(criteria: ParsedTrailDescription): number {
   }
 }
 
-function getElevationGainMeters(lengthKm: number, difficulty: TrailDifficulty): number {
-  const gainByDifficulty: Record<TrailDifficulty, number> = {
+function getElevationGainMeters(lengthKm: number, difficulty: Difficulty): number {
+  const gainByDifficulty: Record<Difficulty, number> = {
     easy: 25,
     moderate: 55,
     hard: 90,
@@ -126,7 +126,6 @@ function scaleLoopToTargetLength(center: [number, number], coordinates: [number,
 }
 
 export async function generateTrailFromDescription(criteria: ParsedTrailDescription): Promise<GeneratedTrail> {
-  const difficulty = criteria.difficulty ?? "easy";
   const requestedLengthKm = getRequestedLengthKm(criteria);
   const targetLengthMeters = requestedLengthKm * 1000;
   const center = await geocodeRegion(criteria.region);
@@ -134,7 +133,10 @@ export async function generateTrailFromDescription(criteria: ParsedTrailDescript
   const coordinates = scaleLoopToTargetLength(center, roughLoop, targetLengthMeters);
   const lengthMeters = Math.round(totalDistance(coordinates));
   const lengthKm = lengthMeters / 1000;
-  const elevationGainMeters = getElevationGainMeters(lengthKm, difficulty);
+  const inferredDifficulty = classifyDifficulty(lengthKm, 0);
+  const terrainDifficulty = criteria.difficulty ?? inferredDifficulty;
+  const elevationGainMeters = getElevationGainMeters(lengthKm, terrainDifficulty);
+  const difficulty = criteria.difficulty ?? classifyDifficulty(lengthKm, elevationGainMeters);
 
   return {
     coordinates,

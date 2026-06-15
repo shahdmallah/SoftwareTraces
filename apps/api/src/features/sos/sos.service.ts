@@ -26,6 +26,9 @@ export interface EmergencyContact {
   is_primary: boolean;
   is_active: boolean;
   contact_user_id: string | null;
+  notify_by_sms: boolean;
+  notify_by_email: boolean;
+  notify_by_push: boolean;
   notify_on_sos: boolean;
   created_at: string;
   updated_at: string | null;
@@ -35,6 +38,120 @@ interface SosDeliverySummary {
   emergency_contacts_count: number;
   contacts_notified: number;
   notification_status: ContactNotificationStatus;
+  status_note?: string | null;
+}
+
+function buildSosDeliveryStatusNote(delivery: SosDeliverySummary): string {
+  if (delivery.emergency_contacts_count === 0) {
+    return "SOS created. No emergency contacts are configured.";
+  }
+
+  if (delivery.contacts_notified === 0) {
+    return "SOS created. Emergency contacts could not be reached.";
+  }
+
+  if (delivery.contacts_notified < delivery.emergency_contacts_count) {
+    return `SOS created. ${delivery.contacts_notified}/${delivery.emergency_contacts_count} emergency contacts were notified.`;
+  }
+
+  return `SOS created. All ${delivery.emergency_contacts_count} emergency contacts were notified.`;
+}
+
+function summarizeDeliveryIssues(issues: string[]): string {
+  const uniqueIssues = [...new Set(issues.map((issue) => issue.trim()).filter(Boolean))];
+  if (uniqueIssues.length === 0) {
+    return "";
+  }
+
+  if (uniqueIssues.length <= 2) {
+    return uniqueIssues.join(" ");
+  }
+
+  return `${uniqueIssues[0]} ${uniqueIssues[1]} +${uniqueIssues.length - 2} more delivery issue${uniqueIssues.length - 2 === 1 ? "" : "s"}.`;
+}
+
+function withDeliveryIssues(baseMessage: string, issues: string[]): string {
+  const issueSummary = summarizeDeliveryIssues(issues);
+  return issueSummary ? `${baseMessage} ${issueSummary}` : baseMessage;
+}
+
+function formatSmsFailureMessage(phone: string, error: string | null, status: "sent" | "failed" | "skipped"): string {
+  const maskedPhone = maskPhoneNumber(phone);
+  const normalizedError = error?.trim() ?? "";
+
+  if (/has not been enabled for the region/i.test(normalizedError)) {
+    return `SMS to ${maskedPhone} could not be sent because that number's region is not enabled yet.`;
+  }
+
+  if (/international format/i.test(normalizedError)) {
+    return `SMS to ${maskedPhone} was skipped because the number format is invalid.`;
+  }
+
+  if (status === "skipped") {
+    return `SMS to ${maskedPhone} was skipped.`;
+  }
+
+  return `SMS to ${maskedPhone} could not be sent${normalizedError ? `: ${normalizedError}` : "."}`;
+}
+
+function maskPhoneNumber(phone: string): string {
+  if (phone.length <= 4) {
+    return phone;
+  }
+
+  return `${phone.slice(0, Math.min(6, phone.length))}XXXX`;
+}
+
+function formatSosLocation(latitude: number, longitude: number): string {
+  return `${latitude.toFixed(4)}, ${longitude.toFixed(4)}`;
+}
+
+function pushDeliveryIssue(issues: string[], issue: string): void {
+  const trimmed = issue.trim();
+  if (trimmed) {
+    issues.push(trimmed);
+  }
+}
+
+function getSosStatusForDelivery(delivery: Pick<SosDeliverySummary, "emergency_contacts_count" | "contacts_notified">): SosStatus {
+  if (delivery.emergency_contacts_count > 0 && delivery.contacts_notified === 0) {
+    return "failed";
+  }
+
+  return "notified";
+}
+
+function assertContactHasReachableSosChannel(input: {
+  contact_user_id?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  notify_by_sms?: boolean;
+  notify_by_email?: boolean;
+  notify_by_push?: boolean;
+  notify_on_sos?: boolean;
+}): void {
+  if (input.notify_on_sos === false) {
+    return;
+  }
+
+  const hasSmsChannel = input.notify_by_sms !== false && Boolean(input.phone?.trim());
+  const hasEmailChannel = input.notify_by_email !== false && Boolean(input.email?.trim());
+  const hasPushChannel = input.notify_by_push !== false && Boolean(input.contact_user_id);
+
+  if (hasSmsChannel || hasEmailChannel || hasPushChannel) {
+    return;
+  }
+
+  if (input.notify_by_push !== false && !input.contact_user_id) {
+    throw new HttpError(400, "Push notifications require a linked Traces account. Add a phone or email, or link this contact to a Traces user.");
+  }
+
+  throw new HttpError(400, "Emergency contacts need at least one active delivery channel: SMS with a phone number, email with an address, or push with a linked Traces account.");
+}
+
+interface ContactDeliveryAttempt {
+  delivered: boolean;
+  issues: string[];
 }
 
 export interface SosResponse extends SosDeliverySummary {
@@ -121,6 +238,9 @@ function formatContact(row: Record<string, any>): EmergencyContact {
     is_primary: toBool(row.is_primary),
     is_active: row.is_active !== false,
     contact_user_id: row.contact_user_id ?? null,
+    notify_by_sms: row.notify_by_sms !== false,
+    notify_by_email: row.notify_by_email !== false,
+    notify_by_push: row.notify_by_push !== false,
     notify_on_sos: row.notify_on_sos !== false,
     created_at: toIsoString(row.created_at),
     updated_at: row.updated_at ? toIsoString(row.updated_at) : null,
@@ -128,7 +248,7 @@ function formatContact(row: Record<string, any>): EmergencyContact {
 }
 
 function formatSos(row: Record<string, any>, delivery?: Partial<SosDeliverySummary>): SosResponse {
-  const contactCount = toNumber(row.contact_count ?? delivery?.emergency_contacts_count);
+  const contactCount = toNumber(row.contact_count ?? delivery?.emergency_contacts_count ?? row.emergency_contacts_notified);
   const notifiedCount = toNumber(row.notified_contact_count ?? row.emergency_contacts_notified ?? delivery?.contacts_notified);
   const notificationStatus = delivery?.notification_status
     ?? (contactCount === 0 || notifiedCount === 0 ? "failed" : notifiedCount < contactCount ? "partial" : "success");
@@ -142,7 +262,7 @@ function formatSos(row: Record<string, any>, delivery?: Partial<SosDeliverySumma
     message: row.message ?? null,
     occurred_at: toIsoString(row.occurred_at),
     status: (row.status ?? "created") as SosStatus,
-    status_note: row.status_note ?? null,
+    status_note: row.status_note ?? delivery?.status_note ?? null,
     contact_count: contactCount,
     notified_contact_count: notifiedCount,
     emergency_contacts_notified: toNumber(row.emergency_contacts_notified ?? notifiedCount),
@@ -175,6 +295,9 @@ async function contactSelectSql(): Promise<string> {
     selectIf(columns, "is_primary", "false"),
     selectIf(columns, "is_active", "true"),
     selectIf(columns, "contact_user_id", "NULL::uuid"),
+    selectIf(columns, "notify_by_sms", "true"),
+    selectIf(columns, "notify_by_email", "true"),
+    selectIf(columns, "notify_by_push", "true"),
     selectIf(columns, "notify_on_sos", "true"),
     selectIf(columns, "created_at", "NOW()"),
     selectIf(columns, "updated_at", "NULL::timestamptz"),
@@ -228,6 +351,29 @@ async function findActiveDuplicateContact(userId: string, input: { full_name: st
   return Boolean(result.rows[0]);
 }
 
+async function resolveContactUserIdByEmail(ownerUserId: string, email?: string | null): Promise<string | null> {
+  const normalizedEmail = email?.trim().toLowerCase();
+  if (!normalizedEmail) {
+    return null;
+  }
+
+  try {
+    const result = await pool.query<{ id: string }>(
+      `SELECT id
+       FROM users
+       WHERE lower(email) = $1
+         AND id <> $2::uuid
+       LIMIT 1`,
+      [normalizedEmail, ownerUserId]
+    );
+
+    return result.rows[0]?.id ?? null;
+  } catch (error) {
+    console.warn("[sos.resolveContactUserIdByEmail] failed:", error);
+    return null;
+  }
+}
+
 export async function listEmergencyContacts(userId: string): Promise<EmergencyContact[]> {
   if (!(await hasTable("emergency_contacts"))) {
     return [];
@@ -262,6 +408,9 @@ export async function createEmergencyContact(userId: string, input: {
   relationship?: string | null;
   is_primary?: boolean;
   contact_user_id?: string | null;
+  notify_by_sms?: boolean;
+  notify_by_email?: boolean;
+  notify_by_push?: boolean;
   notify_on_sos?: boolean;
 }): Promise<EmergencyContact> {
   if (!(await hasTable("emergency_contacts"))) {
@@ -272,6 +421,16 @@ export async function createEmergencyContact(userId: string, input: {
   if (await findActiveDuplicateContact(userId, { full_name: fullName, phone: input.phone, email: input.email })) {
     throw new HttpError(409, "Duplicate emergency contact");
   }
+  const contactUserId = input.contact_user_id ?? await resolveContactUserIdByEmail(userId, input.email ?? null);
+  assertContactHasReachableSosChannel({
+    contact_user_id: contactUserId,
+    phone: input.phone ?? null,
+    email: input.email ?? null,
+    notify_by_sms: input.notify_by_sms ?? true,
+    notify_by_email: input.notify_by_email ?? true,
+    notify_by_push: input.notify_by_push ?? true,
+    notify_on_sos: input.notify_on_sos ?? true,
+  });
 
   const columns = await getTableColumns("emergency_contacts");
   const insertColumns = ["user_id"];
@@ -291,7 +450,10 @@ export async function createEmergencyContact(userId: string, input: {
   addColumn("email", input.email ?? null);
   addColumn("relationship", input.relationship ?? null);
   addColumn("is_primary", input.is_primary ?? false);
-  addColumn("contact_user_id", input.contact_user_id ?? null, "::uuid");
+  addColumn("contact_user_id", contactUserId, "::uuid");
+  addColumn("notify_by_sms", input.notify_by_sms ?? true);
+  addColumn("notify_by_email", input.notify_by_email ?? true);
+  addColumn("notify_by_push", input.notify_by_push ?? true);
   addColumn("notify_on_sos", input.notify_on_sos ?? true);
   addColumn("is_active", true);
 
@@ -314,8 +476,40 @@ export async function updateEmergencyContact(userId: string, contactId: string, 
   is_primary: boolean;
   is_active: boolean;
   contact_user_id: string | null;
+  notify_by_sms: boolean;
+  notify_by_email: boolean;
+  notify_by_push: boolean;
   notify_on_sos: boolean;
 }>): Promise<EmergencyContact> {
+  const existingResult = await pool.query(
+    `SELECT ${await contactSelectSql()}
+     FROM emergency_contacts
+     WHERE id = $1::uuid
+       AND user_id = $2::uuid
+     LIMIT 1`,
+    [contactId, userId]
+  );
+
+  if (!existingResult.rows[0]) {
+    throw new HttpError(404, "Emergency contact not found");
+  }
+
+  const existingContact = formatContact(existingResult.rows[0]);
+  const effectiveContactUserId = Object.prototype.hasOwnProperty.call(input, "contact_user_id")
+    ? input.contact_user_id ?? null
+    : Object.prototype.hasOwnProperty.call(input, "email")
+      ? await resolveContactUserIdByEmail(userId, input.email ?? null)
+      : existingContact.contact_user_id;
+  assertContactHasReachableSosChannel({
+    contact_user_id: effectiveContactUserId,
+    phone: Object.prototype.hasOwnProperty.call(input, "phone") ? input.phone ?? null : existingContact.phone,
+    email: Object.prototype.hasOwnProperty.call(input, "email") ? input.email ?? null : existingContact.email,
+    notify_by_sms: Object.prototype.hasOwnProperty.call(input, "notify_by_sms") ? input.notify_by_sms ?? true : existingContact.notify_by_sms,
+    notify_by_email: Object.prototype.hasOwnProperty.call(input, "notify_by_email") ? input.notify_by_email ?? true : existingContact.notify_by_email,
+    notify_by_push: Object.prototype.hasOwnProperty.call(input, "notify_by_push") ? input.notify_by_push ?? true : existingContact.notify_by_push,
+    notify_on_sos: Object.prototype.hasOwnProperty.call(input, "notify_on_sos") ? input.notify_on_sos ?? true : existingContact.notify_on_sos,
+  });
+
   const columns = await getTableColumns("emergency_contacts");
   const updates: string[] = [];
   const values: unknown[] = [contactId, userId];
@@ -336,7 +530,12 @@ export async function updateEmergencyContact(userId: string, contactId: string, 
   if (Object.prototype.hasOwnProperty.call(input, "relationship")) addUpdate("relationship", input.relationship ?? null);
   if (Object.prototype.hasOwnProperty.call(input, "is_primary")) addUpdate("is_primary", input.is_primary ?? false);
   if (Object.prototype.hasOwnProperty.call(input, "is_active")) addUpdate("is_active", input.is_active ?? true);
-  if (Object.prototype.hasOwnProperty.call(input, "contact_user_id")) addUpdate("contact_user_id", input.contact_user_id ?? null, "::uuid");
+  if (Object.prototype.hasOwnProperty.call(input, "contact_user_id") || Object.prototype.hasOwnProperty.call(input, "email")) {
+    addUpdate("contact_user_id", effectiveContactUserId, "::uuid");
+  }
+  if (Object.prototype.hasOwnProperty.call(input, "notify_by_sms")) addUpdate("notify_by_sms", input.notify_by_sms ?? true);
+  if (Object.prototype.hasOwnProperty.call(input, "notify_by_email")) addUpdate("notify_by_email", input.notify_by_email ?? true);
+  if (Object.prototype.hasOwnProperty.call(input, "notify_by_push")) addUpdate("notify_by_push", input.notify_by_push ?? true);
   if (Object.prototype.hasOwnProperty.call(input, "notify_on_sos")) addUpdate("notify_on_sos", input.notify_on_sos ?? true);
   if (columns.has("updated_at")) updates.push("updated_at = NOW()");
 
@@ -483,6 +682,8 @@ async function getSosUserDisplayName(userId: string): Promise<string> {
 
 async function notifyAdminsBestEffort(sosId: string, input: CreateSosInput): Promise<void> {
   try {
+    const userName = await getSosUserDisplayName(input.userId);
+    const locationLabel = formatSosLocation(input.latitude, input.longitude);
     const profileColumns = await getTableColumns("profiles");
     if (!profileColumns.has("role")) {
       return;
@@ -502,11 +703,13 @@ async function notifyAdminsBestEffort(sosId: string, input: CreateSosInput): Pro
         actor_id: input.userId,
         type: "sos_alert",
         title: "Emergency SOS triggered",
-        body: "A Traces user triggered an SOS alert.",
+        body: `${userName} triggered SOS near ${locationLabel}.`,
         entity_type: "sos",
         entity_id: sosId,
         data: {
           sos_event_id: sosId,
+          sender_name: userName,
+          location_label: locationLabel,
           latitude: input.latitude,
           longitude: input.longitude,
           occurred_at: input.occurredAt,
@@ -518,11 +721,14 @@ async function notifyAdminsBestEffort(sosId: string, input: CreateSosInput): Pro
   }
 }
 
-async function notifyEmergencyContactBestEffort(sosId: string, contact: EmergencyContact, input: CreateSosInput): Promise<boolean> {
+async function notifyEmergencyContactBestEffort(sosId: string, contact: EmergencyContact, input: CreateSosInput): Promise<ContactDeliveryAttempt> {
   const userName = await getSosUserDisplayName(input.userId);
+  const locationLabel = formatSosLocation(input.latitude, input.longitude);
   const metadata = {
     sos_event_id: sosId,
     contact_id: contact.id,
+    sender_name: userName,
+    location_label: locationLabel,
     latitude: input.latitude,
     longitude: input.longitude,
     occurred_at: input.occurredAt,
@@ -531,9 +737,11 @@ async function notifyEmergencyContactBestEffort(sosId: string, contact: Emergenc
   };
 
   let sent = false;
+  const issues: string[] = [];
 
-  if (contact.phone) {
+  if (contact.notify_by_sms && contact.phone) {
     if (!isValidInternationalPhone(contact.phone)) {
+      pushDeliveryIssue(issues, formatSmsFailureMessage(contact.phone, "international format", "skipped"));
       await recordSosContactDelivery({
         sosId,
         contactId: contact.id,
@@ -565,8 +773,12 @@ async function notifyEmergencyContactBestEffort(sosId: string, contact: Emergenc
         metadata,
       });
       sent = smsResult.status === "sent";
+      if (!sent) {
+        pushDeliveryIssue(issues, formatSmsFailureMessage(contact.phone, smsResult.error, smsResult.status));
+      }
     }
-  } else {
+  } else if (contact.notify_by_sms) {
+    pushDeliveryIssue(issues, "SMS delivery is enabled for one emergency contact, but no phone number is saved.");
     await recordSosContactDelivery({
       sosId,
       contactId: contact.id,
@@ -577,16 +789,27 @@ async function notifyEmergencyContactBestEffort(sosId: string, contact: Emergenc
       error: "Emergency contact has no phone number",
       metadata,
     });
+  } else {
+    await recordSosContactDelivery({
+      sosId,
+      contactId: contact.id,
+      userId: input.userId,
+      channel: "sms",
+      provider: "twilio",
+      status: "skipped",
+      error: "SMS delivery is disabled for this contact",
+      metadata,
+    });
   }
 
-  if (contact.contact_user_id && contact.contact_user_id !== input.userId) {
+  if (contact.notify_by_push && contact.contact_user_id && contact.contact_user_id !== input.userId) {
     try {
       const notification = await createNotification({
         user_id: contact.contact_user_id,
         actor_id: input.userId,
         type: "emergency_contact_alert",
         title: "Emergency SOS",
-        body: `${contact.full_name}, an emergency contact triggered SOS and may need help.`,
+        body: `${userName} triggered SOS near ${locationLabel}.`,
         entity_type: "sos",
         entity_id: sosId,
         data: metadata,
@@ -601,8 +824,10 @@ async function notifyEmergencyContactBestEffort(sosId: string, contact: Emergenc
         notificationId: notification.id,
         metadata,
       });
-      return true;
+      return { delivered: true, issues };
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      pushDeliveryIssue(issues, `Push delivery to a linked Traces contact failed: ${errorMessage}`);
       await recordSosContactDelivery({
         sosId,
         contactId: contact.id,
@@ -610,13 +835,28 @@ async function notifyEmergencyContactBestEffort(sosId: string, contact: Emergenc
         recipientUserId: contact.contact_user_id,
         channel: "in_app_message",
         status: "failed",
-        error: error instanceof Error ? error.message : String(error),
+        error: errorMessage,
         metadata,
       });
     }
+  } else if (contact.notify_by_push) {
+    pushDeliveryIssue(issues, "Push alerts work only for emergency contacts linked to a Traces account.");
+    await recordSosContactDelivery({
+      sosId,
+      contactId: contact.id,
+      userId: input.userId,
+      recipientUserId: contact.contact_user_id,
+      channel: "in_app_message",
+      status: "skipped",
+      error: contact.contact_user_id === input.userId
+        ? "Push delivery cannot target the same Traces user who triggered the SOS"
+        : "Push delivery requires a linked Traces account",
+      metadata,
+    });
   }
 
-  if (contact.email) {
+  if (contact.notify_by_email && contact.email) {
+    pushDeliveryIssue(issues, "Email alerts are not configured yet.");
     await recordSosContactDelivery({
       sosId,
       contactId: contact.id,
@@ -627,21 +867,45 @@ async function notifyEmergencyContactBestEffort(sosId: string, contact: Emergenc
       error: "External email provider is not configured",
       metadata,
     });
+  } else if (contact.notify_by_email) {
+    pushDeliveryIssue(issues, "Email alerts are enabled for one emergency contact, but no email address is saved.");
+    await recordSosContactDelivery({
+      sosId,
+      contactId: contact.id,
+      userId: input.userId,
+      channel: "email",
+      status: "skipped",
+      error: "Email delivery is enabled but no email address is saved",
+      metadata,
+    });
+  } else {
+    await recordSosContactDelivery({
+      sosId,
+      contactId: contact.id,
+      userId: input.userId,
+      channel: "email",
+      status: "skipped",
+      error: "Email delivery is disabled for this contact",
+      metadata,
+    });
   }
 
-  return sent;
+  return { delivered: sent, issues };
 }
 
 async function notifyEmergencyContactsBestEffort(sosId: string, input: CreateSosInput): Promise<SosDeliverySummary> {
   try {
     const contacts = (await listEmergencyContacts(input.userId)).filter((contact) => contact.is_active && contact.notify_on_sos);
     let notified = 0;
+    const issues: string[] = [];
 
     for (const contact of contacts) {
       try {
-        if (await notifyEmergencyContactBestEffort(sosId, contact, input)) {
+        const attempt = await notifyEmergencyContactBestEffort(sosId, contact, input);
+        if (attempt.delivered) {
           notified += 1;
         }
+        issues.push(...attempt.issues);
       } catch (error) {
         console.warn("[sos.notifyEmergencyContactsBestEffort] contact failed:", { contactId: contact.id, error });
       }
@@ -649,15 +913,38 @@ async function notifyEmergencyContactsBestEffort(sosId: string, input: CreateSos
 
     const notification_status: ContactNotificationStatus =
       contacts.length === 0 || notified === 0 ? "failed" : notified < contacts.length ? "partial" : "success";
+    const status_note = contacts.length === 0
+      ? buildSosDeliveryStatusNote({
+          emergency_contacts_count: contacts.length,
+          contacts_notified: notified,
+          notification_status,
+          status_note: "",
+        })
+      : notification_status === "failed"
+        ? withDeliveryIssues("SOS created, but your emergency contacts could not be reached.", issues)
+        : notification_status === "partial"
+          ? withDeliveryIssues(`SOS created. ${notified}/${contacts.length} emergency contacts were notified.`, issues)
+          : buildSosDeliveryStatusNote({
+              emergency_contacts_count: contacts.length,
+              contacts_notified: notified,
+              notification_status,
+              status_note: "",
+            });
 
     return {
       emergency_contacts_count: contacts.length,
       contacts_notified: notified,
       notification_status,
+      status_note,
     };
   } catch (error) {
     console.warn("[sos.notifyEmergencyContactsBestEffort] failed:", error);
-    return { emergency_contacts_count: 0, contacts_notified: 0, notification_status: "failed" };
+    return {
+      emergency_contacts_count: 0,
+      contacts_notified: 0,
+      notification_status: "failed",
+      status_note: "SOS created, but emergency contact delivery failed before notifications could be sent.",
+    };
   }
 }
 
@@ -731,9 +1018,13 @@ export async function createSosEvent(input: CreateSosInput): Promise<SosResponse
   await updateSosDeliveryColumns(sosId, delivery);
 
   if (columns.has("status")) {
-    const nextStatus: SosStatus = delivery.contacts_notified > 0 ? "notified" : "failed";
     try {
-      await updateSosStatus(input.userId, sosId, nextStatus, `Emergency contact notification status: ${delivery.notification_status}`);
+      await updateSosStatus(
+        input.userId,
+        sosId,
+        getSosStatusForDelivery(delivery),
+        delivery.status_note
+      );
     } catch (error) {
       console.warn("[sos.createSosEvent] status update failed:", error);
     }

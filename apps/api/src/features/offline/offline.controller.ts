@@ -740,7 +740,7 @@ export async function getUserOfflineMaps(req: Request, res: Response): Promise<v
       FROM offline_maps om
       LEFT JOIN trails t ON t.id = om.trail_id
       WHERE om.user_id = $1::uuid
-      ORDER BY om.downloaded_at DESC NULLS LAST, om.created_at DESC NULLS LAST
+      ORDER BY om.downloaded_at DESC NULLS LAST
       `,
       [auth.sub]
     );

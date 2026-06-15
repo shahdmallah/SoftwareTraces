@@ -2,7 +2,6 @@ import type { Request, Response } from "express";
 import { pool } from "../../db/pool";
 import { requireAuth } from "../../middleware/auth";
 import { HttpError } from "../../lib/httpError";
-import { sendSocialNotification } from "../../services/notificationService";
 import {
   getFriendCount as countFriends,
   getFriends as listFriends,
@@ -10,16 +9,23 @@ import {
 import { createNotification } from "../notifications/notifications.service";
 import type { CreateNotificationInput } from "../notifications/notifications.types";
 
+type FeedPhotoRow = {
+  id: string;
+  url: string;
+  created_at: string;
+  nature_sighting?: Record<string, unknown> | null;
+};
+
 interface FeedReviewRow {
   id: string;
-  type: "review" | "activity";
+  type: "review" | "activity" | "media";
   rating: number | null;
   title: string | null;
   content: string | null;
   caption: string | null;
   visibility: string | null;
   photo_url: string | null;
-  photos: { id: string; url: string; created_at: string }[] | null;
+  photos: FeedPhotoRow[] | null;
   created_at: string;
   user_id: string;
   full_name: string;
@@ -31,10 +37,54 @@ interface FeedReviewRow {
   distance_meters: number | null;
   elapsed_time_seconds: number | null;
   elevation_gain_meters: number | null;
+  elevation_loss_meters: number | null;
+  max_elevation_meters: number | null;
+  min_elevation_meters: number | null;
   likes_count: string;
   is_liked_by_user: boolean;
   comments_count: string;
 }
+
+type SocialFeedResponseItem = {
+  id: string;
+  type: "review" | "activity" | "media";
+  user: {
+    id: string;
+    full_name: string;
+    avatar_url: string | null;
+  };
+  trail: {
+    id: string | null;
+    name: string | null;
+    image: string | null;
+  };
+  rating: number | null;
+  title: string | null;
+  content: string | null;
+  caption: string | null;
+  visibility: string | null;
+  photo_url: string | null;
+  photos: FeedPhotoRow[];
+  activity: {
+    id: string | null;
+    distance_meters: number | null;
+    elapsed_time_seconds: number | null;
+    elevation_gain_meters: number | null;
+    elevation_loss_meters: number | null;
+    max_elevation_meters: number | null;
+    min_elevation_meters: number | null;
+    elevation_summary: {
+      gain_meters: number | null;
+      loss_meters: number | null;
+      max_meters: number | null;
+      min_meters: number | null;
+    };
+  } | null;
+  created_at: string;
+  likes_count: number;
+  comments_count: number;
+  is_liked_by_user: boolean;
+};
 
 interface FollowProfileRow {
   id: string;
@@ -59,8 +109,31 @@ interface ReviewCommentRow {
   avatar_url: string | null;
 }
 
+interface ActivityCommentRow {
+  id: string;
+  activity_id: string;
+  user_id: string;
+  body: string;
+  created_at: string;
+  full_name: string;
+  avatar_url: string | null;
+}
+
+interface ActivityPostAccessRow {
+  activity_id: string;
+  owner_id: string;
+  visibility: string;
+  trail_id: string | null;
+  trail_name: string | null;
+  actor_full_name: string | null;
+}
+
 function getRequestId(value: string | string[] | undefined): string {
   return Array.isArray(value) ? value[0] : (value ?? "");
+}
+
+function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
 function getPagination(query: Request["query"]) {
@@ -69,6 +142,78 @@ function getPagination(query: Request["query"]) {
   const offset = (page - 1) * limit;
 
   return { page, limit, offset };
+}
+
+const mediaFeedGroupKeySql = `
+  CASE
+    WHEN (
+      m.trip_id IS NOT NULL
+      OR NULLIF(BTRIM(m.location_name), '') IS NOT NULL
+      OR (m.latitude IS NOT NULL AND m.longitude IS NOT NULL)
+    )
+    THEN CONCAT_WS(
+      '|',
+      m.uploader_id::text,
+      COALESCE(m.trip_id::text, 'no-trip'),
+      COALESCE(
+        NULLIF(LOWER(BTRIM(m.location_name)), ''),
+        CASE
+          WHEN m.latitude IS NOT NULL AND m.longitude IS NOT NULL
+          THEN CONCAT(ROUND(m.latitude::numeric, 5)::text, ',', ROUND(m.longitude::numeric, 5)::text)
+          ELSE NULL
+        END,
+        'no-location'
+      ),
+      FLOOR(EXTRACT(EPOCH FROM m.created_at) / 300)::bigint::text
+    )
+    ELSE m.id::text
+  END
+`;
+
+function formatFeedItem(row: FeedReviewRow): SocialFeedResponseItem {
+  return {
+    id: row.id,
+    type: row.type,
+    user: {
+      id: row.user_id,
+      full_name: row.full_name,
+      avatar_url: row.avatar_url,
+    },
+    trail: {
+      id: row.trail_id,
+      name: row.trail_name,
+      image: row.trail_image,
+    },
+    rating: row.rating,
+    title: row.title,
+    content: row.content,
+    caption: row.caption,
+    visibility: row.visibility,
+    photo_url: row.photo_url,
+    photos: Array.isArray(row.photos) ? row.photos : [],
+    activity:
+      row.type === "activity"
+        ? {
+            id: row.activity_id,
+            distance_meters: row.distance_meters,
+            elapsed_time_seconds: row.elapsed_time_seconds,
+            elevation_gain_meters: row.elevation_gain_meters,
+            elevation_loss_meters: row.elevation_loss_meters,
+            max_elevation_meters: row.max_elevation_meters,
+            min_elevation_meters: row.min_elevation_meters,
+            elevation_summary: {
+              gain_meters: row.elevation_gain_meters,
+              loss_meters: row.elevation_loss_meters,
+              max_meters: row.max_elevation_meters,
+              min_meters: row.min_elevation_meters,
+            },
+          }
+        : null,
+    created_at: row.created_at,
+    likes_count: Number(row.likes_count),
+    comments_count: Number(row.comments_count),
+    is_liked_by_user: row.is_liked_by_user,
+  };
 }
 
 function logSocialError(functionName: string, error: unknown): void {
@@ -96,7 +241,7 @@ function sendSocialError(functionName: string, res: Response, error: unknown): v
 
 async function ensureProfileExists(userId: string): Promise<void> {
   console.log("[ensureProfileExists] Checking userId:", userId);
-  const result = await pool.query("SELECT user_id FROM profiles WHERE user_id = $1::uuid OR id = $1::uuid", [userId]);
+  const result = await pool.query("SELECT user_id FROM profiles WHERE user_id::text = $1 OR id::text = $1", [userId]);
   console.log("[ensureProfileExists] Rows found:", result.rows.length);
 
   if (result.rows.length === 0) {
@@ -112,6 +257,59 @@ async function ensureReviewExists(reviewId: string): Promise<void> {
   if (result.rows.length === 0) {
     throw new HttpError(404, "Review not found");
   }
+}
+
+async function getAccessibleActivityPost(activityId: string, userId: string): Promise<ActivityPostAccessRow> {
+  if (!isUuid(activityId)) {
+    throw new HttpError(400, "Activity id must be a valid UUID");
+  }
+
+  const result = await pool.query<ActivityPostAccessRow>(
+    `SELECT
+       a.id AS activity_id,
+       ap.user_id AS owner_id,
+       ap.visibility,
+       a.trail_id,
+       t.name AS trail_name,
+       actor.full_name AS actor_full_name
+     FROM activities a
+     JOIN activity_posts ap ON ap.activity_id = a.id
+     LEFT JOIN trails t ON t.id = a.trail_id
+     LEFT JOIN profiles actor ON actor.id = $2::uuid
+     WHERE a.id = $1::uuid
+     ORDER BY ap.created_at DESC
+     LIMIT 1`,
+    [activityId, userId]
+  );
+  const activityPost = result.rows[0];
+
+  if (!activityPost) {
+    throw new HttpError(404, "Activity post not found");
+  }
+
+  if (activityPost.visibility === "private" && activityPost.owner_id !== userId) {
+    throw new HttpError(403, "Not authorized to interact with this activity post");
+  }
+
+  if (activityPost.visibility === "friends" && activityPost.owner_id !== userId) {
+    const friendshipResult = await pool.query(
+      `SELECT 1
+       FROM user_follows owner_follow
+       JOIN user_follows viewer_follow
+         ON viewer_follow.follower_id = $2::uuid
+        AND viewer_follow.following_id = $1::uuid
+       WHERE owner_follow.follower_id = $1::uuid
+         AND owner_follow.following_id = $2::uuid
+       LIMIT 1`,
+      [activityPost.owner_id, userId]
+    );
+
+    if (friendshipResult.rows.length === 0) {
+      throw new HttpError(403, "Not authorized to interact with this activity post");
+    }
+  }
+
+  return activityPost;
 }
 
 async function createNotificationBestEffort(input: CreateNotificationInput): Promise<void> {
@@ -479,11 +677,15 @@ export async function getFeed(req: Request, res: Response): Promise<void> {
     const countResult = await pool.query<{ count: string }>(
       `
       WITH feed_rows AS (
-        SELECT tr.id
+        SELECT tr.id::text
         FROM trail_reviews tr
-        JOIN user_follows uf ON uf.following_id = tr.user_id
-        WHERE uf.follower_id = $1::uuid
+        LEFT JOIN user_follows uf
+          ON uf.following_id = tr.user_id
+         AND uf.follower_id = $1::uuid
+        WHERE (tr.user_id = $1::uuid OR uf.follower_id IS NOT NULL)
           AND (
+            tr.user_id = $1::uuid
+            OR
             $2::text = 'all'
             OR EXISTS (
               SELECT 1
@@ -493,12 +695,16 @@ export async function getFeed(req: Request, res: Response): Promise<void> {
             )
           )
         UNION ALL
-        SELECT ap.id
+        SELECT ap.id::text
         FROM activity_posts ap
-        JOIN user_follows uf ON uf.following_id = ap.user_id
-        WHERE uf.follower_id = $1::uuid
+        LEFT JOIN user_follows uf
+          ON uf.following_id = ap.user_id
+         AND uf.follower_id = $1::uuid
+        WHERE (ap.user_id = $1::uuid OR uf.follower_id IS NOT NULL)
           AND ap.visibility <> 'private'
           AND (
+            ap.user_id = $1::uuid
+            OR
             $2::text = 'all'
             OR EXISTS (
               SELECT 1
@@ -508,6 +714,8 @@ export async function getFeed(req: Request, res: Response): Promise<void> {
             )
           )
           AND (
+            ap.user_id = $1::uuid
+            OR
             ap.visibility = 'public'
             OR EXISTS (
               SELECT 1
@@ -516,6 +724,26 @@ export async function getFeed(req: Request, res: Response): Promise<void> {
                 AND reverse_visibility_follow.following_id = $1::uuid
             )
           )
+        UNION ALL
+        SELECT ${mediaFeedGroupKeySql}
+        FROM media m
+        LEFT JOIN user_follows uf
+          ON uf.following_id = m.uploader_id
+         AND uf.follower_id = $1::uuid
+        WHERE m.is_public = true
+          AND (m.uploader_id = $1::uuid OR uf.follower_id IS NOT NULL)
+          AND (
+            m.uploader_id = $1::uuid
+            OR
+            $2::text = 'all'
+            OR EXISTS (
+              SELECT 1
+              FROM user_follows reverse_follow
+              WHERE reverse_follow.follower_id = m.uploader_id
+                AND reverse_follow.following_id = $1::uuid
+            )
+          )
+        GROUP BY ${mediaFeedGroupKeySql}
       )
       SELECT COUNT(*) AS count
       FROM feed_rows
@@ -552,7 +780,39 @@ export async function getFeed(req: Request, res: Response): Promise<void> {
                 json_build_object(
                   'id', review_photo_list.id,
                   'url', review_photo_list.photo_url,
-                  'created_at', review_photo_list.created_at
+                  'created_at', review_photo_list.created_at,
+                  'nature_sighting',
+                  (
+                    SELECT row_to_json(sighting)
+                    FROM (
+                      SELECT
+                        ns.id,
+                        ns.trail_id,
+                        ns.activity_id,
+                        ns.user_id,
+                        ns.latitude,
+                        ns.longitude,
+                        ns.category,
+                        ns.species,
+                        ns.common_name,
+                        ns.confidence,
+                        ns.photo_url,
+                        ns.photo_id,
+                        ns.photo_type,
+                        ns.media_id,
+                        ns.activity_media_id,
+                        ns.classification,
+                        ns.language,
+                        ns.source,
+                        ns.created_at,
+                        ns.updated_at
+                      FROM nature_sightings ns
+                      WHERE ns.photo_id = review_photo_list.id
+                        AND ns.photo_type = 'review_photo'
+                      ORDER BY ns.created_at DESC
+                      LIMIT 1
+                    ) sighting
+                  )
                 )
                 ORDER BY review_photo_list.created_at ASC
               )
@@ -571,6 +831,9 @@ export async function getFeed(req: Request, res: Response): Promise<void> {
           NULL::numeric AS distance_meters,
           NULL::integer AS elapsed_time_seconds,
           NULL::numeric AS elevation_gain_meters,
+          NULL::numeric AS elevation_loss_meters,
+          NULL::numeric AS max_elevation_meters,
+          NULL::numeric AS min_elevation_meters,
           COUNT(DISTINCT rl.id)::text AS likes_count,
           COUNT(DISTINCT rc.id)::text AS comments_count,
           EXISTS(
@@ -580,13 +843,17 @@ export async function getFeed(req: Request, res: Response): Promise<void> {
               AND review_like_lookup.user_id = $1::uuid
           ) AS is_liked_by_user
         FROM trail_reviews tr
-        JOIN user_follows uf ON uf.following_id = tr.user_id
+        LEFT JOIN user_follows uf
+          ON uf.following_id = tr.user_id
+         AND uf.follower_id = $1::uuid
         JOIN profiles p ON p.id = tr.user_id
         JOIN trails t ON t.id = tr.trail_id
         LEFT JOIN review_likes rl ON rl.review_id = tr.id
         LEFT JOIN review_comments rc ON rc.review_id = tr.id
-        WHERE uf.follower_id = $1::uuid
+        WHERE (tr.user_id = $1::uuid OR uf.follower_id IS NOT NULL)
           AND (
+            tr.user_id = $1::uuid
+            OR
             $4::text = 'all'
             OR EXISTS (
               SELECT 1
@@ -608,8 +875,60 @@ export async function getFeed(req: Request, res: Response): Promise<void> {
           NULL::text AS content,
           ap.caption,
           ap.visibility,
-          NULL::text AS photo_url,
-          '[]'::json AS photos,
+          (
+            SELECT am.public_url
+            FROM activity_media am
+            WHERE am.activity_id = a.id
+            ORDER BY am.captured_at ASC, am.created_at ASC
+            LIMIT 1
+          ) AS photo_url,
+          COALESCE(
+            (
+              SELECT json_agg(
+                json_build_object(
+                  'id', activity_media_list.id,
+                  'url', activity_media_list.public_url,
+                  'created_at', activity_media_list.created_at,
+                  'nature_sighting',
+                  (
+                    SELECT row_to_json(sighting)
+                    FROM (
+                      SELECT
+                        ns.id,
+                        ns.trail_id,
+                        ns.activity_id,
+                        ns.user_id,
+                        ns.latitude,
+                        ns.longitude,
+                        ns.category,
+                        ns.species,
+                        ns.common_name,
+                        ns.confidence,
+                        ns.photo_url,
+                        ns.photo_id,
+                        ns.photo_type,
+                        ns.media_id,
+                        ns.activity_media_id,
+                        ns.classification,
+                        ns.language,
+                        ns.source,
+                        ns.created_at,
+                        ns.updated_at
+                      FROM nature_sightings ns
+                      WHERE ns.photo_id = activity_media_list.id
+                        AND ns.photo_type = 'activity_media'
+                      ORDER BY ns.created_at DESC
+                      LIMIT 1
+                    ) sighting
+                  )
+                )
+                ORDER BY activity_media_list.captured_at ASC, activity_media_list.created_at ASC
+              )
+              FROM activity_media activity_media_list
+              WHERE activity_media_list.activity_id = a.id
+            ),
+            '[]'::json
+          ) AS photos,
           p.user_id,
           p.full_name,
           p.avatar_url,
@@ -620,17 +939,37 @@ export async function getFeed(req: Request, res: Response): Promise<void> {
           a.distance_meters,
           a.elapsed_time_seconds,
           a.elevation_gain_meters,
-          '0'::text AS likes_count,
-          '0'::text AS comments_count,
-          false AS is_liked_by_user
+          a.elevation_loss_meters,
+          a.max_elevation_meters,
+          a.min_elevation_meters,
+          (
+            SELECT COUNT(*)::text
+            FROM activity_likes activity_like_count
+            WHERE activity_like_count.activity_id = a.id
+          ) AS likes_count,
+          (
+            SELECT COUNT(*)::text
+            FROM activity_comments activity_comment_count
+            WHERE activity_comment_count.activity_id = a.id
+          ) AS comments_count,
+          EXISTS(
+            SELECT 1
+            FROM activity_likes activity_like_lookup
+            WHERE activity_like_lookup.activity_id = a.id
+              AND activity_like_lookup.user_id = $1::uuid
+          ) AS is_liked_by_user
         FROM activity_posts ap
-        JOIN user_follows uf ON uf.following_id = ap.user_id
+        LEFT JOIN user_follows uf
+          ON uf.following_id = ap.user_id
+         AND uf.follower_id = $1::uuid
         JOIN activities a ON a.id = ap.activity_id
         JOIN profiles p ON p.id = ap.user_id
         LEFT JOIN trails t ON t.id = a.trail_id
-        WHERE uf.follower_id = $1::uuid
+        WHERE (ap.user_id = $1::uuid OR uf.follower_id IS NOT NULL)
           AND ap.visibility <> 'private'
           AND (
+            ap.user_id = $1::uuid
+            OR
             $4::text = 'all'
             OR EXISTS (
               SELECT 1
@@ -640,6 +979,8 @@ export async function getFeed(req: Request, res: Response): Promise<void> {
             )
           )
           AND (
+            ap.user_id = $1::uuid
+            OR
             ap.visibility = 'public'
             OR EXISTS (
               SELECT 1
@@ -648,6 +989,150 @@ export async function getFeed(req: Request, res: Response): Promise<void> {
                 AND reverse_visibility_follow.following_id = $1::uuid
             )
           )
+
+        UNION ALL
+
+        SELECT
+          media_group.id,
+          media_group.created_at,
+          'media'::text AS type,
+          NULL::integer AS rating,
+          NULL::text AS title,
+          NULL::text AS content,
+          media_group.caption,
+          CASE WHEN media_group.is_public THEN 'public' ELSE 'private' END AS visibility,
+          media_group.photo_url,
+          media_group.photos,
+          media_group.user_id,
+          COALESCE(p.full_name, 'Trail friend') AS full_name,
+          p.avatar_url,
+          t.id AS trail_id,
+          COALESCE(t.name, media_group.location_name) AS trail_name,
+          t.image AS trail_image,
+          NULL::uuid AS activity_id,
+          NULL::numeric AS distance_meters,
+          NULL::integer AS elapsed_time_seconds,
+          NULL::numeric AS elevation_gain_meters,
+          NULL::numeric AS elevation_loss_meters,
+          NULL::numeric AS max_elevation_meters,
+          NULL::numeric AS min_elevation_meters,
+          '0'::text AS likes_count,
+          '0'::text AS comments_count,
+          false AS is_liked_by_user
+        FROM (
+          SELECT
+            (ARRAY_AGG(m.id ORDER BY m.created_at ASC, m.id ASC))[1] AS id,
+            MAX(m.created_at) AS created_at,
+            ${mediaFeedGroupKeySql} AS group_key,
+            MAX(m.caption) AS caption,
+            BOOL_OR(m.is_public) AS is_public,
+            (json_agg(
+              json_build_object(
+                'id', m.id,
+                'url', m.url,
+                'created_at', m.created_at,
+                'nature_sighting',
+                (
+                  SELECT row_to_json(sighting)
+                  FROM (
+                    SELECT
+                      ns.id,
+                      ns.trail_id,
+                      ns.activity_id,
+                      ns.user_id,
+                      ns.latitude,
+                      ns.longitude,
+                      ns.category,
+                      ns.species,
+                      ns.common_name,
+                      ns.confidence,
+                      ns.photo_url,
+                      ns.photo_id,
+                      ns.photo_type,
+                      ns.media_id,
+                      ns.activity_media_id,
+                      ns.classification,
+                      ns.language,
+                      ns.source,
+                      ns.created_at,
+                      ns.updated_at
+                    FROM nature_sightings ns
+                    WHERE ns.photo_id = m.id
+                      AND ns.photo_type = 'media'
+                    ORDER BY ns.created_at DESC
+                    LIMIT 1
+                  ) sighting
+                )
+              )
+              ORDER BY m.created_at ASC
+            )->0->>'url') AS photo_url,
+            COALESCE(
+              json_agg(
+                json_build_object(
+                  'id', m.id,
+                  'url', m.url,
+                  'created_at', m.created_at,
+                  'nature_sighting',
+                  (
+                    SELECT row_to_json(sighting)
+                    FROM (
+                      SELECT
+                        ns.id,
+                        ns.trail_id,
+                        ns.activity_id,
+                        ns.user_id,
+                        ns.latitude,
+                        ns.longitude,
+                        ns.category,
+                        ns.species,
+                        ns.common_name,
+                        ns.confidence,
+                        ns.photo_url,
+                        ns.photo_id,
+                        ns.photo_type,
+                        ns.media_id,
+                        ns.activity_media_id,
+                        ns.classification,
+                        ns.language,
+                        ns.source,
+                        ns.created_at,
+                        ns.updated_at
+                      FROM nature_sightings ns
+                      WHERE ns.photo_id = m.id
+                        AND ns.photo_type = 'media'
+                      ORDER BY ns.created_at DESC
+                      LIMIT 1
+                    ) sighting
+                  )
+                )
+                ORDER BY m.created_at ASC
+              ),
+              '[]'::json
+            ) AS photos,
+            m.uploader_id AS user_id,
+            m.trip_id,
+            MAX(m.location_name) AS location_name
+          FROM media m
+          LEFT JOIN user_follows uf
+            ON uf.following_id = m.uploader_id
+           AND uf.follower_id = $1::uuid
+          WHERE m.is_public = true
+            AND (m.uploader_id = $1::uuid OR uf.follower_id IS NOT NULL)
+            AND (
+              m.uploader_id = $1::uuid
+              OR
+              $4::text = 'all'
+              OR EXISTS (
+                SELECT 1
+                FROM user_follows reverse_follow
+                WHERE reverse_follow.follower_id = m.uploader_id
+                  AND reverse_follow.following_id = $1::uuid
+              )
+            )
+          GROUP BY ${mediaFeedGroupKeySql}, m.uploader_id, m.trip_id
+        ) media_group
+        LEFT JOIN profiles p ON p.id = media_group.user_id
+        LEFT JOIN trails t ON t.id = media_group.trip_id
       )
       SELECT *
       FROM feed_rows
@@ -660,40 +1145,7 @@ export async function getFeed(req: Request, res: Response): Promise<void> {
 
     console.log("[getFeed] Step 5: Formatting feed response...");
     res.json({
-      data: result.rows.map((row) => ({
-        id: row.id,
-        type: row.type,
-        user: {
-          id: row.user_id,
-          full_name: row.full_name,
-          avatar_url: row.avatar_url,
-        },
-        trail: {
-          id: row.trail_id,
-          name: row.trail_name,
-          image: row.trail_image,
-        },
-        rating: row.rating,
-        title: row.title,
-        content: row.content,
-        caption: row.caption,
-        visibility: row.visibility,
-        photo_url: row.photo_url,
-        photos: Array.isArray(row.photos) ? row.photos : [],
-        activity:
-          row.type === "activity"
-            ? {
-                id: row.activity_id,
-                distance_meters: row.distance_meters,
-                elapsed_time_seconds: row.elapsed_time_seconds,
-                elevation_gain_meters: row.elevation_gain_meters,
-              }
-            : null,
-        created_at: row.created_at,
-        likes_count: Number(row.likes_count),
-        comments_count: Number(row.comments_count),
-        is_liked_by_user: row.is_liked_by_user,
-      })),
+      data: result.rows.map(formatFeedItem),
       pagination: {
         page,
         limit,
@@ -702,6 +1154,362 @@ export async function getFeed(req: Request, res: Response): Promise<void> {
       },
     });
     console.log("[getFeed] Step 6: Response sent");
+  } catch (error) {
+    sendSocialError(functionName, res, error);
+  }
+}
+
+export async function getFeedItemByEntity(req: Request, res: Response): Promise<void> {
+  const functionName = "getFeedItemByEntity";
+  try {
+    const auth = requireAuth(req);
+    const userId = auth.sub;
+    const entityType = getRequestId(req.params.type);
+    const entityId = getRequestId(req.params.id);
+    console.log(`[social] getFeedItemByEntity START - type: ${entityType}, id: ${entityId}, userId: ${userId}`);
+
+    if ((entityType !== "review" && entityType !== "activity" && entityType !== "media") || !isUuid(entityId)) {
+      throw new HttpError(400, "Feed item target must be a review, activity, or media UUID");
+    }
+
+    const result = await pool.query<FeedReviewRow>(
+      `
+      WITH target_review AS (
+        SELECT
+          tr.id,
+          tr.created_at,
+          'review'::text AS type,
+          tr.rating,
+          tr.title,
+          tr.content,
+          NULL::text AS caption,
+          NULL::text AS visibility,
+          (
+            SELECT rp.photo_url
+            FROM review_photos rp
+            WHERE rp.review_id = tr.id
+            ORDER BY rp.created_at ASC
+            LIMIT 1
+          ) AS photo_url,
+          COALESCE(
+            (
+              SELECT json_agg(
+                json_build_object(
+                  'id', review_photo_list.id,
+                  'url', review_photo_list.photo_url,
+                  'created_at', review_photo_list.created_at,
+                  'nature_sighting',
+                  (
+                    SELECT row_to_json(sighting)
+                    FROM (
+                      SELECT
+                        ns.id,
+                        ns.trail_id,
+                        ns.activity_id,
+                        ns.user_id,
+                        ns.latitude,
+                        ns.longitude,
+                        ns.category,
+                        ns.species,
+                        ns.common_name,
+                        ns.confidence,
+                        ns.photo_url,
+                        ns.photo_id,
+                        ns.photo_type,
+                        ns.media_id,
+                        ns.activity_media_id,
+                        ns.classification,
+                        ns.language,
+                        ns.source,
+                        ns.created_at,
+                        ns.updated_at
+                      FROM nature_sightings ns
+                      WHERE ns.photo_id = review_photo_list.id
+                        AND ns.photo_type = 'review_photo'
+                      ORDER BY ns.created_at DESC
+                      LIMIT 1
+                    ) sighting
+                  )
+                )
+                ORDER BY review_photo_list.created_at ASC
+              )
+              FROM review_photos review_photo_list
+              WHERE review_photo_list.review_id = tr.id
+            ),
+            '[]'::json
+          ) AS photos,
+          p.user_id,
+          p.full_name,
+          p.avatar_url,
+          t.id AS trail_id,
+          t.name AS trail_name,
+          t.image AS trail_image,
+          NULL::uuid AS activity_id,
+          NULL::numeric AS distance_meters,
+          NULL::integer AS elapsed_time_seconds,
+          NULL::numeric AS elevation_gain_meters,
+          NULL::numeric AS elevation_loss_meters,
+          NULL::numeric AS max_elevation_meters,
+          NULL::numeric AS min_elevation_meters,
+          COUNT(DISTINCT rl.id)::text AS likes_count,
+          COUNT(DISTINCT rc.id)::text AS comments_count,
+          EXISTS(
+            SELECT 1
+            FROM review_likes review_like_lookup
+            WHERE review_like_lookup.review_id = tr.id
+              AND review_like_lookup.user_id = $1::uuid
+          ) AS is_liked_by_user
+        FROM trail_reviews tr
+        JOIN profiles p ON p.id = tr.user_id
+        JOIN trails t ON t.id = tr.trail_id
+        LEFT JOIN review_likes rl ON rl.review_id = tr.id
+        LEFT JOIN review_comments rc ON rc.review_id = tr.id
+        WHERE $2::text = 'review'
+          AND tr.id = $3::uuid
+        GROUP BY tr.id, p.user_id, p.full_name, p.avatar_url, t.id, t.name, t.image
+      ),
+      target_activity AS (
+        SELECT
+          ap.id,
+          ap.created_at,
+          'activity'::text AS type,
+          NULL::integer AS rating,
+          NULL::text AS title,
+          NULL::text AS content,
+          ap.caption,
+          ap.visibility,
+          (
+            SELECT am.public_url
+            FROM activity_media am
+            WHERE am.activity_id = a.id
+            ORDER BY am.captured_at ASC, am.created_at ASC
+            LIMIT 1
+          ) AS photo_url,
+          COALESCE(
+            (
+              SELECT json_agg(
+                json_build_object(
+                  'id', activity_media_list.id,
+                  'url', activity_media_list.public_url,
+                  'created_at', activity_media_list.created_at
+                )
+                ORDER BY activity_media_list.captured_at ASC, activity_media_list.created_at ASC
+              )
+              FROM activity_media activity_media_list
+              WHERE activity_media_list.activity_id = a.id
+            ),
+            '[]'::json
+          ) AS photos,
+          p.user_id,
+          p.full_name,
+          p.avatar_url,
+          a.trail_id,
+          t.name AS trail_name,
+          t.image AS trail_image,
+          a.id AS activity_id,
+          a.distance_meters,
+          a.elapsed_time_seconds,
+          a.elevation_gain_meters,
+          a.elevation_loss_meters,
+          a.max_elevation_meters,
+          a.min_elevation_meters,
+          (
+            SELECT COUNT(*)::text
+            FROM activity_likes activity_like_count
+            WHERE activity_like_count.activity_id = a.id
+          ) AS likes_count,
+          (
+            SELECT COUNT(*)::text
+            FROM activity_comments activity_comment_count
+            WHERE activity_comment_count.activity_id = a.id
+          ) AS comments_count,
+          EXISTS(
+            SELECT 1
+            FROM activity_likes activity_like_lookup
+            WHERE activity_like_lookup.activity_id = a.id
+              AND activity_like_lookup.user_id = $1::uuid
+          ) AS is_liked_by_user
+        FROM activity_posts ap
+        JOIN activities a ON a.id = ap.activity_id
+        JOIN profiles p ON p.id = ap.user_id
+        LEFT JOIN trails t ON t.id = a.trail_id
+        WHERE $2::text = 'activity'
+          AND a.id = $3::uuid
+          AND (
+            ap.user_id = $1::uuid
+            OR ap.visibility = 'public'
+            OR (
+              ap.visibility = 'friends'
+              AND EXISTS (
+                SELECT 1
+                FROM user_follows owner_follow
+                JOIN user_follows viewer_follow
+                  ON viewer_follow.follower_id = $1::uuid
+                 AND viewer_follow.following_id = ap.user_id
+                WHERE owner_follow.follower_id = ap.user_id
+                  AND owner_follow.following_id = $1::uuid
+              )
+            )
+          )
+        ORDER BY ap.created_at DESC
+        LIMIT 1
+      ),
+      target_media_seed AS (
+        SELECT ${mediaFeedGroupKeySql} AS group_key
+        FROM media m
+        WHERE $2::text = 'media'
+          AND m.id = $3::uuid
+          AND (m.is_public = true OR m.uploader_id = $1::uuid)
+        LIMIT 1
+      ),
+      target_media AS (
+        SELECT
+          media_group.id,
+          media_group.created_at,
+          'media'::text AS type,
+          NULL::integer AS rating,
+          NULL::text AS title,
+          NULL::text AS content,
+          media_group.caption,
+          CASE WHEN media_group.is_public THEN 'public' ELSE 'private' END AS visibility,
+          media_group.photo_url,
+          media_group.photos,
+          media_group.user_id,
+          COALESCE(p.full_name, 'Trail friend') AS full_name,
+          p.avatar_url,
+          t.id AS trail_id,
+          COALESCE(t.name, media_group.location_name) AS trail_name,
+          t.image AS trail_image,
+          NULL::uuid AS activity_id,
+          NULL::numeric AS distance_meters,
+          NULL::integer AS elapsed_time_seconds,
+          NULL::numeric AS elevation_gain_meters,
+          NULL::numeric AS elevation_loss_meters,
+          NULL::numeric AS max_elevation_meters,
+          NULL::numeric AS min_elevation_meters,
+          '0'::text AS likes_count,
+          '0'::text AS comments_count,
+          false AS is_liked_by_user
+        FROM (
+          SELECT
+            (ARRAY_AGG(m.id ORDER BY m.created_at ASC, m.id ASC))[1] AS id,
+            MAX(m.created_at) AS created_at,
+            ${mediaFeedGroupKeySql} AS group_key,
+            MAX(m.caption) AS caption,
+            BOOL_OR(m.is_public) AS is_public,
+            (json_agg(
+              json_build_object(
+                'id', m.id,
+                'url', m.url,
+                'created_at', m.created_at,
+                'nature_sighting',
+                (
+                  SELECT row_to_json(sighting)
+                  FROM (
+                    SELECT
+                      ns.id,
+                      ns.trail_id,
+                      ns.activity_id,
+                      ns.user_id,
+                      ns.latitude,
+                      ns.longitude,
+                      ns.category,
+                      ns.species,
+                      ns.common_name,
+                      ns.confidence,
+                      ns.photo_url,
+                      ns.photo_id,
+                      ns.photo_type,
+                      ns.media_id,
+                      ns.activity_media_id,
+                      ns.classification,
+                      ns.language,
+                      ns.source,
+                      ns.created_at,
+                      ns.updated_at
+                    FROM nature_sightings ns
+                    WHERE ns.photo_id = m.id
+                      AND ns.photo_type = 'media'
+                    ORDER BY ns.created_at DESC
+                    LIMIT 1
+                  ) sighting
+                )
+              )
+              ORDER BY m.created_at ASC
+            )->0->>'url') AS photo_url,
+            COALESCE(
+              json_agg(
+                json_build_object(
+                  'id', m.id,
+                  'url', m.url,
+                  'created_at', m.created_at,
+                  'nature_sighting',
+                  (
+                    SELECT row_to_json(sighting)
+                    FROM (
+                      SELECT
+                        ns.id,
+                        ns.trail_id,
+                        ns.activity_id,
+                        ns.user_id,
+                        ns.latitude,
+                        ns.longitude,
+                        ns.category,
+                        ns.species,
+                        ns.common_name,
+                        ns.confidence,
+                        ns.photo_url,
+                        ns.photo_id,
+                        ns.photo_type,
+                        ns.media_id,
+                        ns.activity_media_id,
+                        ns.classification,
+                        ns.language,
+                        ns.source,
+                        ns.created_at,
+                        ns.updated_at
+                      FROM nature_sightings ns
+                      WHERE ns.photo_id = m.id
+                        AND ns.photo_type = 'media'
+                      ORDER BY ns.created_at DESC
+                      LIMIT 1
+                    ) sighting
+                  )
+                )
+                ORDER BY m.created_at ASC
+              ),
+              '[]'::json
+            ) AS photos,
+            m.uploader_id AS user_id,
+            m.trip_id,
+            MAX(m.location_name) AS location_name
+          FROM media m
+          JOIN target_media_seed seed
+            ON seed.group_key = ${mediaFeedGroupKeySql}
+          GROUP BY ${mediaFeedGroupKeySql}, m.uploader_id, m.trip_id
+        ) media_group
+        LEFT JOIN profiles p ON p.id = media_group.user_id
+        LEFT JOIN trails t ON t.id = media_group.trip_id
+      )
+      SELECT *
+      FROM target_review
+      UNION ALL
+      SELECT *
+      FROM target_activity
+      UNION ALL
+      SELECT *
+      FROM target_media
+      LIMIT 1
+      `,
+      [userId, entityType, entityId]
+    );
+
+    const row = result.rows[0];
+    if (!row) {
+      throw new HttpError(404, "Feed item not found");
+    }
+
+    res.json({ data: formatFeedItem(row) });
   } catch (error) {
     sendSocialError(functionName, res, error);
   }
@@ -743,8 +1551,8 @@ export async function addReviewComment(req: Request, res: Response): Promise<voi
          WHERE id = $1::uuid`,
         [userId]
       ),
-      pool.query<{ user_id: string }>(
-        "SELECT user_id FROM trail_reviews WHERE id = $1::uuid LIMIT 1",
+      pool.query<{ user_id: string; trail_id: string | null }>(
+        "SELECT user_id, trail_id FROM trail_reviews WHERE id = $1::uuid LIMIT 1",
         [reviewId]
       ),
     ]);
@@ -765,7 +1573,12 @@ export async function addReviewComment(req: Request, res: Response): Promise<voi
         body: `${profileResult.rows[0].full_name} commented on your review`,
         entity_type: "review",
         entity_id: reviewId,
-        data: { comment_id: comment.id, content_preview: content.substring(0, 100) },
+        data: {
+          comment_id: comment.id,
+          review_id: reviewId,
+          trail_id: reviewOwnerResult.rows[0]?.trail_id,
+          content_preview: content.substring(0, 100),
+        },
       });
     }
 
@@ -920,11 +1733,13 @@ export async function likeReview(req: Request, res: Response): Promise<void> {
     console.log("[likeReview] Step 4: Fetching review owner and actor for notification...");
     const notificationContextResult = await pool.query<{
       review_owner_id: string;
+      trail_id: string | null;
       trail_name: string | null;
       user_full_name: string | null;
     }>(
       `SELECT
          tr.user_id AS review_owner_id,
+         tr.trail_id,
          t.name AS trail_name,
          p.full_name AS user_full_name
        FROM trail_reviews tr
@@ -947,6 +1762,10 @@ export async function likeReview(req: Request, res: Response): Promise<void> {
         body: `${userFullName} liked your review of ${trailName}`,
         entity_type: "review",
         entity_id: reviewId,
+        data: {
+          review_id: reviewId,
+          trail_id: notificationContext.trail_id,
+        },
       });
     }
 
@@ -1028,23 +1847,141 @@ export async function getReviewLikes(req: Request, res: Response): Promise<void>
 }
 
 export async function likeActivity(req: Request, res: Response): Promise<void> {
-  const auth = requireAuth(req);
-  const activityId = getRequestId(req.params.id);
-  await pool.query("INSERT INTO activity_likes (activity_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", [
-    activityId,
-    auth.sub,
-  ]);
-  await sendSocialNotification(activityId, "Your activity received a new like.");
-  res.status(204).send();
+  const functionName = "likeActivity";
+  try {
+    const auth = requireAuth(req);
+    const userId = auth.sub;
+    const activityId = getRequestId(req.params.id);
+    console.log(`[social] likeActivity START - activityId: ${activityId}, userId: ${userId}`);
+
+    const activityPost = await getAccessibleActivityPost(activityId, userId);
+    const result = await pool.query(
+      `INSERT INTO activity_likes (activity_id, user_id)
+       VALUES ($1::uuid, $2::uuid)
+       ON CONFLICT DO NOTHING
+       RETURNING activity_id`,
+      [activityId, userId]
+    );
+
+    if (result.rows.length === 0) {
+      res.status(409).json({ error: "Activity already liked" });
+      return;
+    }
+
+    const actorName = activityPost.actor_full_name ?? "Someone";
+    const trailName = activityPost.trail_name ?? "your activity";
+    await createNotificationBestEffort({
+      user_id: activityPost.owner_id,
+      actor_id: userId,
+      type: "activity_like",
+      title: "Someone liked your activity",
+      body: `${actorName} liked ${trailName}`,
+      entity_type: "activity",
+      entity_id: activityId,
+      data: {
+        activity_id: activityId,
+        trail_id: activityPost.trail_id,
+      },
+    });
+
+    res.status(201).json({ message: "Activity liked successfully", data: { activity_id: activityId, user_id: userId } });
+  } catch (error) {
+    sendSocialError(functionName, res, error);
+  }
+}
+
+export async function unlikeActivity(req: Request, res: Response): Promise<void> {
+  const functionName = "unlikeActivity";
+  try {
+    const auth = requireAuth(req);
+    const userId = auth.sub;
+    const activityId = getRequestId(req.params.id);
+    console.log(`[social] unlikeActivity START - activityId: ${activityId}, userId: ${userId}`);
+
+    await getAccessibleActivityPost(activityId, userId);
+    const result = await pool.query(
+      "DELETE FROM activity_likes WHERE activity_id = $1::uuid AND user_id = $2::uuid",
+      [activityId, userId]
+    );
+
+    res.json({ message: "Activity unliked successfully", deleted: result.rowCount ?? 0 });
+  } catch (error) {
+    sendSocialError(functionName, res, error);
+  }
 }
 
 export async function commentOnActivity(req: Request, res: Response): Promise<void> {
-  const auth = requireAuth(req);
-  const activityId = getRequestId(req.params.id);
-  const result = await pool.query(
-    "INSERT INTO activity_comments (activity_id, user_id, body) VALUES ($1, $2, $3) RETURNING *",
-    [activityId, auth.sub, req.body.body]
-  );
-  await sendSocialNotification(activityId, "Your activity received a new comment.");
-  res.status(201).json({ data: result.rows[0] });
+  const functionName = "commentOnActivity";
+  try {
+    const auth = requireAuth(req);
+    const userId = auth.sub;
+    const activityId = getRequestId(req.params.id);
+    const body = String(req.body.body ?? "").trim();
+    console.log(`[social] commentOnActivity START - activityId: ${activityId}, userId: ${userId}, bodyLength: ${body.length}`);
+
+    if (body.length < 1 || body.length > 1000) {
+      res.status(400).json({ error: "Comment must be between 1 and 1000 characters" });
+      return;
+    }
+
+    const activityPost = await getAccessibleActivityPost(activityId, userId);
+    const result = await pool.query<ActivityCommentRow>(
+      `WITH inserted_comment AS (
+         INSERT INTO activity_comments (activity_id, user_id, content)
+         VALUES ($1::uuid, $2::uuid, $3)
+         RETURNING id, activity_id, user_id, content, created_at
+       )
+       SELECT
+         inserted_comment.id,
+         inserted_comment.activity_id,
+         inserted_comment.user_id,
+         inserted_comment.content AS body,
+         inserted_comment.created_at,
+         p.full_name,
+         p.avatar_url
+       FROM inserted_comment
+       JOIN profiles p ON p.id = inserted_comment.user_id`,
+      [activityId, userId, body]
+    );
+    const comment = result.rows[0];
+
+    if (!comment) {
+      throw new HttpError(500, "Unable to create activity comment");
+    }
+
+    const actorName = activityPost.actor_full_name ?? comment.full_name ?? "Someone";
+    const trailName = activityPost.trail_name ?? "your activity";
+    await createNotificationBestEffort({
+      user_id: activityPost.owner_id,
+      actor_id: userId,
+      type: "activity_comment",
+      title: "New comment on your activity",
+      body: `${actorName} commented on ${trailName}`,
+      entity_type: "activity",
+      entity_id: activityId,
+      data: {
+        comment_id: comment.id,
+        activity_id: activityId,
+        trail_id: activityPost.trail_id,
+        content_preview: body.substring(0, 100),
+      },
+    });
+
+    res.status(201).json({
+      data: {
+        id: comment.id,
+        activity_id: comment.activity_id,
+        user_id: comment.user_id,
+        body: comment.body,
+        created_at: comment.created_at,
+        user: {
+          id: comment.user_id,
+          full_name: comment.full_name,
+          avatar_url: comment.avatar_url,
+        },
+      },
+    });
+  } catch (error) {
+    sendSocialError(functionName, res, error);
+  }
 }

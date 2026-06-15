@@ -7,21 +7,36 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build --workspaces",
+    "build": "npm run build --workspaces --if-present",
     "build:api": "npm run build --workspace @traces/api",
-    "build:mobile": "npm run build --workspace @traces/mobile",
-    "dev:api": "npm run dev --workspace @traces/api",
-    "dev:mobile": "npm run dev --workspace @traces/mobile",
+    "build:wildlife": "npm run build --workspace @traces/wildlife-inference",
+    "build:mobile": "npm run build --workspace mobile",
+    "dev:api": "npm run dev:raw --workspace @traces/api",
+    "dev:api:raw": "npm run dev:raw --workspace @traces/api",
+    "dev:api:watch": "npm run dev:watchdog --workspace @traces/api",
+    "dev:api:watchdog": "npm run dev:watchdog --workspace @traces/api",
+    "dev:wildlife": "npm run dev --workspace @traces/wildlife-inference",
+    "dev:mobile": "npm run dev --workspace mobile",
     "db:migrate": "npm run db:migrate --workspace @traces/api",
     "db:seed": "npm run db:seed --workspace @traces/api",
     "lint": "npm run lint --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
-    "test:e2e": "npm run test:e2e --workspace @traces/api --if-present"
+    "test:e2e": "npm run test:e2e --workspace @traces/api --if-present",
+    "typecheck": "tsc -b"
   },
   "devDependencies": {
     "@types/node": "^20.11.30",
     "es-abstract": "^1.24.2",
     "tsx": "^4.7.1",
-    "typescript": "^5.4.5"
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "datetimepicker": "^0.1.39",
+    "expo-blur": "~55.0.14",
+    "expo-image-picker": "~55.0.20",
+    "expo-linear-gradient": "^55.0.13",
+    "expo": "~55.0.14",
+    "react": "19.2.0",
+    "react-native": "0.83.4"
   }
 }

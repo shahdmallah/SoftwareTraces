@@ -10,9 +10,21 @@ async function bootstrap(): Promise<void> {
   const server = createServer(app);
   initMessagesSocket(server);
 
-  server.listen(env.PORT, () => {
-    console.log(`Traces API running on port ${env.PORT}`);
+  await new Promise<void>((resolve, reject) => {
+    const handleError = (error: Error) => {
+      server.off("error", handleError);
+      reject(error);
+    };
+
+    server.once("error", handleError);
+    server.listen(env.PORT, () => {
+      server.off("error", handleError);
+      console.log(`Traces API running on port ${env.PORT}`);
+      resolve();
+    });
   });
+  startSafetyCron();
+
   startSafetyCron();
 
   const dbStatus = await testDatabaseConnection();

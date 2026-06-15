@@ -2,34 +2,72 @@
   "expo": {
     "name": "Traces",
     "slug": "traces",
-    "scheme": "traces",
     "version": "1.0.0",
     "orientation": "portrait",
-    "plugins": [
-      "expo-notifications",
-      [
-        "expo-location",
-        {
-          "locationAlwaysAndWhenInUsePermission": "Allow Traces to record your hikes in the background.",
-          "locationWhenInUsePermission": "Allow Traces to access your location while using the app."
-        }
-      ]
-    ],
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#EAE2CC"
+    },
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
-        "UIBackgroundModes": ["location"]
-      }
+        "NSCameraUsageDescription": "Allow Traces to take trail photos and tag them to your current location.",
+        "NSPhotoLibraryUsageDescription": "Allow Traces to attach saved trail photos to your current location.",
+        "NSPhotoLibraryAddUsageDescription": "Allow Traces to save captured trail photos when needed."
+      },
+      "bundleIdentifier": "com.shahdmallah.traces"
     },
     "android": {
-      "package": "com.traces.app",
-      "googleServicesFile": "./google-services.json",
+      "package": "com.shahdmallah.traces",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#EAE2CC"
+      },
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": false,
+      "primaryColor": "#630E13",
       "permissions": [
-        "ACCESS_FINE_LOCATION",
         "ACCESS_COARSE_LOCATION",
-        "ACCESS_BACKGROUND_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "FOREGROUND_SERVICE",
+        "CAMERA",
+        "READ_MEDIA_IMAGES",
         "POST_NOTIFICATIONS"
       ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      [
+        "@rnmapbox/maps",
+        {
+          "RNMapboxMapsVersion": "11.18.2"
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Allow Palestine Trails to use your location to show trails near you."
+        }
+      ],
+      [
+        "expo-sensors",
+        {
+          "motionPermission": "Allow Traces to access motion data so it can count your steps during a trail recording."
+        }
+      ],
+      "expo-notifications",
+      "@react-native-community/datetimepicker"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "f55b9de6-5d43-4a9a-bb1e-08c034fd9224"
+      }
     }
   }
 }

@@ -9,6 +9,7 @@ import {
   getAdminBadge,
   getDashboardStats,
   listAdminBadges,
+  listAdminUsers,
   listCheckpointReports,
   listDangerousLocations,
   listIncidents,
@@ -21,13 +22,31 @@ import {
 } from "./admin.service";
 
 const uuidSchema = z.string().uuid();
+export function normalizeBadgeCode(value: string): string {
+  return value
+    .trim()
+    .toUpperCase()
+    .replace(/\s*([:-])\s*/g, "$1")
+    .replace(/\s+/g, "_");
+}
+
+export const badgeCodeSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(80)
+  .transform(normalizeBadgeCode)
+  .refine((value) => /^[A-Z0-9_:-]+$/.test(value), {
+    message: "Code may only contain letters, numbers, underscores, hyphens, and colons",
+  });
+
 const moderationSchema = z.object({
   moderation_status: z.enum(["pending", "approved", "verified", "rejected", "hidden"]),
   moderation_note: z.string().trim().max(1000).nullable().optional(),
 }).strict();
 
 const badgeSchema = z.object({
-  code: z.string().trim().min(1).max(80).regex(/^[A-Z0-9_:-]+$/).optional(),
+  code: badgeCodeSchema.optional(),
   name: z.string().trim().min(1).max(160).optional(),
   name_ar: z.string().trim().max(160).nullable().optional(),
   description: z.string().trim().min(1).max(1000).optional(),
@@ -42,8 +61,18 @@ const badgeSchema = z.object({
   is_active: z.boolean().optional(),
 });
 
-const createBadgeSchema = badgeSchema.extend({
-  code: badgeSchema.shape.code.unwrap(),
+const usersQuerySchema = z.object({
+  q: z.string().trim().max(200).optional(),
+  page: z.coerce.number().int().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+}).strict();
+
+const reportQuerySchema = z.object({
+  q: z.string().trim().max(200).optional(),
+}).strict();
+
+export const createBadgeSchema = badgeSchema.extend({
+  code: badgeCodeSchema,
   name: badgeSchema.shape.name.unwrap(),
   description: badgeSchema.shape.description.unwrap(),
 });
@@ -101,6 +130,15 @@ export async function getBadges(_req: Request, res: Response): Promise<void> {
     res.json({ data: await listAdminBadges() });
   } catch (error) {
     sendAdminError("getBadges", res, error);
+  }
+}
+
+export async function getUsers(req: Request, res: Response): Promise<void> {
+  try {
+    const query = usersQuerySchema.parse(req.query);
+    res.json({ data: await listAdminUsers(query) });
+  } catch (error) {
+    sendAdminError("getUsers", res, error);
   }
 }
 
@@ -247,17 +285,19 @@ export async function deleteDangerousLocation(req: Request, res: Response): Prom
   }
 }
 
-export async function getCheckpointReports(_req: Request, res: Response): Promise<void> {
+export async function getCheckpointReports(req: Request, res: Response): Promise<void> {
   try {
-    res.json({ data: await listCheckpointReports() });
+    const query = reportQuerySchema.parse(req.query);
+    res.json({ data: await listCheckpointReports(query) });
   } catch (error) {
     sendAdminError("getCheckpointReports", res, error);
   }
 }
 
-export async function getSosEvents(_req: Request, res: Response): Promise<void> {
+export async function getSosEvents(req: Request, res: Response): Promise<void> {
   try {
-    res.json({ data: await listSosEvents() });
+    const query = reportQuerySchema.parse(req.query);
+    res.json({ data: await listSosEvents(query) });
   } catch (error) {
     sendAdminError("getSosEvents", res, error);
   }

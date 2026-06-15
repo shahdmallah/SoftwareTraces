@@ -1,19 +1,21 @@
+import { randomUUID } from "crypto";
 import type { Request, Response } from "express";
 import { createClient } from "@supabase/supabase-js";
 import { env } from "../../config/env";
 import { pool } from "../../db/pool";
+import { HttpError } from "../../lib/httpError";
+import { requireAuth } from "../../middleware/auth";
 import { areFriends, isFollowing } from "../../services/friendService";
 
 interface ProfileRow {
   id: string;
   user_id: string;
   full_name: string;
-  role: string;
+  role: string;       
   avatar_url: string | null;
   bio: string | null;
   location: string | null;
 }
-
 interface ProfileStatsRow {
   total_reviews: string;
   total_photos: string;
@@ -63,6 +65,21 @@ interface ProfilePhotoRow {
   trail_name: string;
 }
 
+interface UploadedAvatarFile {
+  buffer: Buffer;
+  mimetype: string;
+  size: number;
+}
+
+const avatarBucket = "media";
+const validAvatarMimeTypes = ["image/jpeg", "image/png", "image/webp", "image/gif"] as const;
+const avatarExtensionByMimeType: Record<(typeof validAvatarMimeTypes)[number], string> = {
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+  "image/gif": "gif",
+};
+
 function getRequestId(value: string | string[] | undefined): string {
   return Array.isArray(value) ? value[0] : (value ?? "");
 }
@@ -99,6 +116,86 @@ function normalizePhotoUrl(source: "trail_photo" | "review", rawUrl: string): st
   }
 }
 
+function parseOptionalProfileString(
+  value: unknown,
+  fieldName: string,
+  maxLength: number,
+): string | null | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (typeof value !== "string") {
+    throw new HttpError(400, `${fieldName} must be a string`);
+  }
+
+  const trimmed = value.trim();
+
+  if (!trimmed) {
+    return null;
+  }
+
+  if (trimmed.length > maxLength) {
+    throw new HttpError(400, `${fieldName} must be ${maxLength} characters or fewer`);
+  }
+
+  return trimmed;
+}
+
+function parseOptionalAvatarUrl(value: unknown): string | null | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (typeof value !== "string") {
+    throw new HttpError(400, "avatar_url must be a string");
+  }
+
+  const trimmed = value.trim();
+
+  if (!trimmed) {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(trimmed);
+    if (!parsed.protocol.startsWith("http")) {
+      throw new Error("unsupported protocol");
+    }
+  } catch {
+    throw new HttpError(400, "avatar_url must be a valid URL");
+  }
+
+  return trimmed;
+}
+
+async function uploadAvatar(userId: string, file: UploadedAvatarFile): Promise<string> {
+  if (!validAvatarMimeTypes.includes(file.mimetype as (typeof validAvatarMimeTypes)[number])) {
+    throw new HttpError(400, "Invalid avatar image type");
+  }
+
+  const extension = avatarExtensionByMimeType[file.mimetype as (typeof validAvatarMimeTypes)[number]];
+  const storagePath = `avatars/${userId}/${randomUUID()}.${extension}`;
+  const supabase = getSupabaseStorageClient();
+  const { error: uploadError } = await supabase.storage.from(avatarBucket).upload(storagePath, file.buffer, {
+    contentType: file.mimetype,
+    upsert: false,
+  });
+
+  if (uploadError) {
+    throw new Error(`Failed to upload avatar: ${uploadError.message}`);
+  }
+
+  const { data } = supabase.storage.from(avatarBucket).getPublicUrl(storagePath);
+  const publicUrl = data?.publicUrl ?? "";
+
+  if (!publicUrl) {
+    throw new Error("Failed to resolve avatar URL");
+  }
+
+  return publicUrl;
+}
+
 async function getProfileByUserId(userId: string): Promise<ProfileRow> {
   const profileResult = await pool.query<ProfileRow>(
     `SELECT
@@ -110,16 +207,88 @@ async function getProfileByUserId(userId: string): Promise<ProfileRow> {
        bio,
        location
      FROM profiles
-     WHERE user_id = $1 OR id::text = $1
+     WHERE user_id::text = $1 OR id::text = $1
      LIMIT 1`,
     [userId]
   );
+
 
   if (profileResult.rows.length === 0) {
     throw new Error("PROFILE_NOT_FOUND");
   }
 
   return profileResult.rows[0];
+}
+
+interface ProfileSearchRow {
+  id: string;
+  user_id: string;
+  full_name: string;
+  role: string;
+  avatar_url: string | null;
+  bio: string | null;
+  location: string | null;
+}
+
+export async function searchProfiles(req: Request, res: Response): Promise<void> {
+  try {
+    const q = String(req.query.q ?? "").trim();
+    const { page, limit, offset } = getPagination(req.query);
+    const searchTerm = `%${q}%`;
+
+    const [countResult, profilesResult] = await Promise.all([
+      pool.query<{ count: string }>(
+        `SELECT COUNT(*) AS count
+         FROM profiles
+         WHERE full_name ILIKE $1
+            OR bio ILIKE $1
+            OR location ILIKE $1`,
+        [searchTerm]
+      ),
+      pool.query<ProfileSearchRow>(
+        `SELECT
+           id,
+           user_id,
+           full_name,
+           role,
+           avatar_url,
+           bio,
+           location
+         FROM profiles
+         WHERE full_name ILIKE $1
+            OR bio ILIKE $1
+            OR location ILIKE $1
+         ORDER BY full_name ASC
+         LIMIT $2 OFFSET $3`,
+        [searchTerm, limit, offset]
+      ),
+    ]);
+
+    const total = Number(countResult.rows[0]?.count ?? 0);
+
+    res.json({
+      data: profilesResult.rows.map((row) => ({
+        id: row.id,
+        user_id: row.user_id,
+        full_name: row.full_name,
+        role: row.role,
+        avatar_url: row.avatar_url,
+        bio: row.bio,
+        location: row.location,
+      })),
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: total === 0 ? 0 : Math.ceil(total / limit),
+      },
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: "Internal server error",
+      details: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 export async function getProfile(req: Request, res: Response): Promise<void> {
@@ -156,13 +325,13 @@ export async function getProfile(req: Request, res: Response): Promise<void> {
            (SELECT COALESCE(SUM(a.points), 0)
             FROM user_achievements ua
             JOIN achievements a ON a.id = ua.achievement_id
-            WHERE ua.user_id = $2::uuid
+            WHERE ua.user_id = $1::uuid
               AND ua.earned_at IS NOT NULL) AS total_points,
            (SELECT COUNT(*)
             FROM user_achievements ua
-            WHERE ua.user_id = $2::uuid
+            WHERE ua.user_id = $1::uuid
               AND ua.earned_at IS NOT NULL) AS achievements_count`,
-        [profile.id, profile.user_id]
+        [profile.user_id]
       ),
       pool.query<ProfileReviewRow>(
         `SELECT
@@ -322,6 +491,79 @@ export async function getProfile(req: Request, res: Response): Promise<void> {
       },
     });
   } catch (error) {
+    if (error instanceof Error && error.message === "PROFILE_NOT_FOUND") {
+      res.status(404).json({ error: "Profile not found" });
+      return;
+    }
+
+    res.status(500).json({
+      error: "Internal server error",
+      details: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+export async function updateMyProfile(req: Request & { file?: UploadedAvatarFile }, res: Response): Promise<void> {
+  try {
+    const auth = requireAuth(req);
+    const currentProfile = await getProfileByUserId(auth.sub);
+
+    const fullNameInput = parseOptionalProfileString(req.body.full_name, "full_name", 120);
+    const bioInput = parseOptionalProfileString(req.body.bio, "bio", 500);
+    const locationInput = parseOptionalProfileString(req.body.location, "location", 160);
+    const avatarUrlInput = parseOptionalAvatarUrl(req.body.avatar_url);
+
+    const avatarUrl = req.file
+      ? await uploadAvatar(auth.sub, req.file)
+      : avatarUrlInput;
+
+    const nextFullName = fullNameInput === undefined ? currentProfile.full_name : fullNameInput;
+
+    if (!nextFullName) {
+      throw new HttpError(400, "full_name is required");
+    }
+
+    const result = await pool.query<ProfileRow>(
+      `UPDATE profiles
+       SET full_name = $1,
+           bio = $2,
+           location = $3,
+           avatar_url = $4,
+           updated_at = NOW()
+       WHERE user_id = $5::uuid
+       RETURNING id, user_id, full_name, role, avatar_url, bio, location`,
+      [
+        nextFullName,
+        bioInput === undefined ? currentProfile.bio : bioInput,
+        locationInput === undefined ? currentProfile.location : locationInput,
+        avatarUrl === undefined ? currentProfile.avatar_url : avatarUrl,
+        auth.sub,
+      ],
+    );
+
+    if (!result.rows[0]) {
+      throw new HttpError(404, "Profile not found");
+    }
+
+    const profile = result.rows[0];
+
+    res.json({
+      data: {
+        id: profile.id,
+        user_id: profile.user_id,
+        full_name: profile.full_name,
+        role: profile.role,
+        avatar_url: profile.avatar_url,
+        bio: profile.bio,
+        location: profile.location,
+      },
+    });
+  } catch (error) {
+    if (error instanceof HttpError) {
+      res.status(error.statusCode).json({ error: error.message });
+      return;
+    }
+
     if (error instanceof Error && error.message === "PROFILE_NOT_FOUND") {
       res.status(404).json({ error: "Profile not found" });
       return;

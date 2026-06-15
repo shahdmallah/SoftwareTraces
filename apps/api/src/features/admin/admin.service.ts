@@ -91,6 +91,21 @@ async function monthlySeries(table: string, dateColumn = "created_at"): Promise<
   }
 }
 
+type AdminUserRow = {
+  id: string;
+  user_id: string;
+  full_name: string;
+  role: string;
+  avatar_url: string | null;
+  bio: string | null;
+  location: string | null;
+  locale: string | null;
+  email: string | null;
+  username: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export async function getDashboardStats() {
   const [
     trailColumns,
@@ -106,6 +121,7 @@ export async function getDashboardStats() {
     trailViewColumns,
     emergencyContactColumns,
     sosContactNotificationColumns,
+    trailConditionColumns,
   ] = await Promise.all([
     getTableColumns("trails"),
     getTableColumns("activities"),
@@ -120,6 +136,7 @@ export async function getDashboardStats() {
     getTableColumns("trail_view_events"),
     getTableColumns("emergency_contacts"),
     getTableColumns("sos_contact_notifications"),
+    getTableColumns("trail_conditions"),
   ]);
 
   const analyticsAvailable = userActivityColumns.has("user_id") && userActivityColumns.has("event_type") && userActivityColumns.has("created_at");
@@ -212,6 +229,16 @@ export async function getDashboardStats() {
     : pushTokenColumns.has("provider")
       ? "SELECT COUNT(*)::text AS count FROM push_tokens WHERE provider = 'fcm'"
       : null;
+  const trailConditionsAvailable = trailConditionColumns.has("trail_id") && trailConditionColumns.has("reported_at");
+  const trailConditionsUnresolvedQuery = trailConditionColumns.has("is_resolved")
+    ? "SELECT COUNT(*)::text AS count FROM trail_conditions WHERE COALESCE(is_resolved, false) = false"
+    : null;
+  const trailConditionsByTypeQuery = trailConditionColumns.has("condition_type")
+    ? "SELECT condition_type, COUNT(*)::int AS count FROM trail_conditions GROUP BY condition_type ORDER BY count DESC, condition_type ASC"
+    : null;
+  const trailConditionsBySeverityQuery = trailConditionColumns.has("severity")
+    ? "SELECT severity, COUNT(*)::int AS count FROM trail_conditions GROUP BY severity ORDER BY count DESC, severity ASC"
+    : null;
   const activeChallengesQuery = challengeColumns.has("status") && challengeColumns.has("start_at") && challengeColumns.has("end_at")
     ? "SELECT COUNT(*)::text AS count FROM challenges WHERE status = 'published' AND start_at <= NOW() AND end_at >= NOW()"
     : null;
@@ -281,6 +308,11 @@ export async function getDashboardStats() {
     topChallengeParticipationResult,
     safetyHotspotsResult,
     incidentReportsByRegionResult,
+    trailConditionsTotal,
+    unresolvedTrailConditions,
+    trailConditionsByTypeResult,
+    trailConditionsBySeverityResult,
+    recentTrailConditionsResult,
     lastOchaImportResult,
   ] = await Promise.all([
     count("SELECT COUNT(*)::text AS count FROM profiles"),
@@ -452,6 +484,36 @@ export async function getDashboardStats() {
            GROUP BY 1
            ORDER BY reports_count DESC, region ASC
            LIMIT 10`
+          ).catch(() => ({ rows: [] }))
+      : Promise.resolve({ rows: [] }),
+    trailConditionsAvailable
+      ? count("SELECT COUNT(*)::text AS count FROM trail_conditions")
+      : Promise.resolve(0),
+    trailConditionsUnresolvedQuery ? optionalCount(trailConditionsUnresolvedQuery) : Promise.resolve(null),
+    trailConditionsByTypeQuery
+      ? pool.query(trailConditionsByTypeQuery).catch(() => ({ rows: [] }))
+      : Promise.resolve({ rows: [] }),
+    trailConditionsBySeverityQuery
+      ? pool.query(trailConditionsBySeverityQuery).catch(() => ({ rows: [] }))
+      : Promise.resolve({ rows: [] }),
+    trailConditionsAvailable
+      ? pool.query(
+          `SELECT tc.id,
+                  tc.trail_id,
+                  t.name AS trail_name,
+                  tc.user_id,
+                  p.full_name,
+                  tc.condition_type,
+                  tc.severity,
+                  tc.description,
+                  tc.reported_at,
+                  tc.is_resolved,
+                  tc.resolved_at
+           FROM trail_conditions tc
+           LEFT JOIN trails t ON t.id = tc.trail_id
+           LEFT JOIN profiles p ON p.user_id = tc.user_id OR p.id = tc.user_id
+           ORDER BY tc.reported_at DESC
+           LIMIT 10`
         ).catch(() => ({ rows: [] }))
       : Promise.resolve({ rows: [] }),
     getLastOchaImportQuery()
@@ -562,13 +624,92 @@ export async function getDashboardStats() {
         ...(safetyIncidentColumns.has("trail_id") && trailColumns.has("region") ? [] : ["incident_reports_by_region requires safety_incidents.trail_id and trails.region"]),
       ],
     },
+    trail_conditions: {
+      total: trailConditionsTotal,
+      unresolved: unresolvedTrailConditions,
+      by_type: trailConditionsByTypeResult.rows,
+      by_severity: trailConditionsBySeverityResult.rows,
+      recent: recentTrailConditionsResult.rows,
+      unavailable_metrics: trailConditionsAvailable ? [] : ["trail condition reporting table is missing"],
+    },
     time_series: {
       users_by_month: usersByMonth,
       trails_by_month: trailsByMonth,
       incidents_by_month: incidentsByMonth,
       activities_by_month: activitiesByMonth,
       challenges_joined_by_month: challengesByMonth,
+      trail_conditions_by_month: trailConditionsAvailable ? await monthlySeries("trail_conditions") : [],
     },
+  };
+}
+
+export async function listAdminUsers(input: { q?: string; page?: number; limit?: number } = {}) {
+  const page = Math.max(1, Math.trunc(input.page ?? 1) || 1);
+  const limit = Math.min(100, Math.max(1, Math.trunc(input.limit ?? 20) || 20));
+  const offset = (page - 1) * limit;
+  const search = input.q?.trim() ?? "";
+  const searchTerm = search ? `%${search}%` : "";
+
+  const [userColumns, profileColumns] = await Promise.all([
+    getTableColumns("users"),
+    getTableColumns("profiles"),
+  ]);
+
+  const hasUsersTable = userColumns.size > 0;
+  const hasProfilesTable = profileColumns.size > 0;
+  const hasProfileLocale = profileColumns.has("locale");
+  if (!hasProfilesTable) {
+    return { users: [], page, limit, total: 0, pages: 0 };
+  }
+
+  const joinUsersSql = hasUsersTable ? "LEFT JOIN users u ON u.id = p.user_id" : "";
+  const searchParts = [
+    "COALESCE(p.full_name, '') ILIKE $1",
+    "COALESCE(p.bio, '') ILIKE $1",
+    "COALESCE(p.location, '') ILIKE $1",
+    hasUsersTable ? "COALESCE(u.email, '') ILIKE $1" : null,
+    hasUsersTable ? "COALESCE(u.username, '') ILIKE $1" : null,
+  ].filter(Boolean) as string[];
+  const whereSql = searchParts.length ? `WHERE ${searchParts.join(" OR ")}` : "";
+  const queryParams = searchParts.length ? [searchTerm] : [];
+
+  const countResult = await pool.query<{ count: string }>(
+    `SELECT COUNT(*)::text AS count
+     FROM profiles p
+     ${joinUsersSql}
+     ${whereSql}`,
+    queryParams
+  );
+
+  const result = await pool.query<AdminUserRow>(
+    `SELECT
+       p.user_id::text AS id,
+       p.user_id::text AS user_id,
+       p.full_name,
+       p.role,
+       p.avatar_url,
+       p.bio,
+       p.location,
+       ${hasProfileLocale ? "p.locale" : "NULL::text"} AS locale,
+       ${hasUsersTable ? "u.email" : "NULL::text"} AS email,
+       ${hasUsersTable ? "u.username" : "NULL::text"} AS username,
+       p.created_at,
+       p.updated_at
+     FROM profiles p
+     ${joinUsersSql}
+     ${whereSql}
+     ORDER BY p.created_at DESC, p.full_name ASC
+     LIMIT $${queryParams.length + 1} OFFSET $${queryParams.length + 2}`,
+    [...queryParams, limit, offset]
+  );
+
+  const total = toNumber(countResult.rows[0]?.count);
+  return {
+    users: result.rows,
+    page,
+    limit,
+    total,
+    pages: total === 0 ? 0 : Math.ceil(total / limit),
   };
 }
 
@@ -823,24 +964,62 @@ export async function disableDangerousLocation(id: string) {
   return result.rows[0] ?? null;
 }
 
-export async function listCheckpointReports() {
+export async function listCheckpointReports(input: { q?: string } = {}) {
+  const search = input.q?.trim() ?? "";
+  const params: unknown[] = [];
+  const where = search
+    ? `WHERE (
+         COALESCE(dl.name, '') ILIKE $1 OR
+         COALESCE(dl.location_type, '') ILIKE $1 OR
+         COALESCE(cr.status, '') ILIKE $1 OR
+         COALESCE(cr.notes, '') ILIKE $1
+       )`
+    : "";
+
+  if (search) {
+    params.push(`%${search}%`);
+  }
+
   const result = await pool.query(
     `SELECT cr.*, dl.name AS checkpoint_name, dl.location_type
      FROM checkpoint_reports cr
      LEFT JOIN dangerous_locations dl ON dl.id = cr.checkpoint_id
+     ${where}
      ORDER BY cr.created_at DESC
      LIMIT 200`
+    ,
+    params
   );
   return result.rows;
 }
 
-export async function listSosEvents() {
+export async function listSosEvents(input: { q?: string } = {}) {
+  const search = input.q?.trim() ?? "";
+  const params: unknown[] = [];
+  const where = search
+    ? `WHERE (
+         COALESCE(p.full_name, '') ILIKE $1 OR
+         COALESCE(p.role, '') ILIKE $1 OR
+         COALESCE(s.user_id::text, '') ILIKE $1 OR
+         COALESCE(s.status, '') ILIKE $1 OR
+         COALESCE(s.status_note, '') ILIKE $1 OR
+         COALESCE(s.message, '') ILIKE $1
+       )`
+    : "";
+
+  if (search) {
+    params.push(`%${search}%`);
+  }
+
   const result = await pool.query(
     `SELECT s.*, p.full_name, p.avatar_url, p.role
      FROM sos_events s
      LEFT JOIN profiles p ON p.user_id = s.user_id OR p.id = s.user_id
+     ${where}
      ORDER BY s.created_at DESC
      LIMIT 200`
+    ,
+    params
   );
   return result.rows;
 }

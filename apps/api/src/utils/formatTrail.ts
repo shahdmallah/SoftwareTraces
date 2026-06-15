@@ -32,6 +32,10 @@ interface TrailRecord {
   start_lat?: number | string | null;
   start_point_text?: string | null;
   tags?: unknown;
+  status?: string | null;
+  is_active?: boolean | null;
+  published_at?: string | Date | null;
+  user_id?: string | null;
   created_at?: string | Date | null;
   updated_at?: string | Date | null;
 }
@@ -171,6 +175,10 @@ export function formatTrailForApp(dbTrail: TrailRecord) {
     hasCheckpoint: Boolean(dbTrail.has_checkpoint),
     checkpointNote: dbTrail.checkpoint_note ?? "",
     tags: normalizeStringArray(dbTrail.tags),
+    status: dbTrail.status ?? "",
+    isPublic: dbTrail.status === "published" && dbTrail.is_active !== false,
+    publishedAt: toIsoString(dbTrail.published_at),
+    userId: dbTrail.user_id ?? null,
     coordinates,
     routeCoordinates,
     mapX: 0,

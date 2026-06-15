@@ -24,7 +24,9 @@ import safetyRoutes from "./features/safety/safety.routes";
 import socialRoutes from "./features/social/social.routes";
 import sosRoutes from "./features/sos/sos.routes";
 import accessRoutes from "./features/trails/access.routes";
+import { createNatureSighting } from "./features/trails/trails.controller";
 import trailsRoutes from "./features/trails/trails.routes";
+import weatherRoutes from "./features/weather/weather.routes";
 import { errorHandler } from "./middleware/errorHandler";
 import { asyncHandler } from "./lib/asyncHandler";
 import { authenticate } from "./middleware/auth";
@@ -43,7 +45,7 @@ export function createApp() {
   });
 
   app.use("/api/auth", authRoutes);
-  app.use("/api/admin", adminRoutes);
+    app.use("/api/admin", adminRoutes);
   app.use("/api/badges", badgesRoutes);
   app.use("/api/challenges", challengesRoutes);
   app.use("/api/debug", debugRoutes);
@@ -56,6 +58,7 @@ export function createApp() {
   app.use("/api/navigation", navigationRoutes);
   app.use("/api/notifications", notificationsRoutes);
   app.use("/api/photos", photosRoutes);
+  app.post("/api/nature-sightings", authenticate, asyncHandler(createNatureSighting));
   app.use("/api/sos", sosRoutes);
   app.use("/api/health", healthRoutes);
   app.use("/api/social", socialRoutes);
@@ -64,6 +67,7 @@ export function createApp() {
   app.use("/api/offline", offlineRoutes);
   app.use("/api/achievements", achievementsRoutes);
   app.use("/api/recommendations", recommendationsRoutes);
+  app.use("/api/weather", weatherRoutes);
 
   if (process.env.NODE_ENV !== "test") {
     cron.schedule("0 * * * *", () => {
