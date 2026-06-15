@@ -1,0 +1,11 @@
+{
+  "enabled": true,
+  "prefabPath": "C:\\gr\\caches\\modules-2\\files-2.1\\com.google.prefab\\cli\\2.1.0\\aa32fec809c44fa531f01dcfb739b5b3304d3050\\cli-2.1.0-all.jar",
+  "packages": [
+    "C:\\Users\\asus\\Desktop\\Traces\\node_modules\\react-native-worklets\\android\\build\\intermediates\\prefab_package\\debug\\prefab",
+    "C:\\gr\\caches\\8.14.3\\transforms\\52fba397ee69a489802542663b2a7886\\transformed\\react-android-0.81.5-debug\\prefab",
+    "C:\\Users\\asus\\Desktop\\Traces\\node_modules\\react-native-reanimated\\android\\build\\intermediates\\prefab_package\\debug\\prefab",
+    "C:\\gr\\caches\\8.14.3\\transforms\\140d610d73c892c669ee13e90e6310ec\\transformed\\hermes-android-0.81.5-debug\\prefab",
+    "C:\\gr\\caches\\8.14.3\\transforms\\6347936a505aab872d9b18fa868e791d\\transformed\\fbjni-0.7.0\\prefab"
+  ]
+}

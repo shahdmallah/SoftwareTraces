@@ -8,6 +8,14 @@ export interface JwtPayload {
   email: string;
 }
 
+export function requireAuth(req: Request): JwtPayload {
+  if (!req.auth?.sub) {
+    throw new HttpError(401, "Authentication required");
+  }
+
+  return req.auth;
+}
+
 export function authenticate(req: Request, _res: Response, next: NextFunction): void {
   const authHeader = req.headers.authorization;
 
@@ -17,7 +25,21 @@ export function authenticate(req: Request, _res: Response, next: NextFunction): 
 
   try {
     const token = authHeader.replace("Bearer ", "");
-    req.auth = jwt.verify(token, env.JWT_SECRET) as JwtPayload;
+    const payload = jwt.verify(token, env.JWT_SECRET);
+
+    if (
+      typeof payload !== "object" ||
+      payload === null ||
+      typeof payload.sub !== "string" ||
+      typeof payload.email !== "string"
+    ) {
+      throw new HttpError(401, "Invalid token payload");
+    }
+
+    req.auth = {
+      sub: payload.sub,
+      email: payload.email
+    };
     next();
   } catch {
     next(new HttpError(401, "Invalid token"));

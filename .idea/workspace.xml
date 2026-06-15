@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="NONE" />
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="f1280acf-e0bf-40eb-a5c9-e91a29215418" name="Changes" comment="">
+      <change beforePath="$PROJECT_DIR$/apps/mobile/src/app/components/TrailHeroSection.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/apps/mobile/src/app/components/TrailHeroSection.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/apps/mobile/src/app/components/TrailRecommendationsSection.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/apps/mobile/src/app/components/TrailRecommendationsSection.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/apps/mobile/src/app/components/trailCompletion/CompletionHero.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/apps/mobile/src/app/components/trailCompletion/CompletionHero.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/apps/mobile/src/app/components/trailCompletion/ElevationPhotoTour.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/apps/mobile/src/app/components/trailCompletion/ElevationPhotoTour.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/apps/mobile/src/app/components/trailCompletion/SharePreviewCard.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/apps/mobile/src/app/components/trailCompletion/SharePreviewCard.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/apps/mobile/src/app/navigation/AppNavigator.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/apps/mobile/src/app/navigation/AppNavigator.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/apps/mobile/src/app/screens/ActivityScreen.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/apps/mobile/src/app/screens/ActivityScreen.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/apps/mobile/src/app/screens/ExploreScreen.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/apps/mobile/src/app/screens/ExploreScreen.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/apps/mobile/src/app/screens/HistoryScreen.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/apps/mobile/src/app/screens/HistoryScreen.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/apps/mobile/src/app/screens/MapScreen.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/apps/mobile/src/app/screens/MapScreen.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/apps/mobile/src/app/screens/OnboardingScreen.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/apps/mobile/src/app/screens/OnboardingScreen.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/apps/mobile/src/app/screens/ProfileScreen.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/apps/mobile/src/app/screens/ProfileScreen.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/apps/mobile/src/app/screens/SavedScreen.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/apps/mobile/src/app/screens/SavedScreen.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/apps/mobile/src/app/screens/TrailMediaScreen.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/apps/mobile/src/app/screens/TrailMediaScreen.tsx" afterDir="false" />
+    </list>
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="ClangdSettings">
+    <option name="formatViaClangd" value="false" />
+  </component>
+  <component name="ExecutionTargetManager" SELECTED_TARGET="device_and_snapshot_combo_box_target[]" />
+  <component name="FileTemplateManagerImpl">
+    <option name="RECENT_TEMPLATES">
+      <list>
+        <option value="CMakeLists.txt" />
+      </list>
+    </option>
+  </component>
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+  </component>
+  <component name="ProjectColorInfo">{
+  &quot;associatedIndex&quot;: 1
+}</component>
+  <component name="ProjectId" id="3C5W9dR8d1ssPgFdLdaBs0kaMXc" />
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;DEBUGGABLE_DEVICE&quot;: &quot;Pixel_9_Pro_2 [emulator-5554]&quot;,
+    &quot;DEBUGGABLE_PROCESS&quot;: &quot;com.shahdmallah.traces&quot;,
+    &quot;DEBUGGER_ID&quot;: &quot;Java&quot;,
+    &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.cidr.known.project.marker&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.readMode.enableVisualFormatting&quot;: &quot;true&quot;,
+    &quot;SHARE_PROJECT_CONFIGURATION_FILES&quot;: &quot;true&quot;,
+    &quot;SHOW_ALL_PROCESSES&quot;: &quot;true&quot;,
+    &quot;cf.first.check.clang-format&quot;: &quot;false&quot;,
+    &quot;cidr.known.project.marker&quot;: &quot;true&quot;,
+    &quot;com.google.services.firebase.aqiPopupShown&quot;: &quot;true&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;front&quot;,
+    &quot;kotlin-language-version-configured&quot;: &quot;true&quot;,
+    &quot;last_opened_file_path&quot;: &quot;C:/Users/asus/Desktop/Traces&quot;,
+    &quot;project.structure.last.edited&quot;: &quot;Project&quot;,
+    &quot;project.structure.proportion&quot;: &quot;0.0&quot;,
+    &quot;project.structure.side.proportion&quot;: &quot;0.2&quot;,
+    &quot;settings.editor.selected.configurable&quot;: &quot;studioLabs&quot;
+  }
+}</component>
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="Default task">
+      <changelist id="f1280acf-e0bf-40eb-a5c9-e91a29215418" name="Changes" comment="" />
+      <created>1775675762290</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1775675762290</updated>
+    </task>
+    <servers />
+  </component>
+</project>

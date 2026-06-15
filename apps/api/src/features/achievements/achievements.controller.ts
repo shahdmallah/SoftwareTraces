@@ -1,44 +1,57 @@
 import type { Request, Response } from "express";
-import { pool } from "../../db/pool";
-import { evaluateAchievements } from "../../services/achievementService";
+import { requireAuth } from "../../middleware/auth";
+import {
+  checkAndAwardAchievements,
+  getAllAchievements,
+  getLeaderboard as getLeaderboardService,
+  getUserAchievements as getUserAchievementsService,
+} from "./achievements.service";
 
-export async function getAchievements(_req: Request, res: Response): Promise<void> {
-  const result = await pool.query("SELECT * FROM achievements ORDER BY points ASC");
-  res.json({ data: result.rows });
+function getRequestId(value: string | string[] | undefined): string {
+  return Array.isArray(value) ? value[0] : (value ?? "");
+}
+
+export async function getAchievements(req: Request, res: Response): Promise<void> {
+  console.log("[achievements.controller.getAchievements] ========== START ==========");
+  const userId = req.auth?.sub;
+  console.log("[achievements.controller.getAchievements] optional userId:", userId);
+
+  const achievements = await getAllAchievements(userId);
+  res.json({ data: achievements });
 }
 
 export async function getUserAchievements(req: Request, res: Response): Promise<void> {
-  const result = await pool.query(
-    `
-    SELECT ua.*, a.code, a.name, a.description, a.icon, a.points
-    FROM user_achievements ua
-    JOIN achievements a ON a.id = ua.achievement_id
-    WHERE ua.user_id = $1
-    ORDER BY ua.unlocked_at DESC
-    `,
-    [req.params.userId]
-  );
-  res.json({ data: result.rows });
+  console.log("[achievements.controller.getUserAchievements] ========== START ==========");
+  const userId = getRequestId(req.params.userId);
+  console.log("[achievements.controller.getUserAchievements] userId:", userId);
+
+  const achievements = await getUserAchievementsService(userId);
+  res.json({ data: achievements });
+}
+
+export async function getMyAchievements(req: Request, res: Response): Promise<void> {
+  console.log("[achievements.controller.getMyAchievements] ========== START ==========");
+  const auth = requireAuth(req);
+  console.log("[achievements.controller.getMyAchievements] userId:", auth.sub);
+
+  const achievements = await getAllAchievements(auth.sub);
+  res.json({ data: achievements });
+}
+
+export async function getLeaderboard(req: Request, res: Response): Promise<void> {
+  console.log("[achievements.controller.getLeaderboard] ========== START ==========");
+  const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 20));
+  console.log("[achievements.controller.getLeaderboard] limit:", limit);
+
+  const leaderboard = await getLeaderboardService(limit);
+  res.json({ data: leaderboard });
 }
 
 export async function checkAchievements(req: Request, res: Response): Promise<void> {
-  const [available, existing, profile] = await Promise.all([
-    pool.query("SELECT * FROM achievements ORDER BY points ASC"),
-    pool.query("SELECT * FROM user_achievements WHERE user_id = $1", [req.auth?.sub]),
-    pool.query("SELECT total_activities, total_elevation_gain_m FROM profiles WHERE user_id = $1", [req.auth?.sub])
-  ]);
+  console.log("[achievements.controller.checkAchievements] ========== START ==========");
+  const auth = requireAuth(req);
+  console.log("[achievements.controller.checkAchievements] userId:", auth.sub);
 
-  const unlocks = evaluateAchievements(available.rows, existing.rows, {
-    totalActivities: profile.rows[0]?.total_activities ?? 0,
-    totalElevationGainM: Number(profile.rows[0]?.total_elevation_gain_m ?? 0)
-  });
-
-  for (const achievement of unlocks) {
-    await pool.query(
-      "INSERT INTO user_achievements (achievement_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-      [achievement.id, req.auth?.sub]
-    );
-  }
-
-  res.json({ data: unlocks });
+  const awarded = await checkAndAwardAchievements(auth.sub);
+  res.json({ data: awarded });
 }
